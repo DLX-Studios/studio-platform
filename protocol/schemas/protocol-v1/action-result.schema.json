@@ -1,0 +1,55 @@
+{
+  "$id": "https://studio.local/schemas/protocol-v1/action-result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActionResult",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "payload": true,
+        "request_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "const": "success"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "request_id",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "const": "failure"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "request_id",
+        "code",
+        "message",
+        "retryable"
+      ]
+    }
+  ]
+}

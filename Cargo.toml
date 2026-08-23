@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/studio-actions",
+    "crates/studio-app",
+    "crates/studio-cli",
+    "crates/studio-components",
+    "crates/studio-navigation",
+    "crates/studio-package",
+    "crates/studio-protocol",
+    "crates/studio-security",
+    "crates/studio-script",
+    "crates/studio-testkit",
+    "crates/studio-ui",
+    "crates/studio-wasm",
+]
+exclude = [
+    "vendor/gpui-component",
+    "vendor/gpui-component-assets",
+    "vendor/gpui-component-macros",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.93"
+
+[workspace.dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+schemars = "1.2.2"
+thiserror = "2.0.17"
+wat = "1.255.0"
+wasmtime = { version = "=47.0.3", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmparser = "=0.255.0"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate", "unreserved"] }
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+serde_jcs = "=0.2.0"
+sha2 = "=0.11.0"
+getrandom = "=0.3.4"
+zeroize = "=1.9.0"
+semver = "=1.0.28"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "381953d44897c53c4d252ae30620bafaa7d060b7", default-features = false, features = ["wayland"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "381953d44897c53c4d252ae30620bafaa7d060b7", default-features = false, features = ["wayland"] }
+gpui-component = { path = "vendor/gpui-component", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

@@ -1,0 +1,20 @@
+{
+  "type": "mount",
+  "payload": {
+    "protocol_version": 1,
+    "route": "/catalog",
+    "root": {
+      "id": "root",
+      "kind": "column",
+      "props": {},
+      "children": [
+        {
+          "id": "title",
+          "kind": "text",
+          "props": {},
+          "children": []
+        }
+      ]
+    }
+  }
+}

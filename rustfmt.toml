@@ -1,0 +1,3 @@
+# Third-party source is retained byte-for-byte apart from the documented Cargo integration
+# deltas. Formatting checks cover Studio-owned Rust code and intentionally skip vendor trees.
+ignore = ["vendor"]

@@ -1,0 +1,25 @@
+{
+  "targets": {
+    "debug": {
+      "debug": true,
+      "sourceMap": true
+    },
+    "release": {
+      "optimizeLevel": 3,
+      "shrinkLevel": 1,
+      "converge": true,
+      "noAssert": true
+    }
+  },
+  "options": {
+    "runtime": "stub",
+    "disable": ["bulk-memory"],
+    "use": ["abort=assembly/index/studioAbort"],
+    "exportRuntime": false,
+    "importMemory": false,
+    "initialMemory": 256,
+    "maximumMemory": 256,
+    "outFile": "build/pos-desktop.wasm",
+    "textFile": "build/pos-desktop.wat"
+  }
+}

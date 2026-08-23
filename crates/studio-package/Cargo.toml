@@ -1,0 +1,27 @@
+[package]
+name = "studio-package"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+zip.workspace = true
+
+[[bin]]
+name = "studio-pack"
+path = "src/bin/studio-pack.rs"
+
+[lints]
+workspace = true

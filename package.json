@@ -1,0 +1,48 @@
+{
+  "name": "studio-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tools/*",
+    "tools/*/*",
+    "sdk/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "ready": "vp fmt && vp lint && vp run -r test && vp run -r build",
+    "dev": "vp run -r dev",
+    "fmt": "vp fmt",
+    "lint": "vp lint",
+    "build": "vp run -r build",
+    "check": "bun run check:typescript && bun run --filter '@studio/sdk' check",
+    "check:typescript": "tsc --noEmit",
+    "check:all": "bun run check && vp check",
+    "test": "bun test tests && cd sdk/assemblyscript && bun test tests",
+    "test:packages": "vp run -r test",
+    "test:all": "./scripts/test-all.sh",
+    "generate:protocol": "cargo run -p studio-protocol --bin generate_schema && bun run ./scripts/generate-protocol.ts",
+    "build:starter": "bun run ./scripts/build-example.ts starter",
+    "build:pos": "bun run ./scripts/build-example.ts pos-desktop",
+    "build:rust": "cargo build --locked --workspace",
+    "test:rust": "cargo test --locked --workspace"
+  },
+  "dependencies": {
+    "@blackbelt-technology/pi-agent-dashboard": "^0.5.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2",
+    "vite-plus": "0.2.5"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@11.1.2",
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
+    "vitest": "4.1.10"
+  }
+}

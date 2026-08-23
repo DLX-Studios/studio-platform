@@ -1,0 +1,25 @@
+{
+  "$id": "https://studio.local/schemas/protocol-v1/action-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActionRequest",
+  "type": "object",
+  "properties": {
+    "capability": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string"
+    },
+    "payload": true,
+    "request_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "capability",
+    "operation",
+    "payload"
+  ]
+}

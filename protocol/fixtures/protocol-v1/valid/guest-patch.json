@@ -1,0 +1,14 @@
+{
+  "type": "patch",
+  "payload": {
+    "sequence": 1,
+    "operations": [
+      {
+        "op": "update_prop",
+        "node_id": "title",
+        "property": "text",
+        "value": "Catalog"
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+[install]
+linker = "isolated"
+auto = "disable"
+
+[test]
+# Keep the root Bun suite scoped to Studio Runtime-owned tests. Orbit Platform is maintained in
+# its own repository and is not a second test suite here.
+root = "tests"

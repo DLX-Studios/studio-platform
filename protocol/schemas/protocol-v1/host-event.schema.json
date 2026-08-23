@@ -1,0 +1,197 @@
+{
+  "$id": "https://studio.local/schemas/protocol-v1/host-event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostEvent",
+  "description": "A closed event delivered by the host to a guest plugin.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/UiEvent"
+        },
+        "type": {
+          "type": "string",
+          "const": "ui"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/NavigationEvent"
+        },
+        "type": {
+          "type": "string",
+          "const": "navigation"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ActionResult"
+        },
+        "type": {
+          "type": "string",
+          "const": "action_result"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/LifecycleEvent"
+        },
+        "type": {
+          "type": "string",
+          "const": "lifecycle"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "payload"
+      ]
+    }
+  ],
+  "$defs": {
+    "ActionResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "payload": true,
+            "request_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "success"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "request_id",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "const": "failure"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "request_id",
+            "code",
+            "message",
+            "retryable"
+          ]
+        }
+      ]
+    },
+    "LifecycleEvent": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/LifecycleState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "LifecycleState": {
+      "type": "string",
+      "enum": [
+        "loading",
+        "running",
+        "trapped",
+        "stopped"
+      ]
+    },
+    "NavigationEvent": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "route",
+        "accepted"
+      ]
+    },
+    "UiEvent": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "event",
+        "payload"
+      ]
+    }
+  }
+}

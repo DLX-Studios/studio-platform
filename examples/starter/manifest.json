@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.studio.starter",
+  "name": "Studio Starter",
+  "version": "0.1.0",
+  "publisher": { "id": "studio-examples", "keyId": "example-key-1" },
+  "entry": "module.wasm",
+  "sdkVersion": "^0.1.0",
+  "protocolVersion": 1,
+  "capabilities": [],
+  "limits": { "memoryMiB": 16, "eventFuel": 1000000 },
+  "assets": []
+}

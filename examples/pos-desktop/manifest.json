@@ -1,0 +1,32 @@
+{
+  "assets": [
+    "assets/dishes/beef-kebab.webp",
+    "assets/dishes/buttery-chicken.webp",
+    "assets/dishes/chicken-ramen.webp",
+    "assets/dishes/fish-chips.webp",
+    "assets/dishes/french-fries.webp",
+    "assets/dishes/fried-rice.webp",
+    "assets/dishes/grilled-skewers.webp",
+    "assets/dishes/roast-beef.webp",
+    "assets/dishes/sauerkraut.webp",
+    "assets/dishes/spaghetti-bolognese.webp",
+    "assets/dishes/veggie-salad.webp",
+    "assets/dishes/wagyu.webp"
+  ],
+  "capabilities": [],
+  "entry": "module.wasm",
+  "id": "com.example.pos-desktop",
+  "limits": {
+    "eventFuel": 10000000,
+    "memoryMiB": 16
+  },
+  "name": "Studio Market — Desktop POS",
+  "protocolVersion": 1,
+  "publisher": {
+    "id": "studio-example",
+    "keyId": "dev-example-1"
+  },
+  "schemaVersion": 1,
+  "sdkVersion": "^0.1.0",
+  "version": "0.1.0"
+}

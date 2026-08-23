@@ -1,0 +1,1 @@
+{"type":"action","payload":{"request_id":"a","capability":"payment.simulate","operation":"charge","payload":{}}}

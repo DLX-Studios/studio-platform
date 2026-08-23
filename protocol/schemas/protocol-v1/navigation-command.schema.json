@@ -1,0 +1,88 @@
+{
+  "$id": "https://studio.local/schemas/protocol-v1/navigation-command.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NavigationCommand",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "push"
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "route"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "replace"
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "route"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "pop"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "pop_to"
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "route"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "reset"
+        },
+        "route": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "route"
+      ]
+    }
+  ]
+}

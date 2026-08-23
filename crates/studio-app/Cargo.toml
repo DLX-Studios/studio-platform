@@ -1,0 +1,64 @@
+[package]
+name = "studio-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-component-assets = { path = "../../vendor/gpui-component-assets" }
+gpui_platform.workspace = true
+serde_json.workspace = true
+studio-actions = { path = "../studio-actions" }
+studio-components = { path = "../studio-components" }
+studio-navigation = { path = "../studio-navigation" }
+studio-package = { path = "../studio-package" }
+studio-protocol = { path = "../studio-protocol" }
+studio-security = { path = "../studio-security" }
+studio-ui = { path = "../studio-ui" }
+studio-wasm = { path = "../studio-wasm" }
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+wat.workspace = true
+
+[[test]]
+name = "plugin_launch"
+path = "../../tests/integration/plugin_launch.rs"
+
+[[test]]
+name = "catalog_latency"
+path = "../../tests/performance/catalog_latency.rs"
+
+[[test]]
+name = "redaction"
+path = "../../tests/security/redaction.rs"
+
+[[test]]
+name = "protected_payment"
+path = "../../tests/integration/protected_payment.rs"
+
+[[test]]
+name = "checkout_navigation"
+path = "../../tests/integration/checkout_navigation.rs"
+
+[[test]]
+name = "developer_errors"
+path = "../../tests/integration/developer_errors.rs"
+
+[[test]]
+name = "plugin_recovery"
+path = "../../tests/integration/plugin_recovery.rs"
+
+[[test]]
+name = "compositor_disconnect"
+path = "../../tests/integration/compositor_disconnect.rs"
+
+
+
+[lints]
+workspace = true

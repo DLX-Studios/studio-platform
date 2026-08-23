@@ -1,0 +1,7 @@
+{
+  "targets": {
+    "release": { "outFile": "build/starter.wasm", "optimizeLevel": 3, "shrinkLevel": 1 },
+    "debug": { "outFile": "build/starter.wasm", "debug": true }
+  },
+  "options": { "bindings": "raw", "exportRuntime": false }
+}

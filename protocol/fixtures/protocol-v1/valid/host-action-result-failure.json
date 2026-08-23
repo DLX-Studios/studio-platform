@@ -1,0 +1,10 @@
+{
+  "type": "action_result",
+  "payload": {
+    "status": "failure",
+    "request_id": "req-2",
+    "code": "payment_declined",
+    "message": "Payment was declined",
+    "retryable": false
+  }
+}
