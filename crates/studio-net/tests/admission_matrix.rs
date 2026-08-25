@@ -109,9 +109,9 @@ fn remainder_pattern_covers_nested_paths() {
 
 #[test]
 fn origin_comparison_is_normalized() {
-    // Declared uppercase host with explicit default port; requested canonical form.
+    // Declared uppercase host must match the canonical lowercase request form.
     let mut group = json_api_group();
-    group.origins = vec![String::from("HTTPS://API.EXAMPLE.TEST:443")];
+    group.origins = vec![String::from("HTTPS://API.EXAMPLE.TEST")];
     let fixture = broker(&[group]);
     fixture
         .transport
@@ -120,4 +120,30 @@ fn origin_comparison_is_normalized() {
         .broker
         .execute(get_items_request("/v1/items"))
         .expect("normalized origin matches");
+}
+
+#[test]
+fn explicit_default_port_normalizes_away() {
+    let mut group = json_api_group();
+    group.origins = vec![String::from("https://api.example.test:443")];
+    let fixture = broker(&[group]);
+    fixture
+        .transport
+        .respond(200, "application/json", r#"{"id":"a","name":"b"}"#);
+    let error = fixture
+        .broker
+        .execute(get_items_request("/v1/items"))
+        .expect_err("explicit default port differs from omitted port");
+    assert_eq!(code_of(&error), BrokerErrorCode::OriginNotDeclared);
+
+    fixture.transport.respond(200, "application/json", r#"{"id":"a","name":"b"}"#);
+    let request = BrokerRequest::new(
+        format!("{ORIGIN}:443"),
+        HttpMethod::Get,
+        "/v1/items",
+    );
+    fixture
+        .broker
+        .execute(request)
+        .expect("identical explicit ports match");
 }
