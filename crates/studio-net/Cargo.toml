@@ -1,0 +1,23 @@
+[package]
+name = "studio-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+studio-security = { path = "../studio-security" }
+zeroize.workspace = true
+
+[features]
+default = []
+# UNVERIFIED: env-gated real-endpoint integration suite. The deterministic
+# runner must not enable this feature; it requires operator-supplied endpoint
+# configuration (STUDIO_NET_REAL_ENDPOINT_URL) and network egress.
+integration-real = []
+
+[lints]
+workspace = true
