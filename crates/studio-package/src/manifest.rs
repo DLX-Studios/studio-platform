@@ -61,6 +61,9 @@ pub struct ManifestV1 {
     pub limits: BundleLimits,
     /// Ordered declared archive asset paths.
     pub assets: Vec<String>,
+    /// Protected values required at runtime, declared without values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretDeclaration>,
 }
 
 /// Signed publisher identity.
@@ -71,6 +74,16 @@ pub struct Publisher {
     pub id: String,
     /// Provisioned public-key identifier.
     pub key_id: String,
+}
+
+/// Signed declaration of one out-of-band protected value.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretDeclaration {
+    /// Stable lowercase identifier referenced by broker declarations.
+    pub name: String,
+    /// Safe host-visible explanation of why the value is required.
+    pub purpose: String,
 }
 
 /// Closed capability catalog for milestone one.
@@ -157,6 +170,7 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
         return Err(ManifestError::PathInvalid(manifest.entry.clone()));
     }
     validate_assets(&manifest.assets)?;
+    validate_secrets(&manifest.secrets)?;
     let mut capabilities = HashSet::new();
     if manifest
         .capabilities
@@ -173,6 +187,30 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
         return Err(ManifestError::LimitInvalid);
     }
     Ok(())
+}
+
+fn validate_secrets(secrets: &[SecretDeclaration]) -> Result<(), ManifestError> {
+    let mut names = HashSet::new();
+    for secret in secrets {
+        if !valid_secret_name(&secret.name)
+            || validate_safe_text(&secret.purpose, 256, "secrets.purpose").is_err()
+            || !names.insert(secret.name.as_str())
+        {
+            return Err(ManifestError::ManifestInvalid("secrets"));
+        }
+    }
+    Ok(())
+}
+
+fn valid_secret_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.starts_with(|character: char| character.is_ascii_lowercase())
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-' | '_')
+        })
 }
 
 fn validate_plugin_id(id: &str) -> Result<(), ManifestError> {
