@@ -92,7 +92,7 @@ impl StreamChannel {
             state = self
                 .signal
                 .wait_timeout(state, Duration::from_millis(250))
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .map_or_else(std::sync::PoisonError::into_inner, |(guard, _result)| guard);
         }
     }
 
@@ -245,7 +245,7 @@ fn retry_or_fail(
             *attempt += 1;
             channel.push(StreamEvent::RetryScheduled {
                 attempt: *attempt,
-                delay_ms: delay.as_millis().min(u128::from(u64::MAX)) as u64,
+                delay_ms: delay.as_millis().try_into().unwrap_or(u64::MAX),
             });
             sleep_cancellable(token, delay);
             *backoff = (*backoff).saturating_mul(2);
@@ -334,6 +334,15 @@ fn read_connection(
                     }
                     match deliver_chunk(chunk_schema, &parsed.data) {
                         Ok(value) => {
+                            // Chunks echoing registered credential material are dropped and
+                            // terminate the stream before guest visibility.
+                            if chunk_contains_registered_material(&value, filter) {
+                                channel.push(StreamEvent::Failed(BrokerError::with_detail(
+                                    BrokerErrorCode::SensitiveContentRejected,
+                                    String::from("chunk contained protected material"),
+                                )));
+                                return ConnectionEnd::Stop;
+                            }
                             channel.push(StreamEvent::Chunk(value));
                         }
                         Err(code) => {
@@ -355,6 +364,20 @@ fn deliver_chunk(schema: &JsonSchema, raw: &str) -> Result<Value, ChunkFailure> 
     let value: Value = serde_json::from_str(raw).map_err(|_| ChunkFailure::Malformed)?;
     schema.validate(&value).map_err(|_| ChunkFailure::Mismatch)?;
     Ok(value)
+}
+
+fn chunk_contains_registered_material(
+    value: &Value,
+    filter: &Arc<Mutex<SensitiveValueFilter>>,
+) -> bool {
+    serde_json::to_string(value)
+        .map(|rendered| {
+            filter
+                .lock()
+                .map(|filter| filter.validate_persistence(&rendered).is_err())
+                .unwrap_or(true)
+        })
+        .unwrap_or(true)
 }
 
 enum ChunkFailure {

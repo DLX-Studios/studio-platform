@@ -545,7 +545,7 @@ impl RouteGroupDeclaration {
         };
         let (chunk_schema, retry_policy) = match &self.streaming {
             Some(streaming) => {
-                if methods.as_slice() != [HttpMethod::Get] {
+                if methods != [HttpMethod::Get] {
                     return Err(invalid("streaming routes must declare GET only"));
                 }
                 (

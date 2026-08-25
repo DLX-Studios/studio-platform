@@ -47,6 +47,9 @@ pub enum BrokerErrorCode {
     ResponseMalformed,
     /// The parsed response failed the declared response schema before guest visibility.
     ResponseSchemaMismatch,
+    /// The validated response contained registered credential material and was discarded
+    /// before guest visibility.
+    SensitiveContentRejected,
     /// A stream exceeded one of its declared bounds.
     StreamExceeded,
     /// The guest cancelled an in-flight operation.
@@ -77,6 +80,7 @@ impl BrokerErrorCode {
             Self::ResponseTooLarge => "net.response.too_large",
             Self::ResponseMalformed => "net.response.malformed",
             Self::ResponseSchemaMismatch => "net.response.schema_mismatch",
+            Self::SensitiveContentRejected => "net.response.sensitive_rejected",
             Self::StreamExceeded => "net.stream.exceeded",
             Self::Cancelled => "net.operation.cancelled",
         }

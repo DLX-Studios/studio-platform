@@ -28,17 +28,21 @@ use crate::limits::BrokerLimits;
 use crate::streaming;
 
 /// One logical REST broker owned by the Runtime host.
-pub struct RestBroker {
+///
+/// The broker borrows the protected secret store through its injection handle, so the handle is
+/// bound after construction behind interior mutability; credential resolution reads it under a
+/// short lock at send time.
+pub struct RestBroker<'store> {
     groups: Vec<CompiledRouteGroup>,
     transport: Arc<dyn crate::transport::HttpTransport>,
-    injector: Option<Arc<dyn NamedSecretInjector>>,
-    oauth: Option<Arc<dyn OAuthSessionResolver>>,
+    injector: Mutex<Option<Arc<dyn NamedSecretInjector + 'store>>>,
+    oauth: Mutex<Option<Arc<dyn OAuthSessionResolver>>>,
     filter: Arc<Mutex<SensitiveValueFilter>>,
     rate_windows: Mutex<HashMap<String, VecDeque<Instant>>>,
     ceilings: BrokerLimits,
 }
 
-impl std::fmt::Debug for RestBroker {
+impl std::fmt::Debug for RestBroker<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("RestBroker")
@@ -47,15 +51,15 @@ impl std::fmt::Debug for RestBroker {
     }
 }
 
-impl RestBroker {
+impl<'store> RestBroker<'store> {
     /// Create a broker over one transport and explicit host ceilings.
     #[must_use]
     pub fn new(transport: Arc<dyn crate::transport::HttpTransport>, ceilings: BrokerLimits) -> Self {
         Self {
             groups: Vec::new(),
             transport,
-            injector: None,
-            oauth: None,
+            injector: Mutex::new(None),
+            oauth: Mutex::new(None),
             filter: Arc::new(Mutex::new(SensitiveValueFilter::new())),
             rate_windows: Mutex::new(HashMap::new()),
             ceilings,
@@ -81,18 +85,24 @@ impl RestBroker {
     }
 
     /// Bind the protected-secret send-time injector for named-secret groups.
-    pub fn set_named_secret_injector(&mut self, injector: Arc<dyn NamedSecretInjector>) {
-        self.injector = Some(injector);
+    pub fn set_named_secret_injector(&self, injector: Arc<dyn NamedSecretInjector + 'store>) {
+        *self
+            .injector
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(injector);
     }
 
     /// Bind the OAuth provider-plugin session resolver (ticket 21 seam).
-    pub fn set_oauth_resolver(&mut self, resolver: Arc<dyn OAuthSessionResolver>) {
-        self.oauth = Some(resolver);
+    pub fn set_oauth_resolver(&self, resolver: Arc<dyn OAuthSessionResolver>) {
+        *self
+            .oauth
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(resolver);
     }
 
     /// Expose the restricted guest facade over this broker.
     #[must_use]
-    pub fn guest_api(self: &Arc<Self>) -> GuestRestApi {
+    pub fn guest_api(self: &Arc<Self>) -> GuestRestApi<'store> {
         GuestRestApi::new(Arc::clone(self))
     }
 
@@ -109,15 +119,25 @@ impl RestBroker {
         }
         let limits = *group.limits();
         self.check_rate(group.id(), limits.max_requests_per_window, limits.rate_window)?;
-        let body_bytes = self.prepare_body(&request.body, group.request_schema(), limits.max_request_bytes)?;
+        let body_bytes = self.prepare_body(
+            request.body.as_ref(),
+            group.request_schema(),
+            limits.max_request_bytes,
+        )?;
         let mut headers = guest_headers(&request);
         if !body_bytes.is_empty() {
             headers.push((String::from("content-type"), String::from("application/json")));
         }
         credential::resolve(
             group,
-            self.injector.as_ref(),
-            self.oauth.as_ref(),
+            self.injector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref(),
+            self.oauth
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref(),
             &mut headers,
             &self.filter,
         )?;
@@ -132,7 +152,7 @@ impl RestBroker {
         if !(200..=299).contains(&response.status) {
             return Err(BrokerError::with_detail(
                 BrokerErrorCode::UpstreamRejected,
-                self.sanitize(format!("upstream status {}", response.status)),
+                self.sanitize(&format!("upstream status {}", response.status)),
             ));
         }
         if response.body.len() > limits.max_response_bytes {
@@ -153,11 +173,14 @@ impl RestBroker {
         if !group.is_streaming() {
             return Err(BrokerError::new(BrokerErrorCode::RouteNotStreaming));
         }
+        if request.body.is_some() {
+            return Err(BrokerError::with_detail(
+                BrokerErrorCode::RequestSchemaInvalid,
+                String::from("streaming routes carry no body"),
+            ));
+        }
         let limits = *group.limits();
         self.check_rate(group.id(), limits.max_requests_per_window, limits.rate_window)?;
-        if request.body.is_some() {
-            return Err(BrokerError::new(BrokerErrorCode::RequestSchemaInvalid));
-        }
         let mut headers = guest_headers(&request);
         headers.push((
             String::from("accept"),
@@ -165,8 +188,14 @@ impl RestBroker {
         ));
         credential::resolve(
             group,
-            self.injector.as_ref(),
-            self.oauth.as_ref(),
+            self.injector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref(),
+            self.oauth
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref(),
             &mut headers,
             &self.filter,
         )?;
@@ -231,7 +260,7 @@ impl RestBroker {
 
     fn prepare_body(
         &self,
-        body: &Option<Value>,
+        body: Option<&Value>,
         schema: Option<&crate::schema::JsonSchema>,
         max_request_bytes: usize,
     ) -> Result<Vec<u8>, BrokerError> {
@@ -239,17 +268,17 @@ impl RestBroker {
             (None, None) => Ok(Vec::new()),
             (Some(_), None) => Err(BrokerError::with_detail(
                 BrokerErrorCode::RequestSchemaInvalid,
-                "route declares no request schema".to_owned(),
+                String::from("route declares no request schema"),
             )),
             (None, Some(_)) => Err(BrokerError::with_detail(
                 BrokerErrorCode::RequestSchemaInvalid,
-                "route declares a request schema but no body was supplied".to_owned(),
+                String::from("route declares a request schema but no body was supplied"),
             )),
             (Some(value), Some(schema)) => {
                 schema.validate(value).map_err(|error| {
                     BrokerError::with_detail(
                         BrokerErrorCode::RequestSchemaInvalid,
-                        self.sanitize(error.to_string()),
+                        self.sanitize(&error.to_string()),
                     )
                 })?;
                 let bytes = serde_json::to_vec(value)
@@ -270,7 +299,7 @@ impl RestBroker {
         let value: Value = serde_json::from_slice(raw).map_err(|error| {
             BrokerError::with_detail(
                 BrokerErrorCode::ResponseMalformed,
-                self.sanitize(error.to_string()),
+                self.sanitize(&error.to_string()),
             )
         })?;
         // Declared-schema enforcement happens here, strictly before any guest visibility.
@@ -278,17 +307,31 @@ impl RestBroker {
             schema.validate(&value).map_err(|error| {
                 BrokerError::with_detail(
                     BrokerErrorCode::ResponseSchemaMismatch,
-                    self.sanitize(error.to_string()),
+                    self.sanitize(&error.to_string()),
                 )
             })?;
         }
+        // A response echoing registered credential material is discarded wholesale; guests never
+        // observe it and diagnostics stay value-free.
+        let rendered = serde_json::to_string(&value)
+            .map_err(|_| BrokerError::new(BrokerErrorCode::ResponseMalformed))?;
+        self.filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .validate_persistence(&rendered)
+            .map_err(|_| {
+                BrokerError::with_detail(
+                    BrokerErrorCode::SensitiveContentRejected,
+                    String::from("response contained protected material"),
+                )
+            })?;
         Ok(value)
     }
 
-    fn sanitize(&self, text: String) -> String {
+    fn sanitize(&self, text: &str) -> String {
         self.filter
             .lock()
-            .map(|filter| filter.sanitize(&text))
+            .map(|filter| filter.sanitize(text))
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }

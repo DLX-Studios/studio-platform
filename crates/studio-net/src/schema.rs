@@ -135,7 +135,7 @@ fn check_schema_node(node: &Value, path: &str) -> Result<(), SchemaError> {
     }
     for key in ["minimum", "maximum"] {
         if let Some(bound) = object.get(key)
-            && bound.as_f64().is_none_or(f64::is_nan)
+            && bound.as_f64().map_or(true, |number| number.is_nan())
         {
             return Err(err(path, format!("`{key}` must be a finite number")));
         }

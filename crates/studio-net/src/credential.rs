@@ -11,26 +11,27 @@
 use std::sync::{Arc, Mutex};
 
 use studio_security::{
-    BrokerCredentialError, BrokerCredentialSink, ProtectedSecretErrorCode, SensitiveValueFilter,
+    BrokerCredentialError, BrokerCredentialSink, ProtectedSecretErrorCode, ProtectedSecretKey,
+    ProtectedSecretError, SensitiveValueFilter,
 };
 
 use crate::declaration::CompiledRouteGroup;
 use crate::error::{BrokerError, BrokerErrorCode};
 
 /// Object-safe adapter around the sealed [`studio_security::BrokerSecretInjector`] capability so
-/// the broker can hold one injector behind a `Arc<dyn ...>` without carrying credential-backend
-/// generics or store lifetimes.
+/// the broker can hold one injector behind an `Arc<dyn ...>` without carrying credential-backend
+/// generics.
 pub trait NamedSecretInjector: Send + Sync {
     /// Forward to the underlying send-time injection hook.
     ///
     /// # Errors
     ///
-    /// Returns the underlying safe [`studio_security::ProtectedSecretError`].
+    /// Returns the underlying safe [`ProtectedSecretError`].
     fn inject_named_secret(
         &self,
-        key: &studio_security::ProtectedSecretKey,
+        key: &ProtectedSecretKey,
         sink: &mut dyn BrokerCredentialSink,
-    ) -> Result<(), studio_security::ProtectedSecretError>;
+    ) -> Result<(), ProtectedSecretError>;
 }
 
 impl<B: studio_security::CredentialBackend> NamedSecretInjector
@@ -38,9 +39,9 @@ impl<B: studio_security::CredentialBackend> NamedSecretInjector
 {
     fn inject_named_secret(
         &self,
-        key: &studio_security::ProtectedSecretKey,
+        key: &ProtectedSecretKey,
         sink: &mut dyn BrokerCredentialSink,
-    ) -> Result<(), studio_security::ProtectedSecretError> {
+    ) -> Result<(), ProtectedSecretError> {
         studio_security::BrokerSecretInjector::inject_at_send_time(self, key, sink)
     }
 }
@@ -48,8 +49,8 @@ impl<B: studio_security::CredentialBackend> NamedSecretInjector
 /// Typed host seam for OAuth provider-plugin sessions (ticket 21).
 ///
 /// Implementations resolve an active provider session and attach its credential to the bounded
-/// request via [`BrokerCredentialSink`], exactly like named-secret injection. Until a resolver
-/// is wired, requests to provider-session groups fail closed with
+/// request via [`BrokerCredentialSink`], exactly like named-secret injection. Until a resolver is
+/// wired, requests to provider-session groups fail closed with
 /// [`BrokerErrorCode::OauthSessionUnavailable`] instead of falling back to generic network
 /// behavior.
 pub trait OAuthSessionResolver: Send + Sync {
@@ -66,8 +67,8 @@ pub trait OAuthSessionResolver: Send + Sync {
     ) -> Result<(), BrokerError>;
 }
 
-/// Send-time injection sink that appends the borrowed secret bytes into the outgoing header set
-/// and registers them with the shared redaction scrubber.
+/// Send-time injection sink appending borrowed secret bytes into the outgoing header set while
+/// registering them with the shared redaction scrubber.
 pub(crate) struct HeaderInjectionSink<'sink> {
     headers: &'sink mut Vec<(String, String)>,
     header_name: String,
@@ -115,7 +116,7 @@ impl BrokerCredentialSink for HeaderInjectionSink<'_> {
 /// stable codes without any credential context.
 pub fn resolve(
     group: &CompiledRouteGroup,
-    injector: Option<&Arc<dyn NamedSecretInjector>>,
+    injector: Option<&Arc<dyn NamedSecretInjector + '_>>,
     oauth: Option<&Arc<dyn OAuthSessionResolver>>,
     headers: &mut Vec<(String, String)>,
     filter: &Mutex<SensitiveValueFilter>,
@@ -126,7 +127,8 @@ pub fn resolve(
             let Some(resolver) = oauth else {
                 return Err(BrokerError::new(BrokerErrorCode::OauthSessionUnavailable));
             };
-            let mut sink = HeaderInjectionSink::new(headers, String::from("authorization"), None, filter);
+            let mut sink =
+                HeaderInjectionSink::new(headers, String::from("authorization"), None, filter);
             resolver.inject_session(
                 group.oauth_provider().unwrap_or_default(),
                 group.id(),
@@ -165,7 +167,7 @@ fn map_injection_error(code: ProtectedSecretErrorCode) -> BrokerError {
         ProtectedSecretErrorCode::RequestInvalid | ProtectedSecretErrorCode::CredentialRejected => {
             BrokerError::with_detail(
                 BrokerErrorCode::DeclarationInvalid,
-                "credential reference rejected",
+                String::from("credential reference rejected"),
             )
         }
         ProtectedSecretErrorCode::SecretUnavailable

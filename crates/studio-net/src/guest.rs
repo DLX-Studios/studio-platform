@@ -115,9 +115,22 @@ pub enum StreamEvent {
 }
 
 /// Cancellable typed stream handle handed to guests.
-#[derive(Clone, Debug)]
 pub struct StreamHandle {
     channel: Arc<StreamChannel>,
+}
+
+impl Clone for StreamHandle {
+    fn clone(&self) -> Self {
+        Self {
+            channel: Arc::clone(&self.channel),
+        }
+    }
+}
+
+impl std::fmt::Debug for StreamHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("StreamHandle")
+    }
 }
 
 impl StreamHandle {
@@ -142,19 +155,26 @@ impl StreamHandle {
 ///
 /// Construction, declaration wiring, credential binding, and transport selection stay host-only;
 /// guests receive only admission-checked execution and typed streams.
-#[derive(Clone)]
-pub struct GuestRestApi {
-    broker: Arc<RestBroker>,
+pub struct GuestRestApi<'store> {
+    broker: Arc<RestBroker<'store>>,
 }
 
-impl std::fmt::Debug for GuestRestApi {
+impl<'store> Clone for GuestRestApi<'store> {
+    fn clone(&self) -> Self {
+        Self {
+            broker: Arc::clone(&self.broker),
+        }
+    }
+}
+
+impl std::fmt::Debug for GuestRestApi<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("GuestRestApi")
     }
 }
 
-impl GuestRestApi {
-    pub(crate) fn new(broker: Arc<RestBroker>) -> Self {
+impl<'store> GuestRestApi<'store> {
+    pub(crate) fn new(broker: Arc<RestBroker<'store>>) -> Self {
         Self { broker }
     }
 

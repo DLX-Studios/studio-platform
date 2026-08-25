@@ -36,7 +36,7 @@ impl std::error::Error for TransportError {}
 ///
 /// Headers are ordered pairs with lowercase names. Credential material may be appended by the
 /// send-time injection sink only; nothing in this structure is ever logged or exposed to guests.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OutgoingRequest {
     /// Admitted method.
     pub method: HttpMethod,
