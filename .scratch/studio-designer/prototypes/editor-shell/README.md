@@ -1,6 +1,6 @@
-# Studio Designer editor-shell prototype
+# Studio Designer editor-shell review prototype
 
-Throwaway UI prototype for deciding how the native Studio Designer workspace should behave.
+Retained UI review artifact recording the original native Studio Designer workspace directions.
 
 Run from the repository root:
 
@@ -14,4 +14,4 @@ Open `http://127.0.0.1:4173/?variant=A` and use the floating switcher or Left/Ri
 - B — Focus Studio: canvas-first authoring with contextual floating tools.
 - C — Flow Deck: journey-oriented navigation with an integrated authoring deck.
 
-This code is intentionally throwaway. It does not represent production architecture.
+This code remains intentionally non-production, but is retained for later comparison against the implemented editor. It does not represent production architecture.

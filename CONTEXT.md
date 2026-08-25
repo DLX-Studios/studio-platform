@@ -16,6 +16,18 @@ _Avoid_: HTML document, imported page, runtime tree
 An application produced from a Studio Design and executed by Studio Runtime.
 _Avoid_: export target, website, generated mockup
 
+**Local Identity**:
+A password-protected Studio Designer identity that exists on one device, owns local projects, and authenticates without Studio Cloud or network access.
+_Avoid_: anonymous mode, operating-system user
+
+**Cloud Identity**:
+A Studio account authenticated by Studio Cloud that can own synchronized projects and cache authorized project state on a device.
+_Avoid_: local account, database user, Runtime application identity
+
+**Project Dashboard**:
+The post-authentication Studio Designer home for finding, creating, importing, organizing, and opening projects through interchangeable Grid, Index, and Activity views.
+_Avoid_: editor canvas, project flow, file browser
+
 **Agent-led Ingestion**:
 The process by which an agent interprets an external file or reference and proposes equivalent Studio Design content without a dedicated format importer.
 _Avoid_: format importer, automatic conversion

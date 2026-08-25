@@ -1,0 +1,1335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Studio Designer — application shell prototype</title>
+  <!-- Two welcome-screen directions, switchable with ?variant=A|B. A is the default; every screen shares native window chrome. Throwaway prototype. -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: oklch(0.141 0.005 285.823);
+      --panel: oklch(0.21 0.006 285.885);
+      --panel-2: oklch(0.235 0.006 286);
+      --panel-3: oklch(0.274 0.006 286.033);
+      --line: oklch(1 0 0 / 10%);
+      --line-strong: oklch(1 0 0 / 18%);
+      --text: oklch(0.985 0 0);
+      --muted: oklch(0.705 0.015 286.067);
+      --soft: oklch(0.82 0.008 286);
+      --brand: oklch(0.92 0.004 286.32);
+      --brand-2: oklch(0.985 0 0);
+      --brand-wash: oklch(1 0 0 / 7%);
+      --green: oklch(0.92 0.004 286.32);
+      --amber: oklch(0.78 0.012 286);
+      --red: oklch(0.704 0.191 22.216);
+      --shadow: 0 20px 60px #0009;
+      --radius: 0px;
+      --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --font-heading: "Instrument Sans", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: var(--font-mono);
+    }
+    * { box-sizing: border-box; }
+    html, body, #app { width: 100%; min-height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--text); overflow-x: hidden; }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .app { min-height: 100vh; background: radial-gradient(circle at 50% -20%, #24213c 0, transparent 40%), var(--bg); }
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .logo { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: white; background: linear-gradient(145deg, #a393ff, #6750df); box-shadow: inset 0 0 0 1px #ffffff2b; font-weight: 800; }
+    .brand-name { font-weight: 720; letter-spacing: -.02em; }
+    .small { color: var(--muted); font-size: 12px; }
+    .eyebrow { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .17em; text-transform: uppercase; }
+    .display { margin: 0; font-size: clamp(42px, 5.4vw, 78px); line-height: .97; letter-spacing: -.065em; }
+    .headline { margin: 0; font-size: clamp(28px, 3.4vw, 48px); line-height: 1.03; letter-spacing: -.05em; }
+    .lead { max-width: 590px; color: var(--soft); font-size: 15px; line-height: 1.75; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .row.wrap { flex-wrap: wrap; }
+    .spacer { flex: 1; }
+    .primary, .secondary, .ghost, .icon-btn, .mode-btn { min-height: 38px; border-radius: 9px; border: 1px solid transparent; padding: 0 15px; background: transparent; }
+    .primary { background: var(--brand); color: white; font-weight: 720; box-shadow: 0 9px 24px #7965ff35; }
+    .primary:hover { background: #9b8aff; }
+    .secondary { border-color: var(--line-strong); background: var(--panel-2); }
+    .secondary:hover, .ghost:hover, .mode-btn:hover { background: var(--panel-3); }
+    .ghost { color: var(--soft); padding-inline: 11px; }
+    .icon-btn { width: 38px; padding: 0; border-color: var(--line); background: var(--panel); }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 23px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--soft); background: #11141ae8; font-size: 10px; white-space: nowrap; }
+    .badge.green { color: var(--green); border-color: #3dd6a34f; background: #12342b; }
+    .badge.amber { color: var(--amber); border-color: #f1bf6355; background: #342712; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .field { display: grid; gap: 7px; }
+    .field label { color: var(--soft); font-size: 12px; font-weight: 650; }
+    .input, .select { width: 100%; height: 43px; border: 1px solid var(--line-strong); border-radius: 9px; padding: 0 12px; color: var(--text); background: #0d1015; }
+    .input::placeholder { color: #687182; }
+    .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .card { border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(155deg, #191d25, #12151b); box-shadow: 0 12px 38px #0003; }
+    .card:hover { border-color: var(--line-strong); }
+    .empty { display: grid; place-items: center; min-height: 220px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--muted); }
+    .avatar { display: grid; place-items: center; width: 46px; height: 46px; border: 1px solid #ffffff24; border-radius: 50%; background: linear-gradient(145deg, #537b8d, #273b47); font-size: 13px; font-weight: 800; }
+    .avatar.cloud { background: linear-gradient(145deg, #8e79e9, #433476); }
+    .status-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+    .status-line .dot { color: var(--green); }
+
+    /* Authenticated desktop shell — native title bar plus contextual application controls. */
+    .shell-a { min-height: 100vh; }
+    .native-titlebar {
+      position: relative;
+      z-index: 200;
+      display: flex;
+      height: 52px;
+      min-width: 0;
+      align-items: stretch;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in oklch, var(--bg) 96%, transparent);
+      backdrop-filter: blur(18px);
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+    .native-titlebar button,
+    .native-titlebar select,
+    .native-titlebar .no-drag { -webkit-app-region: no-drag; }
+    .titlebar-route { display: flex; min-width: 235px; align-items: center; border-right: 1px solid var(--line); }
+    .route-back { width: 46px; height: 100%; padding: 0; border: 0; border-right: 1px solid var(--line); color: var(--soft); background: transparent; font-size: 18px; }
+    .route-back:hover { color: var(--text); background: var(--brand-wash); }
+    .route-mark { display: grid; width: 28px; height: 28px; margin-left: 12px; place-items: center; color: var(--bg); background: var(--text); font-weight: 800; }
+    .route-copy { min-width: 0; padding: 0 13px 0 10px; }
+    .route-title { overflow: hidden; font-family: var(--font-heading); font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .route-crumbs { overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 8px; letter-spacing: .08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+    .titlebar-context { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; overflow: hidden; }
+    .titlebar-context .secondary,
+    .titlebar-context .ghost,
+    .titlebar-context .primary { min-height: 32px; padding-inline: 10px; font-size: 10px; }
+    .titlebar-segment { display: inline-flex; height: 32px; border: 1px solid var(--line-strong); background: var(--bg); }
+    .titlebar-segment button { min-width: 46px; padding: 0 9px; border: 0; border-right: 1px solid var(--line); color: var(--muted); background: transparent; font-size: 9px; }
+    .titlebar-segment button:last-child { border-right: 0; }
+    .titlebar-segment button:hover { color: var(--text); background: var(--brand-wash); }
+    .titlebar-segment button.active { color: var(--bg); background: var(--text); }
+    .titlebar-profile { width: auto; max-width: 178px; height: 32px; padding-right: 26px; font-size: 9px; }
+    .titlebar-orientation button { display: grid; width: 32px; min-width: 32px; padding: 0; place-items: center; }
+    .orientation-glyph { display: block; border: 1px solid currentColor; }
+    .orientation-glyph.portrait { width: 8px; height: 13px; }
+    .orientation-glyph.landscape { width: 13px; height: 8px; }
+    .titlebar-actions { position: relative; display: flex; align-items: center; border-left: 1px solid var(--line); }
+    .titlebar-actions > .badge { margin-inline: 9px; }
+    .titlebar-actions .icon-btn { width: 36px; min-height: 36px; border: 0; border-left: 1px solid var(--line); }
+    .titlebar-actions .avatar { width: 34px; height: 34px; margin: 0 9px; font-size: 10px; }
+    .editor-more-menu { position: absolute; z-index: 140; top: 45px; right: 0; width: 210px; padding: 6px; border: 1px solid var(--line-strong); background: var(--panel); box-shadow: 0 18px 45px #000a; }
+    .editor-more-label { padding: 7px 8px 6px; color: var(--muted); font-size: 8px; letter-spacing: .14em; text-transform: uppercase; }
+    .editor-menu-item { display: flex; width: 100%; min-height: 36px; padding: 0 9px; align-items: center; justify-content: space-between; border: 0; color: var(--soft); background: transparent; font-size: 10px; text-align: left; }
+    .editor-menu-item:hover { color: var(--text); background: var(--brand-wash); }
+    .editor-menu-item span:last-child { color: var(--muted); font-size: 8px; }
+    .editor-menu-divider { height: 1px; margin: 5px 0; background: var(--line); }
+    .window-controls { display: flex; height: 100%; border-left: 1px solid var(--line); -webkit-app-region: no-drag; }
+    .window-control { width: 43px; height: 100%; padding: 0; border: 0; border-left: 1px solid var(--line); color: var(--muted); background: transparent; font-size: 12px; }
+    .window-control:first-child { border-left: 0; }
+    .window-control:hover { color: var(--text); background: var(--brand-wash); }
+    .window-control.close:hover { color: white; background: var(--red); }
+    .shell-a .surface { min-height: calc(100vh - 52px); }
+    .shell-a .surface-inner { width: min(1500px, calc(100vw - 68px)); margin: 0 auto; padding: 46px 0 110px; }
+    .shell-a .welcome { display: grid; grid-template-columns: minmax(380px, .85fr) minmax(520px, 1.15fr); min-height: calc(100vh - 170px); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; background: #101319; }
+    .shell-a .welcome-copy { display: flex; flex-direction: column; justify-content: center; padding: clamp(38px, 6vw, 90px); border-right: 1px solid var(--line); }
+    .shell-a .welcome-art { position: relative; overflow: hidden; background: radial-gradient(circle at 50% 30%, #8f7cff26, transparent 46%), linear-gradient(145deg, #151821, #0d0f14); }
+    .shell-a .project-float { position: absolute; width: 48%; min-width: 280px; border: 1px solid var(--line-strong); border-radius: 13px; background: #171a21; box-shadow: var(--shadow); overflow: hidden; }
+    .shell-a .project-float.one { top: 12%; left: 10%; transform: rotate(-2deg); }
+    .shell-a .project-float.two { right: 8%; bottom: 13%; transform: rotate(2deg); }
+
+    .float-head { display: flex; align-items: center; justify-content: space-between; height: 35px; padding: 0 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .11em; }
+    .float-art { height: 150px; padding: 14px; background: linear-gradient(145deg, #1d2230, #11141a); }
+    .mini-layout { height: 100%; display: grid; grid-template-columns: 28% 1fr; gap: 10px; }
+    .mini-layout > div { border: 1px solid #ffffff13; border-radius: 5px; background: #0c0f14; }
+    .mini-layout > div:last-child { background: linear-gradient(#8f7cff35 18%, #11141a 18%); }
+
+    .auth-wrap { width: min(100%, 1040px); margin: 0 auto; }
+    .auth-head { margin-bottom: 30px; }
+    .identity-grid { display: grid; grid-template-columns: repeat(3, minmax(210px, 1fr)); gap: 13px; }
+    .identity-card { display: grid; gap: 18px; padding: 19px; text-align: left; }
+    .identity-card .identity-top { display: flex; align-items: center; justify-content: space-between; }
+    .identity-card h3 { margin: 0 0 4px; font-size: 15px; }
+    .identity-actions { margin-top: 22px; display: flex; gap: 9px; }
+    .auth-layout { display: grid; grid-template-columns: .9fr 1.1fr; gap: 1px; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: var(--line); }
+    .auth-aside, .auth-form { background: var(--panel); padding: clamp(30px, 5vw, 62px); }
+    .auth-aside { display: flex; flex-direction: column; justify-content: space-between; background: radial-gradient(circle at 20% 20%, #8f7cff27, transparent 40%), #11141a; }
+    .form-stack { display: grid; gap: 17px; }
+    .type-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .type-card { padding: 24px; }
+    .type-card h3 { margin: 25px 0 7px; font-size: 24px; letter-spacing: -.04em; }
+    .stepper { display: flex; gap: 7px; margin: 21px 0 30px; }
+    .step { flex: 1; height: 4px; border-radius: 9px; background: var(--line); }
+    .step.done, .step.active { background: var(--brand); }
+
+    .dash-head { display: flex; align-items: flex-end; gap: 20px; margin-bottom: 24px; }
+    .dash-title h1 { margin: 5px 0 0; font-size: 36px; letter-spacing: -.05em; }
+    .dash-tools { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; gap: 10px; margin-bottom: 17px; }
+    .mode-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: #0e1116; }
+    .mode-btn { min-height: 33px; padding: 0 11px; color: var(--muted); font-size: 12px; }
+    .mode-btn.active { color: white; background: var(--panel-3); }
+    .project-grid { display: grid; grid-template-columns: repeat(3, minmax(230px, 1fr)); gap: 14px; }
+    .project-card { overflow: hidden; text-align: left; padding: 0; }
+    .project-preview { height: 145px; padding: 13px; border-bottom: 1px solid var(--line); background: radial-gradient(circle at 70% 20%, #8f7cff3b, transparent 34%), #171b23; }
+    .project-card:nth-child(2) .project-preview { background: radial-gradient(circle at 20% 80%, #4fcfa13d, transparent 35%), #171b23; }
+    .project-card:nth-child(3) .project-preview { background: radial-gradient(circle at 80% 60%, #f1bf633a, transparent 33%), #171b23; }
+    .project-info { padding: 15px; }
+    .project-info h3 { margin: 0 0 5px; font-size: 14px; }
+    .project-stats { display: flex; gap: 13px; margin-top: 13px; color: var(--muted); font-size: 10px; }
+    .project-table { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .project-table th, .project-table td { padding: 13px 15px; border-bottom: 1px solid var(--line); text-align: left; font-size: 12px; }
+    .project-table th { color: var(--muted); font-size: 9px; letter-spacing: .13em; text-transform: uppercase; }
+    .project-table tr:last-child td { border-bottom: 0; }
+    .activity-layout { display: grid; grid-template-columns: .72fr 1.28fr; gap: 14px; }
+    .activity-list, .recent-list { padding: 15px; }
+    .activity-row { display: grid; grid-template-columns: auto 1fr auto; gap: 11px; align-items: start; padding: 13px 2px; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .activity-row:last-child { border-bottom: 0; }
+    .activity-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; color: var(--brand-2); background: var(--brand-wash); }
+    .settings-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 0; }
+    .settings-nav { display: grid; align-content: start; gap: 4px; padding: 10px; }
+    .settings-nav .rail-btn {
+      display: flex;
+      width: 100%;
+      min-height: 40px;
+      padding: 0 11px;
+      align-items: center;
+      gap: 10px;
+      border: 0;
+      border-left: 2px solid transparent;
+      border-radius: 0;
+      color: var(--muted);
+      background: transparent;
+      font-size: 11px;
+      text-align: left;
+    }
+    .settings-nav .rail-btn:hover,
+    .settings-nav .rail-btn.active {
+      border-left-color: var(--text);
+      color: var(--text);
+      background: var(--brand-wash);
+    }
+    .settings-nav .rail-icon { display: inline-grid; width: 20px; place-items: center; color: var(--soft); }
+    .settings-panel { padding: 24px; border-left: 0; }
+    .setting-row { display: flex; align-items: center; gap: 18px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .setting-row:last-child { border-bottom: 0; }
+    .setting-copy { flex: 1; }
+    .setting-copy b { display: block; margin-bottom: 4px; font-size: 13px; }
+    .toggle { width: 38px; height: 22px; padding: 3px; border: 0; border-radius: 99px; background: var(--brand); }
+    .toggle::after { content: ""; display: block; width: 16px; height: 16px; margin-left: auto; border-radius: 50%; background: white; }
+    .recovery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .recovery-card { padding: 20px; }
+
+    /* Integrated canvas editor — Focus and Workbench are views over one editor state. */
+    .shell-a.editor-host { height: 100vh; min-height: 0; overflow: hidden; }
+    .editor-host .surface { height: calc(100vh - 52px); min-height: 0; }
+    .editor-host .surface-inner { width: 100%; max-width: none; height: 100%; padding: 0; }
+    .editor-workspace { height: 100%; min-width: 1120px; color: var(--text); background: var(--bg); }
+    .editor-dots {
+      background-color: var(--bg);
+      background-image: radial-gradient(var(--line-strong) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .editor-tool,
+    .editor-tab,
+    .editor-command-button {
+      min-height: 32px;
+      border: 1px solid transparent;
+      border-radius: 0;
+      color: var(--muted);
+      background: transparent;
+      font-size: 10px;
+    }
+    .editor-tool:hover,
+    .editor-tab:hover,
+    .editor-command-button:hover { color: var(--text); border-color: var(--line); background: var(--brand-wash); }
+    .editor-tool.active { color: var(--bg); border-color: var(--text); background: var(--text); }
+    .editor-section-title { display: flex; height: 36px; padding: 0 10px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: var(--soft); font-size: 9px; letter-spacing: .13em; text-transform: uppercase; }
+    .editor-tabs { display: flex; min-height: 38px; align-items: stretch; border-bottom: 1px solid var(--line); }
+    .editor-tab { padding: 0 10px; border: 0; border-right: 1px solid var(--line); border-bottom: 2px solid transparent; }
+    .editor-tab.active { color: var(--text); border-bottom-color: var(--text); background: var(--brand-wash); }
+    .editor-node { display: flex; width: 100%; min-height: 28px; padding: 0 8px; align-items: center; gap: 7px; border: 0; color: var(--soft); background: transparent; font-size: 10px; text-align: left; }
+    .editor-node:hover { background: var(--brand-wash); }
+    .editor-node.selected { color: var(--text); background: var(--brand-wash); box-shadow: inset 2px 0 var(--text); }
+    .editor-node .kind { width: 18px; color: var(--muted); text-align: center; }
+    .editor-node.indent-1 { padding-left: 20px; }
+    .editor-node.indent-2 { padding-left: 34px; }
+    .editor-node.indent-3 { padding-left: 48px; }
+
+    .editor-focus { position: relative; overflow: hidden; }
+    .editor-command {
+      position: absolute;
+      z-index: 5;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      width: min(430px, 38vw);
+      height: 39px;
+      padding: 0 11px;
+      transform: translateX(-50%);
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--line-strong);
+      color: var(--muted);
+      background: color-mix(in oklch, var(--panel) 92%, transparent);
+      box-shadow: 0 18px 45px #0008;
+      font-size: 10px;
+    }
+    .editor-command span:nth-child(2) { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
+    .editor-focus-rail {
+      position: absolute;
+      z-index: 5;
+      top: 50%;
+      left: 16px;
+      display: flex;
+      width: 48px;
+      height: max-content;
+      padding: 7px;
+      flex-direction: column;
+      gap: 5px;
+      border: 1px solid var(--line-strong);
+      background: color-mix(in oklch, var(--panel) 92%, transparent);
+      box-shadow: 0 18px 45px #0007;
+      transform: translateY(-50%);
+    }
+    .editor-focus-rail .editor-tool { width: 32px; height: 32px; padding: 0; }
+    .editor-focus-rail > .spacer { min-height: 0; flex: 0; }
+    .editor-stage { position: absolute; inset: 0; display: grid; padding: 62px 280px 330px 88px; place-items: center; overflow: auto; transition: padding 180ms ease; }
+    .editor-focus-inspector {
+      position: absolute;
+      z-index: 4;
+      top: 16px;
+      right: 16px;
+      bottom: 148px;
+      width: 250px;
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      background: color-mix(in oklch, var(--panel) 94%, transparent);
+      box-shadow: 0 18px 45px #0007;
+    }
+    .editor-agent-chat { position: absolute; z-index: 8; display: grid; grid-template-rows: 43px minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line-strong); background: color-mix(in oklch, var(--panel) 97%, transparent); transition: inset 180ms ease, width 180ms ease, height 180ms ease; }
+    .agent-float .editor-agent-chat { bottom: 16px; left: 78px; width: min(680px, calc(100% - 390px)); height: 300px; box-shadow: 0 18px 50px #0009; }
+    .agent-left .editor-agent-chat { top: 0; bottom: 0; left: 0; width: 350px; }
+    .agent-right .editor-agent-chat { top: 0; right: 0; bottom: 0; width: 350px; }
+    .agent-left .editor-focus-rail { left: 366px; }
+    .agent-left .editor-stage { padding: 62px 280px 40px 420px; }
+    .agent-left .editor-command { left: 62%; }
+    .agent-right .editor-focus-inspector { right: 366px; }
+    .agent-right .editor-stage { padding: 62px 640px 40px 88px; }
+    .agent-right .editor-command { left: 30%; }
+    .agent-chat-head { display: flex; padding: 0 9px 0 12px; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .agent-chat-title { min-width: 0; flex: 1; }
+    .agent-chat-title strong { display: block; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-chat-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+    .agent-placement { display: flex; border: 1px solid var(--line); }
+    .agent-placement button { width: 34px; height: 27px; padding: 0; border: 0; border-right: 1px solid var(--line); color: var(--muted); background: var(--bg); font-size: 8px; }
+    .agent-placement button:last-child { border-right: 0; }
+    .agent-placement button:hover { color: var(--text); background: var(--brand-wash); }
+    .agent-placement button.active { color: var(--bg); background: var(--text); }
+    .agent-chat-body { display: flex; padding: 11px 12px; flex-direction: column; gap: 9px; overflow: auto; }
+    .agent-message { max-width: 92%; font-size: 9px; line-height: 1.55; }
+    .agent-message.user { align-self: flex-end; padding: 7px 9px; color: var(--text); background: var(--brand-wash); }
+    .agent-message.assistant { color: var(--soft); }
+    .agent-message-meta { margin-bottom: 4px; color: var(--muted); font-size: 8px; letter-spacing: .1em; text-transform: uppercase; }
+    .agent-references { display: flex; margin-top: 7px; flex-wrap: wrap; gap: 5px; }
+    .agent-reference { min-height: 24px; padding: 0 7px; border: 1px solid var(--line-strong); color: var(--soft); background: var(--bg); font-size: 8px; }
+    .agent-reference:hover { color: var(--text); border-color: var(--soft); }
+    .agent-chat-composer { display: grid; border-top: 1px solid var(--line); background: var(--bg); }
+    .agent-chat-composer.drag-active { outline: 1px solid var(--text); outline-offset: -3px; background: var(--brand-wash); }
+    .agent-chat-composer > input[type="text"] { min-width: 0; height: 37px; padding: 0 12px; border: 0; color: var(--text); background: transparent; font-size: 9px; }
+    .agent-chat-composer > input[type="text"]:focus { outline: 0; }
+    .agent-context-strip { display: flex; min-width: 0; padding: 8px 8px 0; gap: 7px; overflow-x: auto; }
+    .agent-context-item { position: relative; display: grid; min-width: 146px; height: 48px; padding: 5px 26px 5px 5px; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 7px; border: 1px solid var(--line-strong); color: var(--soft); background: var(--panel); }
+    .agent-context-preview { display: grid; width: 38px; height: 36px; place-items: center; border: 1px solid var(--line); color: var(--muted); background: var(--bg); font-size: 8px; }
+    .agent-context-preview.image { background: linear-gradient(145deg, #b67855, #59362d); }
+    .agent-context-preview.video { background: linear-gradient(145deg, #484d62, #202431); }
+    .agent-context-preview.page, .agent-context-preview.prototype, .agent-context-preview.component, .agent-context-preview.node { background: linear-gradient(145deg, #303746, #151820); }
+    .agent-context-copy { min-width: 0; }
+    .agent-context-copy strong, .agent-context-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-context-copy strong { font-size: 8px; }
+    .agent-context-copy span { margin-top: 4px; color: var(--muted); font-size: 7px; }
+    .agent-context-remove { position: absolute; top: 3px; right: 3px; display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 0; color: var(--muted); background: transparent; font-size: 11px; }
+    .agent-context-remove:hover { color: var(--text); background: var(--brand-wash); }
+    .agent-composer-toolbar { display: flex; min-width: 0; height: 32px; padding: 2px 5px 3px; align-items: center; gap: 3px; }
+    .agent-composer-spacer { min-width: 14px; flex: 1; }
+    .agent-composer-divider { width: 1px; height: 16px; margin-inline: 4px; background: var(--line); }
+    .agent-icon-button { display: grid; width: 29px; height: 27px; padding: 0; place-items: center; border: 0; color: var(--muted); background: transparent; }
+    .agent-icon-button:hover, .agent-icon-button[aria-expanded="true"], .agent-icon-button[aria-pressed="true"] { color: var(--text); background: var(--brand-wash); }
+    .agent-icon-button:focus-visible { outline: 1px solid var(--text); outline-offset: -2px; }
+    .agent-icon-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    .agent-canvas-picker[aria-pressed="true"] { color: var(--bg); background: var(--text); }
+    .canvas-context-picking .editor-device-frame { cursor: crosshair; }
+    .canvas-context-picking [data-canvas-context] { cursor: crosshair; }
+    .canvas-context-picking [data-canvas-context]:hover { outline: 2px solid var(--text); outline-offset: 2px; }
+    .canvas-context-hint { position: absolute; z-index: 12; top: 64px; left: 50%; padding: 7px 10px; transform: translateX(-50%); border: 1px solid var(--line-strong); color: var(--text); background: var(--panel); box-shadow: 0 8px 26px #0008; font-size: 8px; letter-spacing: .05em; white-space: nowrap; }
+    .agent-voice-button.active { color: var(--bg); background: var(--text); }
+    .agent-send-button { display: grid; width: 29px; height: 27px; padding: 0; place-items: center; border: 0; color: var(--bg); background: var(--text); font-size: 13px; }
+    .agent-file-input { display: none; }
+    .agent-model-trigger { display: inline-flex; width: max-content; max-width: 100%; min-height: 28px; padding: 0 8px; align-items: center; gap: 6px; border: 0; color: var(--soft); background: transparent; font-size: 8px; white-space: nowrap; }
+    .agent-model-trigger:hover, .agent-model-trigger[aria-expanded="true"] { color: var(--text); background: var(--brand-wash); }
+    .agent-model-trigger:focus-visible { outline: 1px solid var(--text); outline-offset: -2px; }
+    .agent-model-trigger .model-trigger-name { overflow: hidden; max-width: 126px; text-overflow: ellipsis; }
+    .agent-model-trigger .model-trigger-effort { color: var(--muted); }
+    .model-trigger-mark { display: grid; width: 14px; height: 14px; place-items: center; border: 1px solid currentColor; font-size: 7px; }
+    .agent-model-popover { position: absolute; z-index: 30; right: auto; bottom: 76px; left: 50%; display: grid; width: min(560px, calc(100% - 32px)); height: min(410px, calc(100% - 100px)); min-height: 300px; grid-template-rows: 56px minmax(0, 1fr) 44px; transform: translateX(-50%); border: 1px solid var(--line-strong); color: var(--soft); background: var(--panel); box-shadow: 0 24px 70px #000c; }
+    .agent-left .agent-model-popover { right: auto; left: 12px; transform: none; }
+    .agent-right .agent-model-popover { right: 12px; left: auto; transform: none; }
+    .editor-workbench .agent-model-popover { right: auto; bottom: 38px; left: 50%; transform: translateX(-50%); }
+    .model-search-wrap { display: flex; padding: 9px; border-bottom: 1px solid var(--line); }
+    .model-search-wrap label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line-strong); background: var(--bg); }
+    .model-search-wrap input { min-width: 0; height: 34px; flex: 1; border: 0; color: var(--text); background: transparent; font-size: 10px; }
+    .model-search-wrap input:focus { outline: 0; }
+    .model-browser { display: grid; min-height: 0; grid-template-columns: 56px minmax(0, 1fr); }
+    .model-provider-rail { display: flex; padding: 8px; flex-direction: column; gap: 5px; border-right: 1px solid var(--line); background: var(--bg); }
+    .model-provider-rail button { display: grid; width: 38px; height: 34px; padding: 0; place-items: center; border: 1px solid transparent; color: var(--muted); background: transparent; font-size: 9px; }
+    .model-provider-rail button:hover { color: var(--text); border-color: var(--line); }
+    .model-provider-rail button.active { color: var(--bg); background: var(--text); }
+    .model-results { min-height: 0; padding: 8px; overflow: auto; }
+    .model-results-head { display: flex; min-height: 28px; padding: 0 5px 5px; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 8px; }
+    .model-results-head span:first-child { padding: 3px 5px; border: 1px solid var(--line); }
+    .model-provider-label { padding: 9px 7px 5px; color: var(--muted); font-size: 8px; letter-spacing: .1em; text-transform: uppercase; }
+    .model-option { display: grid; width: 100%; min-height: 42px; padding: 7px 9px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 0; color: var(--soft); background: transparent; text-align: left; }
+    .model-option:hover { color: var(--text); background: var(--brand-wash); }
+    .model-option.selected { color: var(--text); background: var(--brand-wash); }
+    .model-option strong, .model-option small { display: block; }
+    .model-option strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .model-option small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+    .model-option-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 8px; white-space: nowrap; }
+    .model-option.selected .model-option-meta::after { content: "✓"; color: var(--text); }
+    .model-empty { display: grid; min-height: 150px; place-items: center; color: var(--muted); font-size: 9px; }
+    .asset-results { min-height: 0; padding: 8px; overflow: auto; }
+    .asset-option { display: grid; width: 100%; min-height: 48px; padding: 6px 9px; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 0; color: var(--soft); background: transparent; text-align: left; }
+    .asset-option:hover, .asset-option.selected { color: var(--text); background: var(--brand-wash); }
+    .asset-option-preview { display: grid; width: 34px; height: 32px; place-items: center; border: 1px solid var(--line); color: var(--muted); background: var(--bg); font-size: 8px; }
+    .asset-option-preview.image { background: linear-gradient(145deg, #b67855, #59362d); }
+    .asset-option-preview.video { background: linear-gradient(145deg, #484d62, #202431); }
+    .asset-option strong, .asset-option small { display: block; }
+    .asset-option strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+    .asset-option small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+    .asset-option-meta { color: var(--muted); font-size: 7px; white-space: nowrap; }
+    .asset-option.selected .asset-option-meta::after { content: " ✓"; color: var(--text); }
+    .asset-upload-panel { display: grid; min-height: 0; padding: 12px; grid-template-rows: 1fr auto; gap: 10px; }
+    .asset-dropzone { display: grid; min-height: 180px; padding: 20px; place-items: center; border: 1px dashed var(--line-strong); color: var(--muted); background: var(--bg); text-align: center; }
+    .asset-dropzone.drag-active { color: var(--text); border-style: solid; background: var(--brand-wash); }
+    .asset-dropzone strong { display: block; margin-bottom: 7px; color: var(--text); font-size: 11px; }
+    .asset-dropzone span { display: block; max-width: 300px; font-size: 8px; line-height: 1.55; }
+    .asset-dropzone button { margin-top: 14px; }
+    .asset-provider-note { display: flex; min-height: 38px; padding: 0 9px; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); color: var(--muted); font-size: 8px; }
+    .asset-url-panel { display: flex; padding: 16px; flex-direction: column; gap: 10px; }
+    .asset-url-panel h3 { margin: 0; color: var(--text); font-size: 13px; }
+    .asset-url-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+    .asset-url-row input { min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); color: var(--text); background: var(--bg); font-size: 9px; }
+    .asset-provider-empty { display: grid; min-height: 210px; padding: 24px; place-items: center; color: var(--muted); text-align: center; }
+    .asset-provider-empty strong { display: block; margin-bottom: 7px; color: var(--text); font-size: 11px; }
+    .asset-provider-empty span { display: block; max-width: 320px; font-size: 8px; line-height: 1.55; }
+    .model-effort { display: grid; padding: 5px 8px; grid-template-columns: repeat(3, 1fr); gap: 4px; border-top: 1px solid var(--line); background: var(--panel); }
+    .model-effort button { border: 0; color: var(--muted); background: transparent; font-size: 9px; }
+    .model-effort button:hover { color: var(--text); background: var(--brand-wash); }
+    .model-effort button.active { color: var(--text); background: var(--bg); }
+    .editor-agent { padding: 12px 14px; border-right: 1px solid var(--line); }
+    .editor-agent-head { display: flex; justify-content: space-between; gap: 16px; }
+    .editor-agent-controls { display: flex; align-items: center; gap: 6px; }
+    .editor-agent-ops { display: flex; margin-top: 10px; flex-wrap: wrap; gap: 5px; }
+    .editor-op { padding: 3px 6px; border: 1px solid var(--line-strong); color: var(--soft); background: var(--bg); font-size: 8px; }
+    .editor-progress { height: 2px; margin-top: 10px; overflow: hidden; background: var(--line); }
+    .editor-progress::after { content: ""; display: block; width: 68%; height: 100%; background: var(--text); }
+    .editor-history { padding: 10px; overflow: hidden; }
+    .editor-history-row { display: grid; padding: 6px 0; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; color: var(--soft); font-size: 9px; }
+    .editor-history-dot { width: 6px; height: 6px; background: var(--text); }
+
+    .editor-device-wrap { position: relative; width: min(680px, 88%); margin: auto; }
+    .editor-frame-label { position: absolute; top: -28px; left: 0; display: flex; align-items: center; gap: 8px; color: var(--soft); font-size: 9px; }
+    .editor-device-frame { position: relative; width: 100%; aspect-ratio: var(--device-aspect, 16 / 10); overflow: hidden; border: 1px solid var(--soft); color: #17191d; background: #f2f1ed; box-shadow: 0 24px 64px #000a, 0 0 0 5px var(--panel); transition: aspect-ratio 180ms ease; }
+    .editor-device-wrap.orientation-portrait { width: min(420px, 70%); }
+    .editor-device-wrap.phone.orientation-portrait { width: 292px; }
+    .editor-device-wrap.phone.orientation-landscape { width: min(510px, 80%); }
+    .editor-device-wrap.foldable.orientation-portrait { width: 390px; }
+    .editor-device-wrap.foldable.orientation-landscape { width: min(560px, 84%); }
+    .editor-device-wrap.tablet.orientation-portrait { width: 510px; }
+    .editor-device-wrap.tablet.orientation-landscape { width: min(620px, 86%); }
+    .pos-shell { display: grid; height: 100%; grid-template-columns: 58px 1fr; background: #f2f1ed; font-family: var(--font-heading); }
+    .pos-nav { display: flex; padding: 14px 10px; flex-direction: column; align-items: center; gap: 17px; color: white; background: #1e2024; }
+    .pos-mini-logo { display: grid; width: 29px; height: 29px; place-items: center; color: #1e2024; background: white; font-size: 10px; font-weight: 900; }
+    .pos-nav-item { display: grid; width: 25px; height: 25px; place-items: center; color: #a8acb5; font-size: 11px; }
+    .pos-nav-item.active { color: #1e2024; background: white; }
+    .pos-main { padding: 17px; overflow: hidden; }
+    .pos-head { display: flex; margin-bottom: 15px; align-items: center; justify-content: space-between; }
+    .pos-head h2 { margin: 2px 0 0; font-size: 17px; }
+    .pos-search { display: flex; width: 34%; height: 26px; padding: 0 9px; align-items: center; border: 1px solid #d7d5ce; color: #807e78; background: white; font-size: 8px; }
+    .food-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+    .food-card { position: relative; padding: 7px; border: 1px solid #ddd9cf; background: white; }
+    .food-image { height: 58px; background: linear-gradient(145deg, #c78459, #6b392a); }
+    .food-card:nth-child(2) .food-image { background: linear-gradient(145deg, #d7b76c, #86633a); }
+    .food-card:nth-child(3) .food-image { background: linear-gradient(145deg, #7fa066, #385d43); }
+    .sale-chip { position: absolute; top: 12px; right: 12px; padding: 3px 6px; border: 1px solid #2a240e; color: #2a240e; background: #ffcf4c; font-size: 6px; font-weight: 900; }
+    .food-name { margin-top: 6px; font-size: 8px; font-weight: 800; }
+    .food-meta { display: flex; margin-top: 3px; justify-content: space-between; color: #817f79; font-size: 6px; }
+    .selection-outline { position: absolute; inset: 4px; border: 2px solid #17191d; pointer-events: none; }
+    .selection-label { position: absolute; top: 0; left: 5px; padding: 2px 5px; transform: translateY(-100%); color: white; background: #17191d; font-size: 7px; }
+
+    .editor-inspector-section { padding: 11px; border-bottom: 1px solid var(--line); }
+    .editor-inspector-head { display: flex; margin-bottom: 10px; align-items: center; justify-content: space-between; gap: 10px; }
+    .editor-field-grid { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; gap: 7px 8px; font-size: 9px; }
+    .editor-field-label { color: var(--muted); }
+    .editor-field { min-height: 27px; padding: 6px 7px; overflow: hidden; border: 1px solid var(--line); color: var(--soft); background: var(--bg); text-overflow: ellipsis; white-space: nowrap; }
+    .editor-token { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 1px solid var(--line-strong); background: #ffcf4c; }
+
+    .editor-workbench { display: grid; grid-template: minmax(0, 1fr) 26px / 44px 224px minmax(460px, 1fr) 280px; }
+    .workbench-rail { grid-row: 1; display: flex; padding: 7px 5px; flex-direction: column; gap: 5px; border-right: 1px solid var(--line); background: var(--bg); }
+    .workbench-rail .editor-tool { width: 33px; height: 33px; padding: 0; }
+    .workbench-explorer { display: grid; min-height: 0; grid-column: 2; grid-row: 1; grid-template-rows: 36px minmax(0, 1fr) 176px; border-right: 1px solid var(--line); background: var(--panel); }
+    .workbench-tree { padding: 5px; overflow: auto; }
+    .workbench-library { overflow: hidden; border-top: 1px solid var(--line); }
+    .editor-assets { display: grid; padding: 8px; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+    .editor-asset { position: relative; aspect-ratio: 1; border: 1px solid var(--line); background: #2a211d; }
+    .editor-asset:nth-child(2) { background: #2b271a; }
+    .editor-asset:nth-child(3) { background: #1c291f; }
+    .editor-asset span { position: absolute; right: 4px; bottom: 4px; left: 4px; overflow: hidden; color: white; font-size: 7px; text-overflow: ellipsis; }
+    .workbench-stage { display: grid; min-width: 0; min-height: 0; grid-column: 3; grid-row: 1; grid-template-rows: 38px minmax(0, 1fr) 124px; }
+    .editor-stage-toolbar { display: flex; padding: 0 8px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .editor-toolbar-group { display: flex; align-items: center; gap: 5px; }
+    .workbench-canvas { display: grid; padding: 46px 28px; place-items: center; overflow: auto; }
+    .workbench-activity { display: grid; grid-template-columns: minmax(0, 1fr) 240px; overflow: hidden; border-top: 1px solid var(--line); background: var(--panel); }
+    .workbench-inspector { grid-column: 4; grid-row: 1; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); }
+    .workbench-status { display: flex; grid-column: 1 / -1; grid-row: 2; padding: 0 9px; align-items: center; justify-content: space-between; color: var(--bg); background: var(--text); font-size: 8px; }
+
+    .prototype-tools { position: fixed; z-index: 7; bottom: 12px; left: 12px; display: flex; align-items: center; gap: 8px; padding: 5px 7px; border: 1px solid #d5b35c5c; border-radius: 10px; background: #19170ff2; box-shadow: 0 8px 28px #0007; }
+    .prototype-tools label { color: #e8c66c; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .prototype-tools select { height: 29px; border: 1px solid #695b34; border-radius: 6px; padding: 0 8px; background: #0d0e11; font-size: 11px; }
+    .prototype-switcher { position: fixed; z-index: 110; left: 50%; bottom: 15px; transform: translateX(-50%); display: flex; align-items: center; padding: 6px; border: 1px solid #dfe2e8; border-radius: 999px; color: #15171b; background: #f7f8fa; box-shadow: 0 14px 40px #0008; }
+    .prototype-switcher button { width: 38px; height: 38px; border: 0; border-radius: 50%; color: #15171b; background: #e7e9ee; }
+    .prototype-switcher .variant-label { min-width: 220px; padding: 0 15px; text-align: center; font-size: 11px; font-weight: 800; }
+    .state-peek { position: fixed; z-index: 7; right: 12px; bottom: 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: #0d1015eb; font-size: 10px; }
+    .state-peek summary { padding: 8px 10px; cursor: pointer; }
+    .state-peek pre { max-width: 280px; max-height: 310px; margin: 0; padding: 10px; overflow: auto; border-top: 1px solid var(--line); }
+
+    @media (max-height: 760px) and (min-width: 761px) {
+      .display { font-size: clamp(42px, 4.7vw, 58px); }
+      .welcome-copy .lead { line-height: 1.55; }
+      .welcome-copy > .row.wrap { margin-top: 16px !important; }
+      .shell-a .surface-inner { padding-top: 24px; }
+      .editor-host .surface-inner { padding: 0; }
+      .shell-a .welcome { min-height: calc(100vh - 114px); }
+      .shell-a .welcome-copy { padding: 30px 44px; }
+      .shell-a .float-art { height: 126px; }
+      .shell-a .auth-head { margin-bottom: 18px; }
+      .shell-a .auth-head .headline { font-size: 38px; }
+      .shell-a .stepper { margin: 12px 0 16px; }
+      .shell-a .auth-aside,
+      .shell-a .auth-form { padding: 30px 42px; }
+      .shell-a .form-stack { gap: 10px; }
+    }
+
+    @media (max-width: 1050px) {
+      .shell-a .welcome { grid-template-columns: 1fr; }
+      .shell-a .welcome-art { min-height: 380px; }
+      .project-grid { grid-template-columns: repeat(2, minmax(220px,1fr)); }
+    }
+    @media (max-width: 760px) {
+      .prototype-tools { left: 10px; }
+      .titlebar-route { min-width: 210px; }
+      .route-crumbs { display: none; }
+      .shell-a .surface-inner { width: calc(100vw - 28px); padding-top: 30px; }
+      .auth-layout, .settings-layout, .activity-layout { grid-template-columns: 1fr; }
+      .auth-aside { min-height: 260px; }
+      .identity-grid, .project-grid, .type-grid, .recovery-grid { grid-template-columns: 1fr; }
+      .dash-tools { grid-template-columns: 1fr; }
+      .prototype-switcher .variant-label { min-width: 155px; }
+      .state-peek { display: none; }
+    }
+
+    /* Canvas mono design-profile translation: Tailwind structures expressed as plain CSS. */
+    body, button, input, select { font-family: var(--font-mono); }
+    h1, h2, h3, .display, .headline, .brand-name { font-family: var(--font-heading); }
+    body { background: var(--bg); }
+    .app { background: var(--bg); }
+    .logo, .canvas-logo {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--text);
+      border-radius: 0;
+      color: var(--bg);
+      background: var(--text);
+      box-shadow: none;
+      font-weight: 800;
+    }
+    .brand-name { font-size: 14px; font-weight: 650; }
+    .small { font-family: var(--font-mono); font-size: 11px; line-height: 1.55; }
+    .eyebrow { font-family: var(--font-mono); font-size: 9px; letter-spacing: .2em; }
+    .display { letter-spacing: -.055em; }
+    .headline { letter-spacing: -.05em; }
+    .lead { color: var(--muted); font-family: var(--font-mono); font-size: 13px; line-height: 1.75; }
+
+    .primary, .secondary, .ghost, .icon-btn, .mode-btn {
+      min-height: 40px;
+      border-radius: 0;
+      font-size: 12px;
+      box-shadow: none;
+    }
+    .primary { border-color: var(--brand); color: var(--bg); background: var(--brand); font-weight: 700; }
+    .primary:hover { background: var(--soft); }
+    .secondary { border-color: var(--line-strong); background: color-mix(in oklch, var(--panel) 55%, transparent); }
+    .secondary:hover, .ghost:hover, .mode-btn:hover { background: var(--brand-wash); }
+    .ghost { color: var(--soft); }
+    .icon-btn { border-color: var(--line-strong); border-radius: 0; background: var(--bg); }
+    .badge, .badge.green, .badge.amber {
+      min-height: 22px;
+      border-color: var(--line-strong);
+      border-radius: 0;
+      color: var(--soft);
+      background: var(--bg);
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: .04em;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 0; }
+    .input, .select {
+      height: 42px;
+      border-color: var(--line-strong);
+      border-radius: 0;
+      background: var(--bg);
+      font-size: 12px;
+    }
+    .card {
+      border-radius: 0;
+      background: var(--panel);
+      box-shadow: none;
+    }
+    .card:hover { border-color: var(--soft); }
+    .avatar { border-color: var(--line-strong); background: var(--panel-3); }
+    .avatar.cloud { background: var(--panel-2); }
+    .empty { border-radius: 0; }
+
+    .dot-field, .grid-field { position: relative; isolation: isolate; }
+    .dot-field::before, .grid-field::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      opacity: .35;
+    }
+    .dot-field::before {
+      background-image: radial-gradient(var(--line-strong) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .grid-field::before {
+      background-image: linear-gradient(to right, var(--line) 1px, transparent 1px), linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+
+    .standalone-app { height: 100vh; min-height: 0; overflow: hidden; }
+    .standalone-native-titlebar .titlebar-route { min-width: 220px; border-right: 0; }
+    .standalone-native-titlebar .titlebar-context { justify-content: flex-start; }
+    .standalone-window-content { height: calc(100vh - 52px); min-height: 0; overflow: auto; }
+    .standalone-stage { position: relative; min-height: 100vh; overflow: hidden; background: var(--bg); }
+    .standalone-inner {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      width: min(100%, 1280px);
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 26px 48px 86px;
+      flex-direction: column;
+    }
+    .standalone-header, .standalone-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .standalone-footer {
+      margin-top: auto;
+      padding-top: 15px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    .standalone-context { color: var(--muted); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; }
+    .standalone-body { display: flex; flex: 1; min-height: 0; align-items: center; padding: 46px 0; }
+
+    .welcome-screen { min-height: 100vh; background: var(--bg); }
+    .welcome-monolith { display: grid; grid-template-columns: minmax(0, .88fr) minmax(500px, 1.12fr); }
+    .monolith-copy { display: flex; min-height: 100vh; padding: 34px 64px 86px; flex-direction: column; border-right: 1px solid var(--line); }
+    .monolith-copy .welcome-copy { display: flex; max-width: 650px; margin: auto 0; padding: 40px 0; flex-direction: column; align-items: flex-start; }
+    .monolith-copy .display { max-width: 620px; font-size: clamp(48px, 5.2vw, 76px); }
+    .monolith-copy .lead { max-width: 540px; }
+    .mono-footer { display: flex; justify-content: space-between; gap: 16px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; letter-spacing: .16em; text-transform: uppercase; }
+    .monolith-board { position: relative; min-height: 100vh; overflow: hidden; background: color-mix(in oklch, var(--panel) 35%, var(--bg)); }
+    .artifact-float {
+      position: absolute;
+      width: 54%;
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .artifact-float.one { top: 11%; left: 12%; }
+    .artifact-float.two { right: 9%; bottom: 13%; width: 49%; }
+    .artifact-head { display: flex; height: 36px; padding: 0 12px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    .artifact-body { height: 180px; padding: 15px; background: color-mix(in oklch, var(--panel) 45%, var(--bg)); }
+    .artifact-layout { display: grid; height: 100%; grid-template-columns: .34fr .66fr; gap: 12px; }
+    .artifact-layout > div, .artifact-block { border: 1px solid var(--line); background: var(--bg); }
+    .artifact-layout .artifact-stack { display: grid; padding: 12px; align-content: start; gap: 9px; }
+    .artifact-line { height: 7px; background: var(--line-strong); }
+    .artifact-line.strong { width: 62%; height: 24px; background: var(--text); }
+    .artifact-chip {
+      position: absolute;
+      top: 43%;
+      left: 5%;
+      padding: 10px 13px;
+      border: 1px solid var(--line-strong);
+      color: var(--muted);
+      background: var(--bg);
+      font-size: 9px;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    .welcome-topology { position: relative; display: grid; min-height: 100vh; place-items: center; overflow: hidden; padding: 84px 40px 108px; }
+    .standalone-window-content > .welcome-screen,
+    .standalone-window-content > .standalone-stage { height: 100%; }
+    .standalone-window-content > .welcome-screen,
+    .standalone-window-content > .standalone-stage,
+    .standalone-window-content .standalone-inner,
+    .standalone-window-content .monolith-copy,
+    .standalone-window-content .monolith-board,
+    .standalone-window-content .welcome-topology { min-height: 100%; }
+    .topology-brand { position: absolute; top: 28px; left: 48px; }
+    .topology-center { position: relative; z-index: 2; display: flex; max-width: 820px; flex-direction: column; align-items: center; gap: 23px; text-align: center; }
+    .topology-center .display { font-size: clamp(52px, 6vw, 82px); white-space: nowrap; }
+    .topology-mark { display: grid; width: 64px; height: 64px; place-items: center; color: var(--bg); background: var(--text); box-shadow: 12px 12px 0 var(--panel-3); font-size: 25px; }
+    .topology-path { color: var(--muted); font-size: 9px; letter-spacing: .22em; text-transform: uppercase; }
+    .topology-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 26px; color: var(--muted); font-size: 9px; letter-spacing: .15em; text-transform: uppercase; }
+    .topology-node { position: absolute; z-index: 1; width: 225px; padding: 12px; border: 1px solid var(--line-strong); background: var(--panel); }
+    .topology-node.one { top: 12%; left: 7%; }
+    .topology-node.two { top: 16%; right: 7%; width: 190px; }
+    .topology-node.three { right: 11%; bottom: 13%; width: 255px; }
+    .topology-node .node-title { display: flex; justify-content: space-between; margin-bottom: 11px; color: var(--muted); font-size: 9px; text-transform: uppercase; }
+    .topology-node .node-preview { min-height: 92px; border: 1px solid var(--line); background: color-mix(in oklch, var(--panel) 45%, var(--bg)); }
+
+    .chooser-body { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 34px; text-align: center; }
+    .chooser-intro { display: flex; max-width: 660px; flex-direction: column; gap: 12px; }
+    .chooser-intro h1 { margin: 0; font-size: clamp(40px, 4vw, 56px); letter-spacing: -.05em; }
+    .account-grid { display: grid; width: 100%; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+    .account-tile { display: flex; min-height: 225px; padding: 20px 16px 14px; flex-direction: column; align-items: center; border: 1px solid var(--line); color: var(--text); background: color-mix(in oklch, var(--panel) 54%, transparent); text-align: left; }
+    .account-tile:hover { border-color: var(--soft); background: var(--brand-wash); }
+    .account-avatar { display: grid; width: 108px; height: 108px; margin-bottom: 16px; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--soft); background: var(--panel-3); font-family: var(--font-heading); font-size: 29px; }
+    .account-avatar.cloud { background: var(--panel-2); }
+    .account-meta { display: grid; width: 100%; margin-top: auto; padding-top: 13px; grid-template-columns: minmax(0,1fr) auto; gap: 12px; border-top: 1px solid var(--line); }
+    .account-meta strong, .account-meta span { display: block; }
+    .account-meta strong { overflow: hidden; font-family: var(--font-heading); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .account-meta .email { margin-top: 5px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+    .account-state { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+    .account-kind { color: var(--muted); font-size: 8px; letter-spacing: .14em; text-transform: uppercase; }
+    .chooser-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+    .auth-direct { display: grid; width: 100%; align-items: center; grid-template-columns: .82fr 1fr; gap: 82px; }
+    .auth-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 18px; }
+    .auth-copy h1 { max-width: 560px; margin: 0; font-size: clamp(42px, 4.5vw, 62px); line-height: 1; letter-spacing: -.055em; }
+    .auth-boundary { max-width: 460px; padding-left: 14px; border-left: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.7; }
+    .plain-form { display: flex; width: 100%; max-width: 520px; margin-left: auto; flex-direction: column; gap: 18px; }
+    .plain-form .field label { color: var(--text); }
+    .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .profile-block { display: flex; align-items: center; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .profile-block .account-avatar { width: 64px; height: 64px; margin: 0; font-size: 18px; }
+
+    .account-type-body { display: flex; width: 100%; flex-direction: column; gap: 32px; }
+    .account-type-copy { max-width: 650px; }
+    .account-type-copy h1 { margin: 12px 0 0; font-size: clamp(40px, 4.4vw, 60px); line-height: 1; letter-spacing: -.055em; }
+    .plan-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+    .plan-card { display: flex; min-height: 300px; padding: 24px; flex-direction: column; border: 1px solid var(--line); background: var(--panel); }
+    .plan-card.featured { border-color: var(--soft); }
+    .plan-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .plan-title h3 { margin: 18px 0 7px; font-size: 34px; letter-spacing: -.045em; }
+    .plan-price { color: var(--text); font-size: 12px; }
+    .plan-benefits { display: grid; margin: 22px 0 26px; padding: 0; gap: 12px; color: var(--muted); font-size: 12px; list-style: none; }
+    .plan-benefits li::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 10px; background: var(--text); }
+    .plan-card .primary, .plan-card .secondary { width: 100%; margin-top: auto; }
+
+    .cloud-flow { display: grid; width: 100%; align-items: start; grid-template-columns: .75fr 1fr; gap: 70px; }
+    .cloud-copy { display: flex; flex-direction: column; gap: 18px; }
+    .cloud-copy h1 { margin: 0; font-size: clamp(42px, 4.5vw, 60px); line-height: 1; letter-spacing: -.055em; }
+    .cloud-steps { display: grid; margin-top: 8px; gap: 9px; color: var(--muted); font-size: 10px; }
+    .cloud-steps .active, .cloud-steps .done { color: var(--text); }
+    .cloud-stage { display: flex; padding: 24px; flex-direction: column; gap: 18px; border: 1px solid var(--line); background: var(--panel); }
+    .cloud-stage h2 { margin: 0; font-size: 28px; letter-spacing: -.04em; }
+
+    .shell-a { background: var(--bg); }
+    .native-titlebar { border-color: var(--line); background: color-mix(in oklch, var(--bg) 96%, transparent); }
+    .shell-a .surface-inner { max-width: 1280px; }
+    .editor-host .surface-inner { max-width: none; }
+    .titlebar-profile { width: auto; height: 32px; }
+
+    .dash-head { align-items: flex-end; }
+    .dash-title h1 { font-family: var(--font-heading); font-size: 42px; }
+    .dash-tools { padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .mode-switch { border-radius: 0; background: var(--bg); }
+    .mode-btn { border-radius: 0; }
+    .mode-btn.active { color: var(--bg); background: var(--text); }
+    .project-grid { gap: 12px; }
+    .project-preview { height: 184px; border-color: var(--line); background: var(--panel-2) !important; }
+    .project-card:nth-child(n) .project-preview { background: var(--panel-2) !important; }
+    .mini-layout > div { border-radius: 0; background: var(--bg); }
+    .mini-layout > div:last-child { background: var(--bg); }
+    .project-info { border-top: 0; }
+    .project-table { border-radius: 0; }
+    .activity-icon { border-radius: 0; color: var(--text); background: var(--brand-wash); }
+    .settings-nav, .settings-panel, .recovery-card { background: var(--panel); }
+    .settings-nav .rail-btn { border-radius: 0; }
+    .toggle { border: 1px solid var(--line-strong); border-radius: 0; background: var(--text); }
+    .toggle::after { border-radius: 0; background: var(--bg); }
+
+    .prototype-tools {
+      border-color: var(--line-strong);
+      border-radius: 0;
+      background: color-mix(in oklch, var(--bg) 96%, transparent);
+      box-shadow: 0 10px 35px #0008;
+    }
+    .prototype-tools label { color: var(--muted); }
+    .prototype-tools select { border-color: var(--line-strong); border-radius: 0; background: var(--panel); }
+    .prototype-switcher {
+      padding: 5px;
+      border-color: var(--line-strong);
+      border-radius: 0;
+      color: var(--text);
+      background: color-mix(in oklch, var(--bg) 96%, transparent);
+    }
+    .prototype-switcher button { border-radius: 0; color: var(--text); background: var(--panel); }
+    .prototype-switcher .variant-label { min-width: 205px; font-family: var(--font-mono); font-size: 10px; }
+    .state-peek { border-radius: 0; background: color-mix(in oklch, var(--bg) 96%, transparent); }
+
+    @media (max-height: 760px) and (min-width: 761px) {
+      .standalone-inner { padding-top: 20px; padding-bottom: 76px; }
+      .standalone-body { padding: 24px 0; }
+      .monolith-copy { padding: 24px 48px 76px; }
+      .monolith-copy .welcome-copy { padding: 20px 0; }
+      .monolith-copy .display { font-size: clamp(44px, 4.5vw, 62px); }
+      .artifact-body { height: 145px; }
+      .welcome-topology { padding-top: 70px; padding-bottom: 94px; }
+      .topology-center { gap: 16px; }
+      .topology-center .display { font-size: clamp(48px, 5.4vw, 68px); }
+      .topology-node.three { bottom: 11%; }
+      .account-tile { min-height: 205px; padding-top: 15px; }
+      .account-avatar { width: 92px; height: 92px; }
+      .chooser-body { gap: 24px; }
+      .auth-direct { gap: 58px; }
+      .auth-copy h1, .cloud-copy h1, .account-type-copy h1 { font-size: 44px; }
+      .account-type-body { gap: 22px; }
+      .plan-card { min-height: 230px; padding: 16px 19px; }
+      .plan-title h3 { margin-top: 12px; font-size: 29px; }
+      .plan-benefits { margin: 11px 0 15px; gap: 8px; }
+      .cloud-stage { padding: 19px; }
+    }
+
+    @media (max-width: 900px) {
+      .standalone-inner { padding-inline: 24px; }
+      .welcome-monolith { display: block; }
+      .monolith-copy { border-right: 0; }
+      .monolith-board { display: none; }
+      .topology-node { display: none; }
+      .topology-center .display { white-space: normal; }
+      .account-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .auth-direct, .cloud-flow { grid-template-columns: 1fr; gap: 36px; }
+      .plain-form { max-width: none; margin-left: 0; }
+    }
+
+    @media (max-width: 600px) {
+      .standalone-inner { padding-inline: 16px; }
+      .standalone-header { align-items: flex-start; }
+      .standalone-footer { align-items: flex-start; flex-direction: column; }
+      .account-grid, .plan-grid { grid-template-columns: 1fr; }
+      .topology-brand { left: 20px; }
+      .topology-center .display { font-size: 46px; }
+      .prototype-tools { right: 10px; left: 10px; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const welcomeVariants = [
+      { key: 'A', name: 'Monolith' },
+      { key: 'B', name: 'Topology' }
+    ];
+    const screens = [
+      ['welcome', 'Product welcome'],
+      ['accounts', 'Account chooser'],
+      ['account-type', 'Choose account type'],
+      ['local-create', 'Create local identity'],
+      ['local-login', 'Local login'],
+      ['cloud-login', 'Cloud login'],
+      ['cloud-onboarding', 'Cloud onboarding'],
+      ['dashboard', 'Project dashboard'],
+      ['editor', 'Canvas editor'],
+      ['settings', 'Settings & providers'],
+      ['recovery', 'Conflict & recovery']
+    ];
+    const projects = [
+      { name: 'Studio Market', kind: 'Local', status: 'Ready', updated: '12 min ago', screens: 6, nodes: 184, color: 'violet' },
+      { name: 'Northstar Operations', kind: 'Cloud', status: 'Synced', updated: 'Yesterday', screens: 11, nodes: 426, color: 'green' },
+      { name: 'Monument Kiosk', kind: 'Cloud', status: 'Conflict', updated: '3 days ago', screens: 4, nodes: 97, color: 'amber' },
+      { name: 'Field Notes', kind: 'Local', status: 'Recovered', updated: 'Last week', screens: 3, nodes: 61, color: 'blue' }
+    ];
+    const profileSpecs = {
+      phone: { name: 'Phone', width: 390, height: 844 },
+      foldable: { name: 'Foldable', width: 673, height: 841 },
+      tablet: { name: 'Tablet', width: 834, height: 1112 },
+      laptop: { name: 'Laptop', width: 1280, height: 800 },
+      desktop: { name: 'Desktop', width: 1440, height: 1024 },
+      ultrawide: { name: 'Ultrawide', width: 2560, height: 1080 },
+      television: { name: 'Television', width: 1920, height: 1080 },
+      '4k': { name: '4K', width: 3840, height: 2160 }
+    };
+    const agentModels = {
+      'gpt-5.6': { label: 'GPT-5.6', provider: 'OpenAI', providerKey: 'openai', detail: '1m context · 131k output' },
+      'gpt-5.6-mini': { label: 'GPT-5.6 Mini', provider: 'OpenAI', providerKey: 'openai', detail: 'Fast · 256k context' },
+      'codex-max': { label: 'Codex Max', provider: 'OpenAI', providerKey: 'openai', detail: 'Agentic · long-running' },
+      'claude-sonnet': { label: 'Claude Sonnet', provider: 'Anthropic', providerKey: 'anthropic', detail: 'Design · 200k context' },
+      'claude-opus': { label: 'Claude Opus', provider: 'Anthropic', providerKey: 'anthropic', detail: 'Deep reasoning' },
+      'gemini-pro': { label: 'Gemini Pro', provider: 'Google', providerKey: 'google', detail: 'Vision · 1m context' },
+      'gemini-flash': { label: 'Gemini Flash', provider: 'Google', providerKey: 'google', detail: 'Fast multimodal' },
+      'qwen-coder': { label: 'Qwen Coder', provider: 'OpenRouter', providerKey: 'openrouter', detail: '262k context' },
+      'kimi-k2': { label: 'Kimi K2', provider: 'OpenRouter', providerKey: 'openrouter', detail: 'Agentic · 256k context' },
+      'qwen-coder-local': { label: 'Qwen Coder · Local', provider: 'On-device', providerKey: 'local', detail: 'Offline · private' }
+    };
+    const contextAssets = {
+      'prototype-market': { id: 'prototype-market', label: 'Studio Market', type: 'prototype', source: 'library', sourceLabel: 'Prototype', detail: '6 pages · active project' },
+      'page-catalog': { id: 'page-catalog', label: 'Catalog', type: 'page', source: 'library', sourceLabel: 'Page', detail: '184 nodes' },
+      'page-checkout': { id: 'page-checkout', label: 'Checkout', type: 'page', source: 'library', sourceLabel: 'Page', detail: 'Stripe flow' },
+      'component-product-card': { id: 'component-product-card', label: 'Product card', type: 'component', source: 'library', sourceLabel: 'Component', detail: 'Responsive primitive tree' },
+      'component-sale-badge': { id: 'component-sale-badge', label: 'Sale badge', type: 'component', source: 'library', sourceLabel: 'Component', detail: 'Selected node' },
+      'image-wagyu': { id: 'image-wagyu', label: 'wagyu.webp', type: 'image', source: 'library', sourceLabel: 'Image', detail: '1600 × 1200 · 420 KB' },
+      'image-ramen': { id: 'image-ramen', label: 'ramen.webp', type: 'image', source: 'library', sourceLabel: 'Image', detail: '1600 × 1200 · 388 KB' },
+      'video-promo': { id: 'video-promo', label: 'market-promo.mp4', type: 'video', source: 'library', sourceLabel: 'Video', detail: '00:18 · 8.4 MB' },
+      'drive-brand-kit': { id: 'drive-brand-kit', label: 'market-brand-kit.zip', type: 'archive', source: 'drive', sourceLabel: 'Google Drive', detail: 'Shared with Avery' },
+      'drive-menu-photo': { id: 'drive-menu-photo', label: 'seasonal-menu.jpg', type: 'image', source: 'drive', sourceLabel: 'Google Drive', detail: '2400 × 1600' },
+      'figma-checkout': { id: 'figma-checkout', label: 'Checkout flow', type: 'figma', source: 'figma', sourceLabel: 'Figma', detail: '12 frames · updated today' },
+      'figma-components': { id: 'figma-components', label: 'Commerce components', type: 'figma', source: 'figma', sourceLabel: 'Figma', detail: 'Library · 28 components' },
+      'dropbox-demo': { id: 'dropbox-demo', label: 'kiosk-demo.mov', type: 'video', source: 'dropbox', sourceLabel: 'Dropbox', detail: '01:42 · 24 MB' }
+    };
+    const initialParams = new URLSearchParams(location.search);
+    const initialProfile = initialParams.get('profile') || 'desktop';
+    function naturalOrientation(profile) {
+      const spec = profileSpecs[profile] || profileSpecs.desktop;
+      return spec.width >= spec.height ? 'landscape' : 'portrait';
+    }
+    const state = {
+      screen: initialParams.get('screen') || 'welcome',
+      dashboardMode: initialParams.get('mode') || 'grid',
+      search: '',
+      cloudStep: 0,
+      selectedIdentity: 'avery-local',
+      remembered: true,
+      returnScreen: 'dashboard',
+      editorView: initialParams.get('editorView') || 'focus',
+      editorMode: initialParams.get('editorMode') || 'design',
+      editorProfile: initialProfile,
+      editorOrientation: initialParams.get('orientation') || naturalOrientation(initialProfile),
+      editorSelected: 'sale-badge',
+      editorZoom: 82,
+      agent: 'applying',
+      agentPlacement: initialParams.get('agentPanel') || 'float',
+      agentModel: initialParams.get('model') || 'gpt-5.6',
+      agentEffort: initialParams.get('effort') || 'high',
+      modelMenuOpen: false,
+      modelProviderFilter: 'all',
+      modelQuery: '',
+      assetMenuOpen: false,
+      assetSource: 'upload',
+      assetQuery: '',
+      assetUrl: '',
+      attachedContext: [],
+      canvasContextPicking: false,
+      voiceActive: false,
+      moreOpen: false,
+      lastEditorAction: null,
+      windowAction: null
+    };
+    function currentWelcomeVariant() {
+      const key = (new URLSearchParams(location.search).get('variant') || 'A').toUpperCase();
+      return welcomeVariants.find(item => item.key === key) || welcomeVariants[0];
+    }
+    function setUrl(values) {
+      const url = new URL(location.href);
+      Object.entries(values).forEach(([key, value]) => url.searchParams.set(key, value));
+      window.history.replaceState({}, '', url);
+    }
+    function escapeAttribute(value) {
+      return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    }
+    function go(screen) {
+      if (['settings', 'recovery'].includes(screen) && ['dashboard', 'editor'].includes(state.screen)) state.returnScreen = state.screen;
+      state.screen = screen;
+      state.moreOpen = false;
+      state.modelMenuOpen = false;
+      state.assetMenuOpen = false;
+      state.canvasContextPicking = false;
+      setUrl({ screen });
+      render();
+    }
+    function goBack() {
+      const fallback = state.screen === 'dashboard' ? 'accounts' : state.screen === 'editor' ? 'dashboard' : state.returnScreen || 'dashboard';
+      go(fallback);
+    }
+    function profileOptions() {
+      return Object.entries(profileSpecs).map(([value, spec]) => `<option value="${value}" ${state.editorProfile === value ? 'selected' : ''}>${spec.name} · ${spec.width}×${spec.height}</option>`).join('');
+    }
+    function currentAgentModel() {
+      return agentModels[state.agentModel] || agentModels['gpt-5.6'];
+    }
+    function agentModelTrigger() {
+      const model = currentAgentModel();
+      const effort = state.agentEffort.charAt(0).toUpperCase() + state.agentEffort.slice(1);
+      return `<button type="button" class="agent-model-trigger" data-model-menu aria-label="Choose AI model" aria-haspopup="dialog" aria-expanded="${state.modelMenuOpen}"><span class="model-trigger-mark">AI</span><span class="model-trigger-name">${model.label}</span><span class="model-trigger-effort">· ${effort}</span><span>⌄</span></button>`;
+    }
+    function agentModelPopover() {
+      if (!state.modelMenuOpen) return '';
+      const providers = [
+        ['all', 'ALL', 'All configured providers'],
+        ['openai', 'O', 'OpenAI'],
+        ['anthropic', 'A', 'Anthropic'],
+        ['google', 'G', 'Google'],
+        ['openrouter', 'R', 'OpenRouter'],
+        ['local', 'L', 'On-device']
+      ];
+      const query = state.modelQuery.trim().toLowerCase();
+      const models = Object.entries(agentModels).filter(([, model]) => (state.modelProviderFilter === 'all' || model.providerKey === state.modelProviderFilter) && (!query || `${model.label} ${model.provider} ${model.detail}`.toLowerCase().includes(query)));
+      let lastProvider = '';
+      const rows = models.map(([value, model]) => {
+        const label = model.provider !== lastProvider ? `<div class="model-provider-label">${model.provider}</div>` : '';
+        lastProvider = model.provider;
+        return `${label}<button class="model-option ${state.agentModel === value ? 'selected' : ''}" data-agent-model-option="${value}"><span><strong>${model.label}</strong><small>${model.provider}</small></span><span class="model-option-meta">${model.detail}</span></button>`;
+      }).join('');
+      const providerButtons = providers.map(([value, icon, label]) => `<button class="${state.modelProviderFilter === value ? 'active' : ''}" data-model-provider="${value}" aria-label="${label}" title="${label}">${icon}</button>`).join('');
+      const effortButtons = ['low', 'high', 'max'].map(value => `<button class="${state.agentEffort === value ? 'active' : ''}" data-agent-effort="${value}">${value.charAt(0).toUpperCase() + value.slice(1)}</button>`).join('');
+      return `<section class="agent-model-popover" role="dialog" aria-label="Choose AI model"><div class="model-search-wrap"><label><span>⌕</span><input data-model-search aria-label="Search AI models" value="${escapeAttribute(state.modelQuery)}" placeholder="Search configured models" autocomplete="off"></label></div><div class="model-browser"><nav class="model-provider-rail" aria-label="Model providers">${providerButtons}</nav><div class="model-results"><div class="model-results-head"><span>5 providers connected</span><span>${models.length} models available</span></div>${rows || '<div class="model-empty">No configured models match.</div>'}</div></div><footer class="model-effort" aria-label="Reasoning effort">${effortButtons}</footer></section>`;
+    }
+    function paperclipIcon() {
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.7-6.7a4 4 0 0 1 5.7 5.7l-8.5 8.5a6 6 0 0 1-8.5-8.5l8.1-8.1"/><path d="m7.1 13.9 8.1-8.1"/></svg>`;
+    }
+    function cursorIcon() {
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.8v15.4l4.2-4.1 2.8 5.1 2.5-1.4-2.8-5.1 5.8-.8L5 3.8Z"/></svg>`;
+    }
+    function microphoneIcon() {
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>`;
+    }
+    function contextTypeMark(type) {
+      return ({ prototype: 'APP', page: 'PG', component: 'CMP', node: 'NODE', image: 'IMG', video: '▶', figma: 'FIG', archive: 'ZIP', url: 'URL', file: 'FILE' })[type] || 'REF';
+    }
+    function agentAttachmentTrigger() {
+      return `<button type="button" class="agent-icon-button" data-asset-menu aria-label="Add context or media" aria-haspopup="dialog" aria-expanded="${state.assetMenuOpen}" title="Add context or media">${paperclipIcon()}</button>`;
+    }
+    function agentCanvasPickerTrigger() {
+      return `<button type="button" class="agent-icon-button agent-canvas-picker" data-canvas-context-picker aria-label="${state.canvasContextPicking ? 'Cancel canvas context selection' : 'Select context from canvas'}" aria-pressed="${state.canvasContextPicking}" title="${state.canvasContextPicking ? 'Cancel canvas selection' : 'Select from canvas'}">${cursorIcon()}</button>`;
+    }
+    function agentContextStrip() {
+      if (!state.attachedContext.length) return '';
+      const items = state.attachedContext.map(item => `<article class="agent-context-item"><div class="agent-context-preview ${item.type}">${contextTypeMark(item.type)}</div><div class="agent-context-copy"><strong>${escapeAttribute(item.label)}</strong><span>${escapeAttribute(item.sourceLabel)} · ${escapeAttribute(item.detail)}</span></div><button type="button" class="agent-context-remove" data-remove-context="${escapeAttribute(item.id)}" aria-label="Remove ${escapeAttribute(item.label)} from context" title="Remove from context">×</button></article>`).join('');
+      return `<div class="agent-context-strip" aria-label="Attached context">${items}</div>`;
+    }
+    function assetPickerPopover() {
+      if (!state.assetMenuOpen) return '';
+      const sources = [
+        ['upload', '↑', 'Upload files'],
+        ['library', '▦', 'Studio Library'],
+        ['url', '↗', 'Add from URL'],
+        ['drive', 'G', 'Google Drive'],
+        ['figma', 'F', 'Figma'],
+        ['dropbox', 'D', 'Dropbox'],
+        ['onedrive', 'O', 'OneDrive']
+      ];
+      const sourceButtons = sources.map(([value, icon, label]) => `<button class="${state.assetSource === value ? 'active' : ''}" data-asset-source="${value}" aria-label="${label}" title="${label}">${icon}</button>`).join('');
+      const query = state.assetQuery.trim().toLowerCase();
+      const assets = Object.values(contextAssets).filter(asset => asset.source === state.assetSource && (!query || `${asset.label} ${asset.type} ${asset.detail}`.toLowerCase().includes(query)));
+      const assetRows = assets.map(asset => {
+        const selected = state.attachedContext.some(item => item.id === asset.id);
+        return `<button class="asset-option ${selected ? 'selected' : ''}" data-context-asset="${asset.id}"><span class="asset-option-preview ${asset.type}">${contextTypeMark(asset.type)}</span><span><strong>${asset.label}</strong><small>${asset.sourceLabel} · ${asset.type}</small></span><span class="asset-option-meta">${asset.detail}</span></button>`;
+      }).join('');
+      let panel = `<div class="asset-results"><div class="model-results-head"><span>${assets.length} items</span><span>${state.attachedContext.length} in context</span></div>${assetRows || '<div class="model-empty">No assets match this source.</div>'}</div>`;
+      if (state.assetSource === 'upload') panel = `<div class="asset-upload-panel"><div class="asset-dropzone" data-asset-dropzone><div><strong>Drop files here</strong><span>Add images, video, audio, documents, archives, or any other file as agent context.</span><button type="button" class="primary" data-open-file-picker>Choose files</button></div></div><div class="asset-provider-note"><span>Files remain local to this prototype session.</span><span>Multiple files supported</span></div></div>`;
+      if (state.assetSource === 'url') panel = `<div class="asset-url-panel"><div><h3>Add a URL</h3><p class="small">Reference a public page, document, image, video, or API response in the agent context.</p></div><div class="asset-url-row"><input data-asset-url aria-label="Asset URL" value="${escapeAttribute(state.assetUrl)}" placeholder="https://example.com/reference" autocomplete="off"><button type="button" class="primary" data-add-url>Add URL</button></div><div class="asset-provider-note"><span>The prototype records the reference only.</span><span>No network request</span></div></div>`;
+      if (state.assetSource === 'onedrive') panel = `<div class="asset-provider-empty"><div><strong>Connect OneDrive</strong><span>Connected providers expose files here after the desktop host grants account-scoped access.</span><button type="button" class="secondary" style="margin-top:14px">Connect provider</button></div></div>`;
+      return `<section class="agent-model-popover agent-asset-popover" role="dialog" aria-label="Add context or media"><div class="model-search-wrap"><label><span>⌕</span><input data-asset-search aria-label="Search assets" value="${escapeAttribute(state.assetQuery)}" placeholder="Search apps, pages, components, and media" autocomplete="off"></label></div><div class="model-browser"><nav class="model-provider-rail" aria-label="File providers">${sourceButtons}</nav>${panel}</div><footer class="asset-provider-note"><span>${state.assetSource === 'library' ? 'Studio Library' : sources.find(source => source[0] === state.assetSource)?.[2]}</span><span>Click an item to add it to context</span></footer></section>`;
+    }
+    function inferContextType(file) {
+      if (file.type.startsWith('image/')) return 'image';
+      if (file.type.startsWith('video/')) return 'video';
+      return 'file';
+    }
+    function attachContextItem(item) {
+      if (!state.attachedContext.some(existing => existing.id === item.id)) state.attachedContext.push({ ...item });
+    }
+    function attachFiles(files) {
+      Array.from(files).forEach((file, index) => attachContextItem({
+        id: `upload-${file.name}-${file.size}-${index}`,
+        label: file.name,
+        type: inferContextType(file),
+        source: 'upload',
+        sourceLabel: 'Upload',
+        detail: file.size ? `${Math.max(1, Math.round(file.size / 1024))} KB` : 'Local file'
+      }));
+      state.assetMenuOpen = false;
+      render();
+    }
+    function routeMeta() {
+      if (state.screen === 'editor') return { title: 'Studio Market', crumbs: '', mark: 'S' };
+      if (state.screen === 'settings') return { title: 'Settings', crumbs: "Avery's studio / Settings", mark: '⚙' };
+      if (state.screen === 'recovery') return { title: 'Recovery', crumbs: "Avery's studio / Safety center", mark: '↻' };
+      return { title: 'Projects', crumbs: "Avery's studio / Project chooser", mark: 'S' };
+    }
+    function titlebarContext() {
+      if (state.screen === 'editor') return `<div class="titlebar-segment" aria-label="Editor destination"><button class="${state.editorMode === 'design' ? 'active' : ''}" data-editor-mode="design">Design</button><button class="${state.editorMode === 'prototype' ? 'active' : ''}" data-editor-mode="prototype">Prototype</button><button class="${state.editorMode === 'data' ? 'active' : ''}" data-editor-mode="data">Data</button></div><div class="titlebar-segment" aria-label="Workspace view"><button class="${state.editorView === 'focus' ? 'active' : ''}" data-editor-view="focus">Focus</button><button class="${state.editorView === 'workbench' ? 'active' : ''}" data-editor-view="workbench">Workbench</button></div><select class="select titlebar-profile" data-editor-profile aria-label="Responsive profile">${profileOptions()}</select><div class="titlebar-segment titlebar-orientation" aria-label="Preview orientation"><button class="${state.editorOrientation === 'portrait' ? 'active' : ''}" data-editor-orientation="portrait" aria-label="Portrait orientation" aria-pressed="${state.editorOrientation === 'portrait'}" title="Portrait orientation"><span class="orientation-glyph portrait"></span></button><button class="${state.editorOrientation === 'landscape' ? 'active' : ''}" data-editor-orientation="landscape" aria-label="Landscape orientation" aria-pressed="${state.editorOrientation === 'landscape'}" title="Landscape orientation"><span class="orientation-glyph landscape"></span></button></div>`;
+      if (state.screen === 'settings') return `<span class="badge">Local identity settings</span>`;
+      if (state.screen === 'recovery') return `<span class="badge amber">1 conflict needs review</span><button class="secondary">Refresh status</button>`;
+      return `<span class="badge">4 projects</span><button class="secondary">Import</button><button class="secondary">Templates</button><button class="primary">＋ New project</button>`;
+    }
+    function titlebarActions() {
+      const moreMenu = state.moreOpen ? `<div class="editor-more-menu" role="menu"><div class="editor-more-label">Run & package</div><button class="editor-menu-item" role="menuitem" data-editor-action="preview"><span>▶ Preview application</span><span>⌘P</span></button><button class="editor-menu-item" role="menuitem" data-editor-action="build"><span>Build .studio</span><span>⌘B</span></button><div class="editor-menu-divider"></div><button class="editor-menu-item" role="menuitem" data-go="settings"><span>Designer settings</span><span>⚙</span></button></div>` : '';
+      const editorActions = state.screen === 'editor' ? `<span class="badge green"><span class="dot"></span> Saved</span><button class="icon-btn" aria-label="Undo">↶</button><button class="icon-btn" aria-label="Redo">↷</button><button class="icon-btn" data-editor-menu aria-label="More editor actions" aria-haspopup="menu" aria-expanded="${state.moreOpen}">•••</button>${moreMenu}` : `<span class="badge green"><span class="dot"></span> Local ready</span><button class="icon-btn" data-go="settings" aria-label="Settings">⚙</button><button class="avatar" data-go="accounts" aria-label="Change account">AM</button>`;
+      return `<div class="titlebar-actions no-drag">${editorActions}</div>${windowControls()}`;
+    }
+    function windowControls() {
+      return `<div class="window-controls" aria-label="Window controls"><button class="window-control" data-window-action="minimize" aria-label="Minimize">—</button><button class="window-control" data-window-action="maximize" aria-label="Maximize">□</button><button class="window-control close" data-window-action="close" aria-label="Close">×</button></div>`;
+    }
+    function nativeTitlebar() {
+      const meta = routeMeta();
+      return `<header class="native-titlebar" data-tauri-drag-region><div class="titlebar-route" data-tauri-drag-region><button class="route-back" data-back aria-label="Go back">←</button><div class="route-mark" data-tauri-drag-region>${meta.mark}</div><div class="route-copy" data-tauri-drag-region><div class="route-title">${meta.title}</div>${meta.crumbs ? `<div class="route-crumbs">${meta.crumbs}</div>` : ''}</div></div><div class="titlebar-context" data-tauri-drag-region>${titlebarContext()}</div>${titlebarActions()}</header>`;
+    }
+    function standaloneRouteMeta() {
+      if (state.screen === 'welcome') return { title: 'Studio Designer', crumbs: 'Product welcome', mark: 'S' };
+      if (state.screen === 'accounts') return { title: 'Accounts', crumbs: 'Choose identity', mark: '◎' };
+      if (state.screen === 'account-type') return { title: 'Accounts', crumbs: 'Create identity', mark: '◎' };
+      if (state.screen === 'local-create') return { title: 'Local identity', crumbs: 'Create account', mark: '▣' };
+      if (state.screen === 'local-login') return { title: 'Local identity', crumbs: 'Sign in', mark: '▣' };
+      if (state.screen === 'cloud-login') return { title: 'Studio Cloud', crumbs: 'Sign in', mark: '☁' };
+      return { title: 'Studio Cloud', crumbs: 'Account setup', mark: '☁' };
+    }
+    function standaloneTitlebar() {
+      const meta = standaloneRouteMeta();
+      return `<header class="native-titlebar standalone-native-titlebar" data-tauri-drag-region><div class="titlebar-route" data-tauri-drag-region><div class="route-mark" data-tauri-drag-region>${meta.mark}</div><div class="route-copy" data-tauri-drag-region><div class="route-title">${meta.title}</div><div class="route-crumbs">${meta.crumbs}</div></div></div><div class="titlebar-context" data-tauri-drag-region></div>${windowControls()}</header>`;
+    }
+    function shellA(content) {
+      const editorClass = state.screen === 'editor' ? ' editor-host' : '';
+      return `<div class="app shell-a${editorClass}">${nativeTitlebar()}<main class="surface"><div class="surface-inner">${content}</div></main></div>`;
+    }
+    function canvasBrand() {
+      return `<div class="brand" aria-label="Studio Designer"><div class="canvas-logo">▣</div><div><div class="brand-name">Studio Designer</div><div class="small">Native authoring</div></div></div>`;
+    }
+    function standaloneFrame(body, options = {}) {
+      const field = options.field || 'dot';
+      const context = options.context || 'This device';
+      const footerLeft = options.footerLeft || 'Local identities stay on this device';
+      const footerRight = options.footerRight || 'Cloud identities sync when connected';
+      const back = options.cloudBack ? `<button class="ghost" data-cloud-back>← ${options.backLabel || 'Back'}</button>` : options.back ? `<button class="ghost" data-go="${options.back}">← ${options.backLabel || 'Back'}</button>` : canvasBrand();
+      return `<main class="standalone-stage ${field === 'grid' ? 'grid-field' : 'dot-field'}"><div class="standalone-inner"><header class="standalone-header">${back}<span class="standalone-context">${context}</span></header><div class="standalone-body">${body}</div><footer class="standalone-footer"><span>${footerLeft}</span><span>${footerRight}</span></footer></div></main>`;
+    }
+    function artifactNode(name, size, className) {
+      return `<div class="artifact-float ${className}"><div class="artifact-head"><span>${name}</span><span>${size}</span></div><div class="artifact-body"><div class="artifact-layout"><div></div><div class="artifact-stack"><span class="artifact-line strong"></span><span class="artifact-line"></span><span class="artifact-line" style="width:72%"></span><div class="row" style="margin-top:auto"><span class="artifact-block" style="height:40px;flex:1"></span><span class="artifact-block" style="height:40px;flex:1"></span></div></div></div></div></div>`;
+    }
+    function topologyNode(label, code, className) {
+      return `<div class="topology-node ${className}" aria-hidden="true"><div class="node-title"><span>${label}</span><span>${code}</span></div><div class="node-preview"></div></div>`;
+    }
+    function welcome() {
+      const variant = currentWelcomeVariant().key;
+      if (variant === 'A') return `<section class="welcome-screen welcome-monolith"><div class="monolith-copy"><header>${canvasBrand()}</header><div class="welcome-copy"><div class="eyebrow">AI-native Studio authoring</div><h1 class="display" style="margin-top:20px">Design the interface. Shape the runtime.</h1><p class="lead">A native design workspace for creating responsive Studio applications with semantic primitives, live agents, and one verified path into Studio Runtime.</p><div class="row wrap" style="margin-top:24px"><button class="primary" data-go="accounts">Get started →</button><button class="secondary" data-go="local-login">Open local identity</button></div></div><footer class="mono-footer"><span>Local-first</span><span>Desktop · Studio Runtime</span></footer></div><div class="monolith-board grid-field" aria-hidden="true">${artifactNode('Mobile storefront','390 × 844','one')}${artifactNode('Operations dashboard','1440 × 1024','two')}<div class="artifact-chip">⌁ 02 connected screens</div></div></section>`;
+      return `<section class="welcome-screen welcome-topology dot-field"><div class="topology-brand">${canvasBrand()}</div>${topologyNode('Page / Home','01','one')}${topologyNode('Component','A2','two')}${topologyNode('Page / Detail','03','three')}<div class="topology-center"><div class="topology-mark">✣</div><div class="topology-path">Prompt　⌁　Prototype</div><h1 class="display">Ideas become interfaces.</h1><p class="lead">Studio Designer gives you one connected place to create, iterate, and run native applications with an AI design agent.</p><button class="primary" data-go="accounts">Get started →</button><div class="topology-meta"><span>Design systems</span><span>Responsive pages</span><span>Native prototypes</span></div></div></section>`;
+    }
+    function accountTile(id, initials, name, email, kind, session, next) {
+      return `<button class="account-tile" data-identity="${id}" data-go="${next}"><div class="account-avatar ${kind === 'cloud' ? 'cloud' : ''}">${initials}</div><div class="account-meta"><div><strong>${name}</strong><span class="email">${email}</span></div><div class="account-state"><span class="badge">${session}</span><span class="account-kind">${kind === 'cloud' ? '☁' : '▣'} ${kind}</span></div></div></button>`;
+    }
+    function accounts() {
+      const body = `<section class="chooser-body"><div class="chooser-intro"><div class="eyebrow">Welcome back</div><h1>Choose an account</h1><p class="lead">Continue where you left off, or add another identity to this device.</p></div><div class="account-grid">${accountTile('avery-local','AM','Avery Morgan','avery@studio.local','local','Ready','local-login')}${accountTile('maya-cloud','MC','Maya Chen','maya@studio.cloud','cloud','Ready','cloud-login')}${accountTile('jordan-local','JL','Jordan Lee','jordan@studio.local','local','Sign in','local-login')}${accountTile('client-cloud','CR','Client Review','review@studio.cloud','cloud','Locked','cloud-login')}</div><div class="chooser-actions"><button class="secondary" data-go="local-login">↪ Use another account</button><button class="ghost" data-go="account-type">♙ Create account</button></div></section>`;
+      return standaloneFrame(body, { context: '▣ This device' });
+    }
+    function accountType() {
+      const body = `<section class="account-type-body"><div class="account-type-copy"><div class="eyebrow">One studio, two ways to work</div><h1>Choose the identity that fits your studio.</h1><p class="lead">Local is complete and device-owned. Cloud adds optional synchronization and hosted agent services when you need them.</p></div><div class="plan-grid"><article class="plan-card"><div class="plan-title"><div><span class="badge">Device-owned</span><h3>Local</h3></div><span>▣</span></div><p class="lead">For focused work that remains fully usable offline.</p><div class="plan-price">Free</div><ul class="plan-benefits"><li>Device-owned projects</li><li>Your provider keys or CLI harness</li><li>No subscription required</li></ul><button class="secondary" data-go="local-create">Create account →</button></article><article class="plan-card featured"><div class="plan-title"><div><span class="badge">Connected</span><h3>Cloud</h3></div><span>☁</span></div><p class="lead">For multi-device synchronization and hosted services.</p><div class="plan-price">Optional cloud services</div><ul class="plan-benefits"><li>Sync authorized projects across devices</li><li>Hosted storage and agent services</li><li>Local project authority remains available</li></ul><button class="primary" data-go="cloud-onboarding">Create account →</button></article></div></section>`;
+      return standaloneFrame(body, { field: 'grid', context: 'Choose account type', back: 'accounts', backLabel: 'Accounts', footerLeft: 'No billing during onboarding', footerRight: 'Cloud remains optional per project' });
+    }
+    function authScreen(kind, create = false) {
+      const cloud = kind === 'cloud';
+      const title = create ? 'Create your local account.' : cloud ? 'Sign in to Studio Cloud.' : 'Sign in to Studio Designer.';
+      const description = create ? 'This identity stays on this device and owns its local Studio projects.' : cloud ? 'Use a cloud identity to access synchronized projects and hosted agent services.' : 'Use a local identity already registered on this device to continue.';
+      const fields = `${create ? '<div class="profile-block"><div class="account-avatar">SD</div><div><strong>Your identity</strong><div class="small">Add profile media later from account settings.</div></div></div><div class="field"><label>Display name</label><input class="input" placeholder="Avery Morgan" /></div>' : ''}<div class="field"><label>Email</label><input class="input" type="email" value="${create ? '' : cloud ? 'avery@studio.cloud' : 'avery@studio.local'}" placeholder="you@example.com" /></div><div class="field"><label>Password</label><input class="input" type="password" value="prototype-password" placeholder="Enter your password" /></div>`;
+      const body = `<section class="auth-direct"><div class="auth-copy"><div class="eyebrow">${create ? 'Create local account' : 'Use another account'}</div><h1>${title}</h1><p class="lead">${description}</p><div class="auth-boundary">${cloud ? 'Cloud credentials remain inside the hosted identity boundary.' : 'Passwords never enter the renderer. Local session access is revocable.'}</div></div><form class="plain-form" data-auth-form>${fields}<label class="check"><input type="checkbox" ${state.remembered ? 'checked' : ''} data-remember /> Keep me signed in on this device</label><div class="form-actions"><button class="secondary" type="button" data-go="${create ? 'account-type' : 'accounts'}">Cancel</button><button class="primary" type="submit">${create ? 'Create account →' : 'Continue →'}</button></div></form></section>`;
+      return standaloneFrame(body, { field: 'dot', context: cloud ? 'Cloud identity' : 'Local identity', back: create ? 'account-type' : 'accounts', backLabel: create ? 'Account type' : 'Accounts', footerLeft: create ? 'Local · Free' : 'Studio Designer', footerRight: cloud ? 'Hosted identity boundary' : 'Passwords never enter the renderer' });
+    }
+    function cloudOnboarding() {
+      const steps = ['Account','Verify','Workspace','Complete'];
+      const copy = [
+        ['Create your Cloud Identity','Register your profile with the Studio Cloud test identity service.','Create account'],
+        ['Check your email','Follow the verification link, then return here to confirm.','I verified it'],
+        ['Name your personal workspace','This is the cloud home for synchronized projects owned by this identity.','Create workspace'],
+        ['Cloud Identity ready','Your account is verified and this device can cache authorized projects.','Open projects']
+      ][state.cloudStep];
+      const stageBody = state.cloudStep === 0 ? '<div><h2>Create your cloud account.</h2><p class="lead">Register an identity with the Studio Cloud test boundary.</p></div><div class="field"><label>Display name</label><input class="input" value="Avery Morgan"></div><div class="field"><label>Email</label><input class="input" value="avery@studio.cloud"></div><div class="field"><label>Password</label><input class="input" type="password" value="prototype-password"></div>' : state.cloudStep === 1 ? '<div style="text-align:center;padding:20px 0"><div style="font-size:34px">✉</div><h2 style="margin-top:16px">Check your email.</h2><p class="lead">Verification was sent to <span style="color:var(--text)">avery@studio.cloud</span>. Follow the link, then return here.</p></div><button class="secondary">Resend verification</button>' : state.cloudStep === 2 ? '<div><h2>Name your workspace.</h2><p class="lead">This workspace belongs to your cloud identity.</p></div><div class="field"><label>Workspace name</label><input class="input" value="Avery Studio"></div><div class="card" style="padding:13px"><span class="small">workspace/avery-studio</span></div>' : '<div><span class="badge">✓ Verified</span><h2 style="margin-top:18px">Cloud account ready.</h2><p class="lead">Your identity can authorize synchronized projects. Cloud authority remains optional per project.</p></div>';
+      const body = `<section class="cloud-flow"><div class="cloud-copy"><div class="eyebrow">Hosted studio preview</div><h1>Bring your studio with you.</h1><p class="lead">Cloud adds multi-device synchronization, hosted storage, and hosted agent services.</p><div class="cloud-steps">${steps.map((step,i)=>`<span class="${i < state.cloudStep ? 'done' : i === state.cloudStep ? 'active' : ''}">0${i + 1}　${step}</span>`).join('')}</div></div><div class="cloud-stage">${stageBody}<button class="primary" data-cloud-next>${copy[2]} →</button>${state.cloudStep ? '<button class="ghost" data-cloud-back>Back</button>' : ''}</div></section>`;
+      return standaloneFrame(body, { field: 'grid', context: '☁ Cloud account', cloudBack: true, backLabel: 'Back', footerLeft: 'Cloud · Optional services', footerRight: state.cloudStep === 3 ? 'Hosted identity created' : 'Hosted setup' });
+    }
+    function filteredProjects() {
+      const query = state.search.trim().toLowerCase();
+      return projects.filter(project => !query || project.name.toLowerCase().includes(query) || project.kind.toLowerCase().includes(query) || project.status.toLowerCase().includes(query));
+    }
+    function previewMini() { return `<div class="mini-layout"><div></div><div></div></div>`; }
+    function dashboardBody() {
+      const items = filteredProjects();
+      if (!items.length) return `<div class="empty"><div style="text-align:center"><b>No matching projects</b><p class="small">Try another search or create a new project.</p><button class="primary">Create project</button></div></div>`;
+      if (state.dashboardMode === 'index') return `<table class="project-table"><thead><tr><th>Project</th><th>Authority</th><th>State</th><th>Screens</th><th>Updated</th><th></th></tr></thead><tbody>${items.map(project=>`<tr><td><b>${project.name}</b></td><td>${project.kind}</td><td><span class="badge ${project.status === 'Synced' ? 'green' : project.status === 'Conflict' ? 'amber' : ''}">${project.status}</span></td><td>${project.screens}</td><td class="small">${project.updated}</td><td><button class="ghost" data-open-project>Open →</button></td></tr>`).join('')}</tbody></table>`;
+      if (state.dashboardMode === 'activity') return `<div class="activity-layout"><div class="card recent-list"><div class="eyebrow">Projects</div>${items.map(project=>`<div class="activity-row"><span class="activity-icon">◇</span><span><b>${project.name}</b><span class="small" style="display:block">${project.kind} · ${project.status}</span></span><button class="ghost" data-open-project>Open</button></div>`).join('')}</div><div class="card activity-list"><div class="eyebrow">Recent safe activity</div><div class="activity-row"><span class="activity-icon">AI</span><span><b>Agent updated promotional treatment</b><span class="small" style="display:block">Studio Market · 3 operations · undoable</span></span><span class="small">12m</span></div><div class="activity-row"><span class="activity-icon">↻</span><span><b>Cloud synchronization completed</b><span class="small" style="display:block">Northstar Operations · revision 184</span></span><span class="small">1h</span></div><div class="activity-row"><span class="activity-icon">!</span><span><b>Structural conflict needs review</b><span class="small" style="display:block">Monument Kiosk · 2 retained intents</span></span><span class="small">3d</span></div><div class="activity-row"><span class="activity-icon">✓</span><span><b>Recovery validation passed</b><span class="small" style="display:block">Field Notes · logical snapshot restored</span></span><span class="small">6d</span></div></div></div>`;
+      return `<div class="project-grid">${items.map(project=>`<button class="card project-card" data-open-project><div class="project-preview">${previewMini()}</div><div class="project-info"><div class="row"><h3>${project.name}</h3><div class="spacer"></div><span class="badge ${project.status === 'Synced' ? 'green' : project.status === 'Conflict' ? 'amber' : ''}">${project.status}</span></div><div class="small">${project.kind} · updated ${project.updated}</div><div class="project-stats"><span>${project.screens} screens</span><span>${project.nodes} nodes</span><span>8 profiles</span></div></div></button>`).join('')}</div>`;
+    }
+    function dashboard() {
+      return `<section><div class="dash-head"><div class="dash-title"><div class="eyebrow">Avery's studio</div><h1>Projects</h1><p class="small">Find, create, import, organize, and recover Studio projects.</p></div></div><div class="dash-tools"><input class="input" data-search value="${state.search}" placeholder="Search projects, authority, or state…"><select class="select"><option>All projects</option><option>Local</option><option>Cloud</option><option>Conflicts</option><option>Archived</option></select><div class="mode-switch"><button class="mode-btn ${state.dashboardMode === 'grid' ? 'active' : ''}" data-mode="grid">▦ Grid</button><button class="mode-btn ${state.dashboardMode === 'index' ? 'active' : ''}" data-mode="index">☷ Index</button><button class="mode-btn ${state.dashboardMode === 'activity' ? 'active' : ''}" data-mode="activity">↯ Activity</button></div></div>${dashboardBody()}</section>`;
+    }
+    function editorTree() {
+      return `<div class="editor-node"><span class="kind">▾</span><b>Catalog</b></div><div class="editor-node indent-1"><span class="kind">▾</span>Scaffold</div><div class="editor-node indent-2"><span class="kind">▾</span>Stack</div><div class="editor-node indent-3"><span class="kind">▧</span>Image</div><button class="editor-node indent-3 ${state.editorSelected === 'sale-badge' ? 'selected' : ''}" data-editor-select="sale-badge"><span class="kind">●</span>Badge · SALE</button><div class="editor-node indent-2"><span class="kind">▾</span>Grid · products</div><button class="editor-node indent-3 ${state.editorSelected === 'product-card' ? 'selected' : ''}" data-editor-select="product-card"><span class="kind">◇</span>Card · Product</button><div class="editor-node indent-3"><span class="kind">T</span>Text · Name</div><div class="editor-node indent-3"><span class="kind">＋</span>Button · Add</div>`;
+    }
+    function editorFrame() {
+      const spec = profileSpecs[state.editorProfile] || profileSpecs.desktop;
+      const portrait = state.editorOrientation === 'portrait';
+      const width = portrait ? Math.min(spec.width, spec.height) : Math.max(spec.width, spec.height);
+      const height = portrait ? Math.max(spec.width, spec.height) : Math.min(spec.width, spec.height);
+      return `<div class="editor-device-wrap ${state.editorProfile} orientation-${state.editorOrientation}" style="--device-aspect:${width} / ${height}"><div class="editor-frame-label"><span>${spec.name} · ${width}×${height}</span><span class="badge">${state.editorZoom}%</span></div><div class="editor-device-frame"><div class="pos-shell"><aside class="pos-nav"><div class="pos-mini-logo">S</div><div class="pos-nav-item active">⌂</div><div class="pos-nav-item">▦</div><div class="pos-nav-item">◎</div><div class="pos-nav-item">⚙</div></aside><main class="pos-main"><div class="pos-head"><div><div style="font-size:7px;color:#85827a">Studio Market</div><h2>Popular dishes</h2></div><div class="pos-search">⌕ Search menu</div></div><div class="food-grid"><button class="food-card" data-editor-select="sale-badge" data-canvas-context="sale-badge" data-context-label="Sale badge" data-context-kind="component" data-context-detail="Badge · Catalog / Product card / Image overlay"><div class="food-image"></div><span class="sale-chip">SALE</span><div class="food-name">Wagyu bowl</div><div class="food-meta"><span>Main course</span><b>$18.00</b></div>${state.editorSelected === 'sale-badge' ? '<div class="selection-outline"><span class="selection-label">Badge · sale-badge</span></div>' : ''}</button><button class="food-card" data-editor-select="product-card" data-canvas-context="product-card" data-context-label="Product card" data-context-kind="component" data-context-detail="Card · Catalog / Product grid"><div class="food-image"></div><div class="food-name">Chicken ramen</div><div class="food-meta"><span>Noodles</span><b>$14.50</b></div>${state.editorSelected === 'product-card' ? '<div class="selection-outline"><span class="selection-label">Card · product-card</span></div>' : ''}</button><div class="food-card" data-canvas-context="veggie-card" data-context-label="Veggie salad card" data-context-kind="node" data-context-detail="Card · Catalog / Product grid"><div class="food-image"></div><div class="food-name">Veggie salad</div><div class="food-meta"><span>Fresh</span><b>$11.00</b></div></div></div></main></div></div></div>`;
+    }
+    function editorInspector() {
+      const badge = state.editorSelected === 'sale-badge';
+      return `<div class="editor-inspector-section"><div class="editor-inspector-head"><div><div class="eyebrow">Selected</div><b style="font-size:11px">${badge ? 'Badge · sale-badge' : 'Card · product-card'}</b></div><span class="badge green">Runtime valid</span></div><div class="editor-field-grid"><span class="editor-field-label">Kind</span><div class="editor-field">${badge ? 'Badge' : 'Card'}</div><span class="editor-field-label">ID</span><div class="editor-field">${state.editorSelected}</div></div></div><div class="editor-inspector-section"><div class="editor-inspector-head"><b style="font-size:10px">Layout</b><span class="small">${badge ? 'Stack child' : 'Grid child'}</span></div><div class="editor-field-grid">${badge ? '<span class="editor-field-label">Position</span><div class="editor-field">Overlay</div><span class="editor-field-label">Anchor</span><div class="editor-field">Top · Right</div><span class="editor-field-label">Offset</span><div class="editor-field">8 × 8</div>' : '<span class="editor-field-label">Direction</span><div class="editor-field">Vertical</div><span class="editor-field-label">Gap</span><div class="editor-field">space.2</div><span class="editor-field-label">Padding</span><div class="editor-field">space.3</div>'}</div></div><div class="editor-inspector-section"><div class="editor-inspector-head"><b style="font-size:10px">Appearance</b><span class="small">3 tokens</span></div><div class="editor-field-grid">${badge ? '<span class="editor-field-label">Fill</span><div class="editor-field"><span class="editor-token"></span>sale.surface</div><span class="editor-field-label">Text</span><div class="editor-field">SALE</div><span class="editor-field-label">Radius</span><div class="editor-field">radius.full</div>' : '<span class="editor-field-label">Fill</span><div class="editor-field">surface.card</div><span class="editor-field-label">Border</span><div class="editor-field">border.subtle</div><span class="editor-field-label">Radius</span><div class="editor-field">radius.lg</div>'}</div></div><div class="editor-inspector-section"><div class="editor-inspector-head"><b style="font-size:10px">Responsive</b><span class="badge">8 profiles</span></div><div class="small">${badge ? 'Base properties apply everywhere. Foldable overrides the offset to 6 × 6.' : 'The card fills its grid track. Phone switches the parent grid to one column.'}</div></div>`;
+    }
+    function editorAgent() {
+      const model = currentAgentModel();
+      return `<div class="editor-agent"><div class="editor-agent-head"><div><div class="eyebrow">Studio Agent · ${model.provider} · live edit</div><b style="display:block;margin-top:4px;font-size:10px">“Make the sale badge clearer across all profiles.”</b></div><div class="editor-agent-controls">${agentModelTrigger()}<button class="secondary" data-agent>${state.agent === 'applying' ? 'Cancel run' : 'Run again'}</button></div></div><div class="editor-agent-ops"><span class="editor-op">✓ Move into Stack overlay</span><span class="editor-op">✓ Bind sale.surface</span><span class="editor-op">○ Validate 8 profiles</span></div><div class="editor-progress"></div></div>`;
+    }
+    function editorHistory() {
+      return `<div class="editor-history"><div class="eyebrow">Undo group · agent-run-92</div><div class="editor-history-row"><span class="editor-history-dot"></span><span><b>Agent run</b> · 3 operations</span><span>now</span></div><div class="editor-history-row"><span class="editor-history-dot" style="opacity:.45"></span><span>Changed product grid gap</span><span>2m</span></div><div class="editor-history-row"><span class="editor-history-dot" style="opacity:.45"></span><span>Bound catalog.products</span><span>8m</span></div></div>`;
+    }
+    function editorChat() {
+      const placementButton = (value, label, icon) => `<button class="${state.agentPlacement === value ? 'active' : ''}" data-agent-placement="${value}" aria-label="${label}" title="${label}">${icon}</button>`;
+      const model = currentAgentModel();
+      return `<aside class="editor-agent-chat" aria-label="Studio Agent conversation"><header class="agent-chat-head"><div class="agent-chat-title"><strong>Studio Agent</strong><span>${model.provider} · live editing</span></div><div class="agent-placement" aria-label="Agent panel placement">${placementButton('float','Float agent chat','↗')}${placementButton('left','Dock agent chat left','L')}${placementButton('right','Dock agent chat right','R')}</div></header><div class="agent-chat-body"><div class="agent-message user">Make the sale badge clearer across all profiles.</div><div class="agent-message assistant"><div class="agent-message-meta">${model.label} · applying 3 operations</div>I moved <button class="agent-reference" data-editor-select="sale-badge">● Badge · sale-badge</button> into the image Stack overlay and bound <button class="agent-reference">◈ sale.surface</button>. Desktop is valid; foldable validation is running.<div class="agent-references"><button class="agent-reference">▣ Catalog</button><button class="agent-reference">◇ 8 responsive profiles</button><button class="agent-reference">↶ Undo group · agent-run-92</button></div><div class="editor-progress"></div></div></div><form class="agent-chat-composer" data-agent-form>${agentContextStrip()}<input type="text" aria-label="Message Studio Agent" placeholder="${state.voiceActive ? 'Listening…' : 'Ask Studio Agent…'}" /><input class="agent-file-input" type="file" multiple data-file-input aria-label="Upload context files"><div class="agent-composer-toolbar">${agentAttachmentTrigger()}${agentCanvasPickerTrigger()}<span class="agent-composer-spacer"></span><span class="agent-composer-divider" aria-hidden="true"></span>${agentModelTrigger()}<button type="button" class="agent-icon-button agent-voice-button ${state.voiceActive ? 'active' : ''}" data-agent-voice aria-label="${state.voiceActive ? 'Stop voice input' : 'Start voice input'}" aria-pressed="${state.voiceActive}" title="${state.voiceActive ? 'Stop voice input' : 'Start voice input'}">${microphoneIcon()}</button><button type="submit" class="agent-send-button" aria-label="Send message">↑</button></div></form></aside>`;
+    }
+    function focusEditor() {
+      return `<section class="editor-workspace editor-focus editor-dots agent-${state.agentPlacement} ${state.canvasContextPicking ? 'canvas-context-picking' : ''}">${state.canvasContextPicking ? '<div class="canvas-context-hint" role="status">Select an item on the canvas · Esc to cancel</div>' : ''}<div class="editor-command"><b>⌘</b><span>Search commands, primitives, assets, content, or ask Studio Agent…</span><span class="badge">⌘K</span></div><nav class="editor-focus-rail" aria-label="Editor tools"><button class="editor-tool active" aria-label="Select">↖</button><button class="editor-tool" aria-label="Insert">＋</button><button class="editor-tool" aria-label="Text">T</button><button class="editor-tool" aria-label="Media">▧</button><button class="editor-tool" aria-label="Components">◇</button><div style="height:1px;background:var(--line)"></div><button class="editor-tool" aria-label="Screens and hierarchy">☷</button><button class="editor-tool" aria-label="Studio Library">▦</button><button class="editor-tool" aria-label="Interactions">↯</button><button class="editor-tool" aria-label="Studio Agent">AI</button><div class="spacer"></div><button class="editor-tool" data-go="settings" aria-label="Designer settings">⚙</button></nav><main class="editor-stage">${editorFrame()}</main><aside class="editor-focus-inspector"><div class="editor-section-title"><span>${state.editorSelected}</span><span class="badge green">Valid</span></div><div class="editor-tabs"><button class="editor-tab active">Style</button><button class="editor-tab">Bind</button><button class="editor-tab">Event</button></div>${editorInspector()}</aside>${editorChat()}${agentModelPopover()}${assetPickerPopover()}</section>`;
+    }
+    function workbenchEditor() {
+      return `<section class="editor-workspace editor-workbench"><nav class="workbench-rail" aria-label="Workbench tools"><button class="editor-tool active">⌘</button><button class="editor-tool">◇</button><button class="editor-tool">▦</button><button class="editor-tool">↯</button><button class="editor-tool">AI</button><div class="spacer"></div><button class="editor-tool" data-go="settings">⚙</button></nav><aside class="workbench-explorer"><div class="editor-section-title"><span>Project</span><button class="editor-tool">＋</button></div><div class="workbench-tree"><div class="eyebrow" style="padding:7px">Screens</div><div class="editor-node"><span class="kind">▣</span>Catalog</div><div class="editor-node"><span class="kind">□</span>Product detail</div><div class="editor-node"><span class="kind">□</span>Cart</div><div class="editor-node"><span class="kind">□</span>Checkout</div><div class="eyebrow" style="padding:12px 7px 5px">Layers</div>${editorTree()}</div><div class="workbench-library"><div class="editor-section-title"><span>Studio Library</span><span class="badge">12 assets</span></div><div class="editor-assets"><div class="editor-asset"><span>wagyu.webp</span></div><div class="editor-asset"><span>ramen.webp</span></div><div class="editor-asset"><span>salad.webp</span></div></div></div></aside><main class="workbench-stage"><div class="editor-stage-toolbar"><div class="editor-toolbar-group"><button class="editor-tool">↖</button><button class="editor-tool">□</button><button class="editor-tool">T</button><button class="editor-tool">◎</button><span class="small">Catalog / ${state.editorSelected}</span></div><div class="editor-toolbar-group"><button class="editor-tool" data-editor-zoom="-10">−</button><span class="small">${state.editorZoom}%</span><button class="editor-tool" data-editor-zoom="10">＋</button><button class="editor-tool">⌗</button></div></div><div class="workbench-canvas editor-dots">${editorFrame()}</div><div class="workbench-activity"><div><div class="editor-tabs"><button class="editor-tab active">Agent activity</button><button class="editor-tab">Diagnostics <span class="badge">2</span></button><button class="editor-tab">Interactions</button></div>${editorAgent()}</div>${editorHistory()}</div></main><aside class="workbench-inspector"><div class="editor-tabs"><button class="editor-tab active">Inspect</button><button class="editor-tab">Bind</button><button class="editor-tab">Events</button></div>${editorInspector()}</aside><footer class="workbench-status"><span>Runtime protocol v1 · 0 errors · 2 warnings</span><span>Agent applying 3 operations · Esc to cancel</span><span>Surreal local · sync cursor 184</span></footer>${agentModelPopover()}</section>`;
+    }
+    function editor() {
+      return state.editorView === 'workbench' ? workbenchEditor() : focusEditor();
+    }
+    function settings() {
+      return `<section><div class="auth-head"><div class="eyebrow">Application shell</div><h1 class="headline" style="margin-top:9px">Settings & providers</h1><p class="lead">Identity-owned credentials and application preferences stay outside Studio Projects.</p></div><div class="settings-layout"><nav class="card settings-nav" aria-label="Settings sections"><button class="rail-btn active"><span class="rail-icon">◎</span><span>Account</span></button><button class="rail-btn"><span class="rail-icon">AI</span><span>AI Models</span></button><button class="rail-btn"><span class="rail-icon">◇</span><span>Designer</span></button><button class="rail-btn"><span class="rail-icon">↯</span><span>Notifications</span></button><button class="rail-btn"><span class="rail-icon">▦</span><span>Updates</span></button><button class="rail-btn"><span class="rail-icon">?</span><span>Help & About</span></button></nav><div class="card settings-panel"><div class="setting-row"><div class="avatar">AM</div><div class="setting-copy"><b>Avery Morgan</b><span class="small">Local Identity · avery@studio.local</span></div><button class="secondary">Edit profile</button></div><div class="setting-row"><div class="setting-copy"><b>OpenAI provider</b><span class="small">Personal key · configured on this device · secret hidden</span></div><span class="badge green">Connected</span><button class="secondary">Revoke</button></div><div class="setting-row"><div class="setting-copy"><b>OpenRouter provider</b><span class="small">No credential configured</span></div><button class="primary">Connect</button></div><div class="setting-row"><div class="setting-copy"><b>Reduced motion</b><span class="small">Use equivalent transitions without movement.</span></div><button class="toggle" aria-label="Reduced motion enabled"></button></div><div class="setting-row"><div class="setting-copy"><b>Resume last project</b><span class="small">After authentication, reopen the last valid project.</span></div><button class="toggle" aria-label="Resume last project enabled"></button></div></div></div></section>`;
+    }
+    function recovery() {
+      return `<section><div class="auth-head"><div class="eyebrow">Safety center</div><h1 class="headline" style="margin-top:9px">Conflict & recovery</h1><p class="lead">Problems remain visible before the editor opens, with both intents and every recoverable source preserved.</p></div><div class="recovery-grid"><article class="card recovery-card"><span class="badge amber">Sync conflict</span><h3>Monument Kiosk</h3><p class="small">A local Stack move and cloud deletion overlap at server revision 92. Both intents are retained.</p><div class="row" style="margin-top:18px"><button class="primary">Review conflict</button><button class="secondary">Keep offline</button></div></article><article class="card recovery-card"><span class="badge green">Recovery ready</span><h3>Field Notes</h3><p class="small">Logical snapshot restored and 18 journal operations replayed successfully.</p><div class="row" style="margin-top:18px"><button class="primary" data-open-project>Open project</button><button class="secondary">View evidence</button></div></article><article class="card recovery-card"><span class="badge">Migration</span><h3>Studio Design schema 3</h3><p class="small">Pre-migration recovery point created. Validation can run without changing the only source copy.</p><button class="secondary" style="margin-top:18px">Review migration</button></article><article class="card recovery-card"><span class="badge">Offline</span><h3>Northstar Operations</h3><p class="small">Cloud unavailable. Seven cached projects and local editing remain available.</p><button class="secondary" style="margin-top:18px">Open cached project</button></article></div></section>`;
+    }
+    function content() {
+      if (state.screen === 'welcome') return welcome();
+      if (state.screen === 'accounts') return accounts();
+      if (state.screen === 'account-type') return accountType();
+      if (state.screen === 'local-create') return authScreen('local', true);
+      if (state.screen === 'local-login') return authScreen('local');
+      if (state.screen === 'cloud-login') return authScreen('cloud');
+      if (state.screen === 'cloud-onboarding') return cloudOnboarding();
+      if (state.screen === 'dashboard') return dashboard();
+      if (state.screen === 'editor') return editor();
+      if (state.screen === 'settings') return settings();
+      return recovery();
+    }
+    function prototypeTools() {
+      return `<div class="prototype-tools"><label for="screen-jump">Prototype journey</label><select id="screen-jump" data-screen-jump>${screens.map(([id,label])=>`<option value="${id}" ${state.screen === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>`;
+    }
+    function welcomeSwitcher(variant) {
+      return `<div class="prototype-switcher"><button data-cycle="-1" aria-label="Previous welcome direction">←</button><div class="variant-label">Welcome ${variant.key} · ${variant.name}</div><button data-cycle="1" aria-label="Next welcome direction">→</button></div>`;
+    }
+    function statePeek() {
+      return `<details class="state-peek"><summary>Prototype state</summary><pre>${JSON.stringify(state, null, 2)}</pre></details>`;
+    }
+    function render() {
+      const welcomeVariant = currentWelcomeVariant();
+      const page = content();
+      const standalone = ['welcome','accounts','account-type','local-create','local-login','cloud-login','cloud-onboarding'].includes(state.screen);
+      const renderedPage = standalone ? `<div class="app standalone-app">${standaloneTitlebar()}<div class="standalone-window-content">${page}</div></div>` : shellA(page);
+      const variantControl = state.screen === 'welcome' ? welcomeSwitcher(welcomeVariant) : '';
+      document.getElementById('app').innerHTML = renderedPage + prototypeTools() + variantControl + statePeek();
+      document.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', event => { const identity = event.currentTarget.dataset.identity; if (identity) state.selectedIdentity = identity; go(event.currentTarget.dataset.go); }));
+      document.querySelector('[data-back]')?.addEventListener('click', goBack);
+      document.querySelectorAll('[data-mode]').forEach(el => el.addEventListener('click', event => { state.dashboardMode = event.currentTarget.dataset.mode; setUrl({ mode: state.dashboardMode }); render(); }));
+      document.querySelectorAll('[data-editor-mode]').forEach(el => el.addEventListener('click', event => { state.editorMode = event.currentTarget.dataset.editorMode; setUrl({ editorMode: state.editorMode }); render(); }));
+      document.querySelectorAll('[data-editor-view]').forEach(el => el.addEventListener('click', event => { state.editorView = event.currentTarget.dataset.editorView; state.modelMenuOpen = false; state.assetMenuOpen = false; state.canvasContextPicking = false; setUrl({ editorView: state.editorView }); render(); }));
+      document.querySelectorAll('[data-editor-profile]').forEach(el => el.addEventListener('change', event => { state.editorProfile = event.currentTarget.value; state.editorOrientation = naturalOrientation(state.editorProfile); setUrl({ profile: state.editorProfile, orientation: state.editorOrientation }); render(); }));
+      document.querySelectorAll('[data-editor-orientation]').forEach(el => el.addEventListener('click', event => { state.editorOrientation = event.currentTarget.dataset.editorOrientation; setUrl({ orientation: state.editorOrientation }); render(); }));
+      document.querySelectorAll('[data-agent-placement]').forEach(el => el.addEventListener('click', event => { state.agentPlacement = event.currentTarget.dataset.agentPlacement; state.moreOpen = false; state.modelMenuOpen = false; state.assetMenuOpen = false; state.canvasContextPicking = false; setUrl({ agentPanel: state.agentPlacement }); render(); }));
+      document.querySelectorAll('[data-model-menu]').forEach(el => el.addEventListener('click', () => { state.modelMenuOpen = !state.modelMenuOpen; state.assetMenuOpen = false; state.canvasContextPicking = false; state.moreOpen = false; render(); document.querySelector('[data-model-search]')?.focus(); }));
+      document.querySelectorAll('[data-agent-model-option]').forEach(el => el.addEventListener('click', event => { state.agentModel = event.currentTarget.dataset.agentModelOption; state.modelMenuOpen = false; setUrl({ model: state.agentModel }); render(); }));
+      document.querySelectorAll('[data-model-provider]').forEach(el => el.addEventListener('click', event => { state.modelProviderFilter = event.currentTarget.dataset.modelProvider; render(); document.querySelector('[data-model-search]')?.focus(); }));
+      document.querySelectorAll('[data-agent-effort]').forEach(el => el.addEventListener('click', event => { state.agentEffort = event.currentTarget.dataset.agentEffort; setUrl({ effort: state.agentEffort }); render(); document.querySelector('[data-model-search]')?.focus(); }));
+      document.querySelector('[data-model-search]')?.addEventListener('input', event => { state.modelQuery = event.target.value; const position = event.target.selectionStart; render(); const next = document.querySelector('[data-model-search]'); next?.focus(); next?.setSelectionRange(position, position); });
+      document.querySelectorAll('[data-asset-menu]').forEach(el => el.addEventListener('click', () => { state.assetMenuOpen = !state.assetMenuOpen; state.modelMenuOpen = false; state.canvasContextPicking = false; state.moreOpen = false; render(); document.querySelector(state.assetSource === 'upload' ? '[data-open-file-picker]' : '[data-asset-search]')?.focus(); }));
+      document.querySelectorAll('[data-canvas-context-picker]').forEach(el => el.addEventListener('click', () => { state.canvasContextPicking = !state.canvasContextPicking; state.assetMenuOpen = false; state.modelMenuOpen = false; state.moreOpen = false; render(); }));
+      document.querySelectorAll('[data-asset-source]').forEach(el => el.addEventListener('click', event => { state.assetSource = event.currentTarget.dataset.assetSource; state.assetQuery = ''; render(); document.querySelector(state.assetSource === 'upload' ? '[data-open-file-picker]' : state.assetSource === 'url' ? '[data-asset-url]' : '[data-asset-search]')?.focus(); }));
+      document.querySelector('[data-asset-search]')?.addEventListener('input', event => { state.assetQuery = event.target.value; const position = event.target.selectionStart; render(); const next = document.querySelector('[data-asset-search]'); next?.focus(); next?.setSelectionRange(position, position); });
+      document.querySelectorAll('[data-context-asset]').forEach(el => el.addEventListener('click', event => { const asset = contextAssets[event.currentTarget.dataset.contextAsset]; if (asset) attachContextItem(asset); state.assetMenuOpen = false; render(); }));
+      document.querySelectorAll('[data-remove-context]').forEach(el => el.addEventListener('click', event => { state.attachedContext = state.attachedContext.filter(item => item.id !== event.currentTarget.dataset.removeContext); render(); }));
+      document.querySelectorAll('[data-open-file-picker]').forEach(el => el.addEventListener('click', () => document.querySelector('[data-file-input]')?.click()));
+      document.querySelector('[data-file-input]')?.addEventListener('change', event => attachFiles(event.target.files));
+      document.querySelector('[data-asset-url]')?.addEventListener('input', event => { state.assetUrl = event.target.value; });
+      document.querySelector('[data-add-url]')?.addEventListener('click', () => { const url = state.assetUrl.trim(); if (!url) return; attachContextItem({ id: `url-${url}`, label: url.replace(/^https?:\/\//, '').slice(0, 42), type: 'url', source: 'url', sourceLabel: 'URL', detail: 'External reference' }); state.assetUrl = ''; state.assetMenuOpen = false; render(); });
+      document.querySelector('[data-agent-voice]')?.addEventListener('click', () => { state.voiceActive = !state.voiceActive; render(); });
+      document.querySelector('[data-editor-menu]')?.addEventListener('click', () => { state.moreOpen = !state.moreOpen; state.modelMenuOpen = false; state.assetMenuOpen = false; render(); });
+      document.querySelectorAll('[data-editor-action]').forEach(el => el.addEventListener('click', event => { state.lastEditorAction = event.currentTarget.dataset.editorAction; state.moreOpen = false; render(); }));
+      document.querySelectorAll('[data-canvas-context]').forEach(el => el.addEventListener('click', event => {
+        if (!state.canvasContextPicking) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const node = event.currentTarget;
+        attachContextItem({ id: `canvas-${node.dataset.canvasContext}`, label: node.dataset.contextLabel, type: node.dataset.contextKind || 'node', source: 'canvas', sourceLabel: 'Canvas selection', detail: node.dataset.contextDetail || node.dataset.canvasContext });
+        if (node.dataset.editorSelect) state.editorSelected = node.dataset.editorSelect;
+        state.canvasContextPicking = false;
+        render();
+      }));
+      document.querySelectorAll('[data-editor-select]').forEach(el => el.addEventListener('click', event => { state.editorSelected = event.currentTarget.dataset.editorSelect; render(); }));
+      document.querySelectorAll('[data-editor-zoom]').forEach(el => el.addEventListener('click', event => { state.editorZoom = Math.max(25, Math.min(200, state.editorZoom + Number(event.currentTarget.dataset.editorZoom))); render(); }));
+      document.querySelectorAll('[data-agent]').forEach(el => el.addEventListener('click', () => { state.agent = state.agent === 'applying' ? 'cancelled' : 'applying'; render(); }));
+      document.querySelectorAll('[data-window-action]').forEach(el => el.addEventListener('click', event => { state.windowAction = event.currentTarget.dataset.windowAction; render(); }));
+      document.querySelectorAll('[data-cycle]').forEach(el => el.addEventListener('click', event => cycle(Number(event.currentTarget.dataset.cycle))));
+      document.querySelector('[data-screen-jump]')?.addEventListener('change', event => go(event.target.value));
+      document.querySelector('[data-search]')?.addEventListener('input', event => { state.search = event.target.value; const position = event.target.selectionStart; render(); const next = document.querySelector('[data-search]'); next?.focus(); next?.setSelectionRange(position, position); });
+      document.querySelector('[data-remember]')?.addEventListener('change', event => { state.remembered = event.target.checked; });
+      document.querySelector('[data-auth-form]')?.addEventListener('submit', event => { event.preventDefault(); go('dashboard'); });
+      document.querySelector('[data-agent-form]')?.addEventListener('submit', event => event.preventDefault());
+      document.querySelectorAll('.agent-chat-composer, [data-asset-dropzone]').forEach(target => {
+        target.addEventListener('dragenter', event => { event.preventDefault(); event.stopPropagation(); target.classList.add('drag-active'); });
+        target.addEventListener('dragover', event => { event.preventDefault(); event.stopPropagation(); target.classList.add('drag-active'); });
+        target.addEventListener('dragleave', event => { event.preventDefault(); event.stopPropagation(); if (!target.contains(event.relatedTarget)) target.classList.remove('drag-active'); });
+        target.addEventListener('drop', event => { event.preventDefault(); event.stopPropagation(); target.classList.remove('drag-active'); if (event.dataTransfer?.files?.length) attachFiles(event.dataTransfer.files); });
+      });
+      document.querySelector('[data-cloud-next]')?.addEventListener('click', () => { if (state.cloudStep < 3) { state.cloudStep += 1; render(); } else go('dashboard'); });
+      document.querySelector('[data-cloud-back]')?.addEventListener('click', () => { if (state.cloudStep > 0) { state.cloudStep -= 1; render(); } else go('account-type'); });
+      document.querySelectorAll('[data-open-project]').forEach(el => el.addEventListener('click', () => go('editor')));
+    }
+    function cycle(delta) {
+      if (state.screen !== 'welcome') return;
+      const current = welcomeVariants.findIndex(item => item.key === currentWelcomeVariant().key);
+      const next = welcomeVariants[(current + delta + welcomeVariants.length) % welcomeVariants.length];
+      setUrl({ variant: next.key }); render();
+    }
+    addEventListener('keydown', event => {
+      const active = document.activeElement;
+      if (event.key === 'Escape' && (state.modelMenuOpen || state.assetMenuOpen || state.canvasContextPicking)) { state.modelMenuOpen = false; state.assetMenuOpen = false; state.canvasContextPicking = false; render(); return; }
+      if (active && (['INPUT','TEXTAREA','SELECT'].includes(active.tagName) || active.isContentEditable)) return;
+      if (event.key === 'ArrowLeft') cycle(-1);
+      if (event.key === 'ArrowRight') cycle(1);
+    });
+    addEventListener('popstate', () => {
+      const params = new URLSearchParams(location.search);
+      state.screen = params.get('screen') || 'welcome';
+      state.dashboardMode = params.get('mode') || 'grid';
+      state.editorView = params.get('editorView') || 'focus';
+      state.editorMode = params.get('editorMode') || 'design';
+      state.editorProfile = params.get('profile') || 'desktop';
+      state.editorOrientation = params.get('orientation') || naturalOrientation(state.editorProfile);
+      state.agentPlacement = params.get('agentPanel') || 'float';
+      state.agentModel = params.get('model') || 'gpt-5.6';
+      state.agentEffort = params.get('effort') || 'high';
+      state.modelMenuOpen = false;
+      state.assetMenuOpen = false;
+      render();
+    });
+    render();
+  </script>
+</body>
+</html>
