@@ -59,12 +59,57 @@
 //! [`ParseOptions`] can be tightened by callers processing hostile or
 //! user-supplied fixtures.
 //!
-//! # Typed IR
+//! # Typed IR and lowering
 //!
-//! The typed Studio intermediate representation ([`ir`]) lives behind this
-//! boundary; it never leaks into caller-facing parser types.
+//! Behind the same boundary live the typed Studio IR ([`ir`]) and the
+//! lowering from the parser semantic model into that IR ([`lower`]).
+//! Compiler internals stay here and never leak into caller-facing types:
+//! [`compile`] is the one-call projection from source to lowered module.
 
 pub mod ir;
+pub mod lower;
+
+use lower::LowerError;
+
+/// Parse a Studio Script source and lower it into the typed IR in one step.
+///
+/// This is the projection seam both Designer-authored projects and
+/// hand-authored scripts travel through; callers receive only stable IR types
+/// and source-linked diagnostics, never parser or backend internals beyond
+/// this crate's public model.
+///
+/// # Errors
+///
+/// Returns [`CompileError::Parse`] for rejected sources and
+/// [`CompileError::Lower`] for valid sources whose constructs fall outside the
+/// supported subset.
+pub fn compile(source: &str) -> Result<ir::StudioIrModule, CompileError> {
+    let document = parse(source)?;
+    let module = lower::lower_document(&document, source)?;
+    Ok(module)
+}
+
+/// A compile failure: either parser diagnostics or lowering diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CompileError {
+    /// The source was rejected by the parser of record.
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+    /// The source was valid but used constructs outside the supported subset.
+    #[error(transparent)]
+    Lower(#[from] LowerError),
+}
+
+impl CompileError {
+    /// All diagnostics contributed by the failure, in discovery order.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        match self {
+            Self::Parse(error) => &error.diagnostics,
+            Self::Lower(error) => error.diagnostics(),
+        }
+    }
+}
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

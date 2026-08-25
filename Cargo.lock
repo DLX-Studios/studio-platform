@@ -6112,6 +6112,8 @@ dependencies = [
 name = "studio-script"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "studio-protocol",
  "thiserror 2.0.19",
 ]
 
