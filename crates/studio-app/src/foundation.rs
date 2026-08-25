@@ -1,6 +1,6 @@
 //! Native controls used to prove the Wayland-only GPUI foundation.
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, Image, ImageFormat,
@@ -28,7 +28,8 @@ use gpui_component::{
     tag::Tag,
 };
 use studio_actions::{Checkout, Money};
-use studio_components::{InputAction, RuntimeControl};
+use studio_components::{InputAction, PropertyTransition, RuntimeControl};
+use studio_navigation::MotionPreference;
 use studio_protocol::NodeKind;
 
 use crate::{
@@ -50,6 +51,136 @@ const COLOR_TEXT: u32 = 0x0018_2735;
 const COLOR_MUTED: u32 = 0x008b_949e;
 const COLOR_SUCCESS: u32 = 0x00dc_fce7;
 const COLOR_WARNING: u32 = 0x0085_3b00;
+const COLOR_ERROR: u32 = 0x00fe_f2f2;
+
+fn node_opacity(node: &PluginRenderNode) -> f32 {
+    node.props
+        .get("opacity")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0) as f32
+}
+
+fn node_accessibility_label(node: &PluginRenderNode) -> Option<String> {
+    node.props
+        .get("accessibility_label")
+        .and_then(serde_json::Value::as_str)
+        .filter(|label| !label.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransitionCurve {
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+impl TransitionCurve {
+    fn sample(self, delta: f32) -> f32 {
+        match self {
+            Self::Linear => delta,
+            Self::EaseIn => delta * delta,
+            Self::EaseOut => 1.0 - (1.0 - delta).powi(2),
+            Self::EaseInOut if delta < 0.5 => 2.0 * delta * delta,
+            Self::EaseInOut => 1.0 - (-2.0 * delta + 2.0).powi(2) / 2.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NodeTransition {
+    duration: Duration,
+    curve: TransitionCurve,
+}
+
+fn node_transition(node: &PluginRenderNode, reduced_motion: bool) -> Option<NodeTransition> {
+    let transition = node.props.get("transition")?.as_object()?;
+    let duration = Duration::from_millis(transition.get("duration_ms")?.as_u64()?);
+    let preference = if reduced_motion {
+        MotionPreference::Reduced
+    } else {
+        MotionPreference::Standard
+    };
+    let duration = PropertyTransition::resolve(duration, preference).duration();
+    let curve = match transition.get("curve")?.as_str()? {
+        "ease_in" => TransitionCurve::EaseIn,
+        "ease_out" => TransitionCurve::EaseOut,
+        "ease_in_out" => TransitionCurve::EaseInOut,
+        _ => TransitionCurve::Linear,
+    };
+    Some(NodeTransition { duration, curve })
+}
+
+fn semantic_background(value: Option<&str>) -> gpui::Hsla {
+    match value {
+        Some("surface_variant") => rgb(COLOR_SURFACE_VARIANT).into(),
+        Some("success") => rgb(COLOR_SUCCESS).into(),
+        Some("warning") => rgb(COLOR_WARNING).into(),
+        Some("error") => rgb(COLOR_ERROR).into(),
+        Some("transparent") => gpui::transparent_black(),
+        _ => rgb(COLOR_SURFACE).into(),
+    }
+}
+
+fn image_format(path: &str, bytes: &[u8]) -> Option<ImageFormat> {
+    if let Some(extension) = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        let format = match extension.to_ascii_lowercase().as_str() {
+            "png" => ImageFormat::Png,
+            "jpg" | "jpeg" => ImageFormat::Jpeg,
+            "webp" => ImageFormat::Webp,
+            "gif" => ImageFormat::Gif,
+            "svg" => ImageFormat::Svg,
+            "bmp" => ImageFormat::Bmp,
+            "tif" | "tiff" => ImageFormat::Tiff,
+            "ico" => ImageFormat::Ico,
+            "pbm" | "pgm" | "ppm" | "pnm" => ImageFormat::Pnm,
+            _ => return image_format_from_bytes(bytes),
+        };
+        return Some(format);
+    }
+    image_format_from_bytes(bytes)
+}
+
+fn image_format_from_bytes(bytes: &[u8]) -> Option<ImageFormat> {
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(ImageFormat::Png)
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some(ImageFormat::Jpeg)
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(ImageFormat::Gif)
+    } else if bytes.starts_with(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some(ImageFormat::Webp)
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        Some(ImageFormat::Tiff)
+    } else if bytes.starts_with(b"\0\0\x01\0") || bytes.starts_with(b"\0\0\x02\0") {
+        Some(ImageFormat::Ico)
+    } else if is_svg_bytes(bytes) {
+        Some(ImageFormat::Svg)
+    } else if matches!(
+        bytes.get(0..2),
+        Some(b"P1" | b"P2" | b"P3" | b"P4" | b"P5" | b"P6")
+    ) {
+        Some(ImageFormat::Pnm)
+    } else {
+        None
+    }
+}
+
+fn is_svg_bytes(bytes: &[u8]) -> bool {
+    let text = match std::str::from_utf8(&bytes[..bytes.len().min(256)]) {
+        Ok(text) => text.trim_start(),
+        Err(_) => return false,
+    };
+    text.starts_with("<svg") || text.starts_with("<?xml")
+}
 
 /// Native behaviors demonstrated by the foundation gallery.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -489,6 +620,10 @@ impl FoundationGallery {
         {
             return div().id(node.id).hidden().into_any_element();
         }
+        let opacity = node_opacity(&node);
+        let accessibility_label = node_accessibility_label(&node);
+        let transition = node_transition(&node, self.model.reduced_motion());
+        let transition_id = format!("{}:transition", node.id);
         let gap = node
             .props
             .get("gap")
@@ -504,9 +639,19 @@ impl FoundationGallery {
             .into_iter()
             .map(|child| self.plugin_node(child, window, cx))
             .collect::<Vec<_>>();
-        match node.kind {
-            NodeKind::Column => div()
+        let rendered = match node.kind {
+            NodeKind::Column => {
+                let alignment = node
+                    .props
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("stretch");
+                div()
                 .id(node.id)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, label| {
+                    element.aria_label(label)
+                })
                 .w_full()
                 .min_h_0()
                 .flex_grow(flex)
@@ -515,13 +660,27 @@ impl FoundationGallery {
                 })
                 .flex()
                 .flex_col()
+                .when(alignment == "start", gpui::Styled::items_start)
+                .when(alignment == "center", gpui::Styled::items_center)
+                .when(alignment == "end", gpui::Styled::items_end)
+                .when(alignment == "stretch", gpui::Styled::items_stretch)
+                .when(alignment == "space_between", gpui::Styled::justify_between)
                 .gap(px(gap))
                 .children(children)
-                .into_any_element(),
+                .into_any_element()
+            }
             NodeKind::Row => {
                 let is_main_row = node.id == "main-row";
+                let alignment = node
+                    .props
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str);
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .w_full()
                     .when(is_root, gpui::Styled::h_full)
                     .when(is_root, |element| element.min_h_0().flex_grow_1())
@@ -529,30 +688,62 @@ impl FoundationGallery {
                     .when(is_product_meta, gpui::Styled::justify_between)
                     .when(is_summary_row, gpui::Styled::justify_between)
                     .flex()
-                    .when(!is_root && !is_main_row, gpui::Styled::items_center)
+                    .when(
+                        alignment.is_none() && !is_root && !is_main_row,
+                        gpui::Styled::items_center,
+                    )
+                    .when(alignment == Some("start"), gpui::Styled::items_start)
+                    .when(alignment == Some("center"), gpui::Styled::items_center)
+                    .when(alignment == Some("end"), gpui::Styled::items_end)
+                    .when(alignment == Some("stretch"), gpui::Styled::items_stretch)
+                    .when(
+                        alignment == Some("space_between"),
+                        gpui::Styled::justify_between,
+                    )
                     .gap(px(gap))
                     .children(children)
                     .into_any_element()
             }
-            NodeKind::ListView => div()
-                .id(node.id)
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .flex_grow_1()
-                .flex_shrink_1()
-                .gap(px(gap))
-                .overflow_y_scroll()
-                .children(children)
-                .into_any_element(),
-            NodeKind::ScrollView => div()
-                .id(node.id)
-                .w_full()
-                .min_h_0()
-                .flex_grow_1()
-                .overflow_y_scroll()
-                .children(children)
-                .into_any_element(),
+            NodeKind::ListView => {
+                let horizontal = node.props.get("axis").and_then(serde_json::Value::as_str)
+                    == Some("horizontal");
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .flex()
+                    .when(horizontal, gpui::Styled::flex_row)
+                    .when(!horizontal, gpui::Styled::flex_col)
+                    .min_h_0()
+                    .min_w_0()
+                    .flex_grow_1()
+                    .flex_shrink_1()
+                    .gap(px(gap))
+                    .when(horizontal, gpui::Styled::overflow_x_scroll)
+                    .when(!horizontal, gpui::Styled::overflow_y_scroll)
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::ScrollView => {
+                let horizontal = node.props.get("axis").and_then(serde_json::Value::as_str)
+                    == Some("horizontal");
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex_grow_1()
+                    .when(horizontal, gpui::Styled::overflow_x_scroll)
+                    .when(!horizontal, gpui::Styled::overflow_y_scroll)
+                    .children(children)
+                    .into_any_element()
+            }
             NodeKind::Grid => {
                 let columns = node
                     .props
@@ -562,11 +753,44 @@ impl FoundationGallery {
                     .unwrap_or(2);
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .w_full()
                     .min_w_0()
                     .grid()
                     .grid_cols(columns)
                     .gap(px(gap))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Stack => {
+                let alignment = node
+                    .props
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("stretch");
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .relative()
+                    .min_w_0()
+                    .flex()
+                    .when(alignment == "start", |element| {
+                        element.items_start().justify_start()
+                    })
+                    .when(alignment == "center", |element| {
+                        element.items_center().justify_center()
+                    })
+                    .when(alignment == "end", |element| {
+                        element.items_end().justify_end()
+                    })
+                    .when(alignment == "stretch", gpui::Styled::items_stretch)
+                    .when(alignment == "space_between", gpui::Styled::justify_between)
                     .children(children)
                     .into_any_element()
             }
@@ -578,6 +802,10 @@ impl FoundationGallery {
                     .unwrap_or(12.0) as f32;
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .min_w(px(150.0))
                     .min_h(px(238.0))
                     .flex()
@@ -604,11 +832,14 @@ impl FoundationGallery {
                     .get("background")
                     .and_then(serde_json::Value::as_str)
                 {
-                    Some("surface_variant") => rgb(COLOR_SURFACE_VARIANT),
-                    _ => rgb(COLOR_SURFACE),
+                    value => semantic_background(value),
                 };
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .min_w_0()
                     .when(is_order_pane, |element| {
                         element.w(px(390.0)).h_full().flex_shrink_0()
@@ -633,6 +864,65 @@ impl FoundationGallery {
                     .children(children)
                     .into_any_element()
             }
+            NodeKind::Spacer => {
+                let size = node
+                    .props
+                    .get("size")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(8.0) as f32;
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w(px(size))
+                    .h(px(size))
+                    .flex_shrink_0()
+                    .into_any_element()
+            }
+            NodeKind::Divider => {
+                let thickness = node
+                    .props
+                    .get("thickness")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1.0) as f32;
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .h(px(thickness))
+                    .bg(rgb(COLOR_BORDER))
+                    .into_any_element()
+            }
+            NodeKind::Icon => {
+                let name = node
+                    .props
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                div()
+                    .id(node.id)
+                    .role(Role::Image)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .size(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .text_color(rgb(COLOR_MUTED))
+                    .text_xs()
+                    .child(name)
+                    .into_any_element()
+            }
             NodeKind::Tag => {
                 let label = node
                     .props
@@ -644,12 +934,20 @@ impl FoundationGallery {
                     .get("variant")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("default");
-                match variant {
+                let tag = match variant {
                     "success" => Tag::success().child(label.to_owned()).into_any_element(),
                     "warning" => Tag::warning().child(label.to_owned()).into_any_element(),
                     "destructive" => Tag::danger().child(label.to_owned()).into_any_element(),
                     _ => Tag::secondary().child(label.to_owned()).into_any_element(),
-                }
+                };
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(tag)
+                    .into_any_element()
             }
             NodeKind::Badge => {
                 let label = node
@@ -659,7 +957,7 @@ impl FoundationGallery {
                     .unwrap_or_default()
                     .to_owned();
                 // Numeric labels keep count badge semantics, text labels render as pill
-                if let Ok(count) = label.parse::<usize>() {
+                let badge = if let Ok(count) = label.parse::<usize>() {
                     Badge::new().count(count).into_any_element()
                 } else if label.is_empty() {
                     Badge::new().count(0).into_any_element()
@@ -676,11 +974,56 @@ impl FoundationGallery {
                         .text_color(rgb(COLOR_TEXT))
                         .child(label)
                         .into_any_element()
-                }
+                };
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(badge)
+                    .into_any_element()
             }
-            NodeKind::Skeleton => Skeleton::new().into_any_element(),
-            NodeKind::Spinner => Spinner::new().into_any_element(),
-            NodeKind::Separator => Separator::horizontal().into_any_element(),
+            NodeKind::Skeleton => {
+                let width = node
+                    .props
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let height = node
+                    .props
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(
+                        Skeleton::new()
+                            .when_some(width, |element, width| element.w(px(width)))
+                            .when_some(height, |element, height| element.h(px(height))),
+                    )
+                    .into_any_element()
+            }
+            NodeKind::Spinner => div()
+                .id(node.id)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, label| {
+                    element.aria_label(label)
+                })
+                .child(Spinner::new())
+                .into_any_element(),
+            NodeKind::Separator => div()
+                .id(node.id)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, label| {
+                    element.aria_label(label)
+                })
+                .child(Separator::horizontal())
+                .into_any_element(),
             NodeKind::Image => {
                 let path = node
                     .props
@@ -691,12 +1034,28 @@ impl FoundationGallery {
                     .plugin_surface
                     .as_ref()
                     .and_then(|surface| surface.asset(path))
-                    .map(|bytes| Arc::new(Image::from_bytes(ImageFormat::Webp, bytes.to_vec())));
+                    .and_then(|bytes| {
+                        image_format(path, bytes)
+                            .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
+                    });
                 match source {
                     Some(source) => img(source)
                         .id(node.id)
+                        .role(Role::Image)
+                        .opacity(opacity)
+                        .when_some(
+                            accessibility_label.clone().or_else(|| {
+                                node.props
+                                    .get("alt")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(ToOwned::to_owned)
+                            }),
+                            |element, label| element.aria_label(label),
+                        )
                         .w_full()
-                        .when(is_product_image, |element| element.h(px(128.0)))
+                        .when(is_product_image || !is_cart_image, |element| {
+                            element.h(px(128.0))
+                        })
                         .when(is_cart_image, |element| {
                             element.w(px(72.0)).h(px(72.0)).flex_shrink_0()
                         })
@@ -705,6 +1064,17 @@ impl FoundationGallery {
                         .into_any_element(),
                     None => div()
                         .id(node.id)
+                        .role(Role::Image)
+                        .opacity(opacity)
+                        .when_some(
+                            accessibility_label.clone().or_else(|| {
+                                node.props
+                                    .get("alt")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(ToOwned::to_owned)
+                            }),
+                            |element, label| element.aria_label(label),
+                        )
                         .w_full()
                         .h(px(128.0))
                         .rounded_md()
@@ -726,7 +1096,15 @@ impl FoundationGallery {
                     .unwrap_or(0.0);
                 // gpui Rating expects usize 0..5, map f64 0-5 to 0-5
                 let int_value = (value.clamp(0.0, 5.0).round() as usize).min(5);
-                Rating::new(node.id).value(int_value).into_any_element()
+                let rating_id = format!("{}:rating", node.id);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(Rating::new(rating_id).value(int_value))
+                    .into_any_element()
             }
             NodeKind::ProgressIndicator => {
                 let value = node
@@ -734,8 +1112,14 @@ impl FoundationGallery {
                     .get("value")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
-                Progress::new(node.id)
-                    .value(value * 100.0)
+                let progress_id = format!("{}:progress", node.id);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(Progress::new(progress_id).value(value * 100.0))
                     .into_any_element()
             }
             NodeKind::ProgressCircle => {
@@ -744,8 +1128,14 @@ impl FoundationGallery {
                     .get("value")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
-                ProgressCircle::new(node.id)
-                    .value(value * 100.0)
+                let progress_id = format!("{}:progress-circle", node.id);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(ProgressCircle::new(progress_id).value(value * 100.0))
                     .into_any_element()
             }
             NodeKind::Popover => {
@@ -760,9 +1150,99 @@ impl FoundationGallery {
                     .content(|_, _, _| div().p_3().child("Popover content"))
                     .into_any_element()
             }
-            NodeKind::Avatar
-            | NodeKind::Empty
-            | NodeKind::Kbd
+            NodeKind::Avatar => {
+                let fallback = node
+                    .props
+                    .get("fallback")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let asset = node
+                    .props
+                    .get("asset")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let source = self
+                    .plugin_surface
+                    .as_ref()
+                    .and_then(|surface| surface.asset(asset))
+                    .and_then(|bytes| {
+                        image_format(asset, bytes)
+                            .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
+                    });
+                let alt = accessibility_label.clone().or_else(|| {
+                    node.props
+                        .get("alt")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                });
+                let content = match source {
+                    Some(source) => img(source)
+                        .size(px(40.0))
+                        .object_fit(gpui::ObjectFit::Cover)
+                        .rounded_full()
+                        .into_any_element(),
+                    None => div()
+                        .size(px(40.0))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(rgb(COLOR_SURFACE_VARIANT))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(fallback)
+                        .into_any_element(),
+                };
+                div()
+                    .id(node.id)
+                    .role(Role::Image)
+                    .opacity(opacity)
+                    .when_some(alt, |element, label| element.aria_label(label))
+                    .child(content)
+                    .into_any_element()
+            }
+            NodeKind::Empty => {
+                let title = node
+                    .props
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Empty")
+                    .to_owned();
+                let description = node
+                    .props
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER_SUBTLE))
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                    .when(!description.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(COLOR_MUTED))
+                                .child(description),
+                        )
+                    })
+                    .into_any_element()
+            }
+            NodeKind::Kbd
             | NodeKind::Alert
             | NodeKind::Attachment
             | NodeKind::Command
@@ -1034,6 +1514,10 @@ impl FoundationGallery {
                 };
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .min_w_0()
                     .overflow_hidden()
                     .when(role == "caption", |element| {
@@ -1189,6 +1673,24 @@ impl FoundationGallery {
                 ColorPicker::new(&self.component_color_picker).into_any_element()
             }
             _ => div().id(node.id).children(children).into_any_element(),
+        };
+        match transition {
+            Some(transition) if !transition.duration.is_zero() => {
+                // UNVERIFIED: the serialized runner must confirm the GPUI animation wrapper's
+                // retained identity and layout behavior across targeted property patches.
+                div()
+                    .id(transition_id.clone())
+                    .min_w_0()
+                    .child(rendered)
+                    .with_animation(
+                        transition_id,
+                        Animation::new(transition.duration)
+                            .with_easing(move |delta| transition.curve.sample(delta)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+            }
+            _ => rendered,
         }
     }
 }
@@ -1391,5 +1893,31 @@ impl Render for FoundationGallery {
                         .child("Host-owned popup surface"),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ImageFormat, image_format};
+
+    #[test]
+    fn detects_common_image_formats_from_extension_or_bytes() {
+        assert_eq!(
+            image_format("assets/photo.png", b"\x89PNG\r\n\x1a\nrest"),
+            Some(ImageFormat::Png)
+        );
+        assert_eq!(
+            image_format("assets/photo.jpeg", b"\xff\xd8\xffrest"),
+            Some(ImageFormat::Jpeg)
+        );
+        assert_eq!(
+            image_format("assets/photo", b"RIFFxxxxWEBPrest"),
+            Some(ImageFormat::Webp)
+        );
+        assert_eq!(
+            image_format("assets/icon.svg", br#"<svg viewBox="0 0 1 1"></svg>"#),
+            Some(ImageFormat::Svg)
+        );
+        assert_eq!(image_format("assets/file.bin", b"not an image"), None);
     }
 }

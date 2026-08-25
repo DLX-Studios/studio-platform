@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use studio_components::{
-    ComponentCatalog, DispatchErrorCode, HostEventDispatcher, InputAction, NativeLayer,
-    RuntimeControl,
+    COMPONENT_RENDERER_READINESS, ComponentCatalog, DispatchErrorCode, HostEventDispatcher,
+    InputAction, NativeLayer, RuntimeControl, component_readiness,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;
@@ -162,6 +162,49 @@ fn maps_extended_component_catalog_to_native_layers() {
             catalog.map(&node("extended", kind, &[])).unwrap().layer,
             NativeLayer::WebOrDom
         );
+    }
+}
+
+#[test]
+fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
+    assert_eq!(COMPONENT_RENDERER_READINESS.len(), 100);
+    for readiness in COMPONENT_RENDERER_READINESS {
+        assert!(readiness.protocol_declared);
+        assert!(readiness.native_mapped);
+    }
+
+    for kind in [
+        NodeKind::Box,
+        NodeKind::Column,
+        NodeKind::Row,
+        NodeKind::Stack,
+        NodeKind::Grid,
+        NodeKind::ScrollView,
+        NodeKind::ListView,
+        NodeKind::Spacer,
+        NodeKind::Divider,
+        NodeKind::Text,
+        NodeKind::Icon,
+        NodeKind::Image,
+        NodeKind::Card,
+        NodeKind::Badge,
+        NodeKind::Tag,
+        NodeKind::Avatar,
+        NodeKind::Empty,
+        NodeKind::Skeleton,
+        NodeKind::Separator,
+        NodeKind::AspectRatio,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.semantically_rendered, "{kind:?}");
+        assert!(readiness.verified, "{kind:?}");
+    }
+
+    for kind in [NodeKind::Dialog, NodeKind::TextInput, NodeKind::DataTable] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.native_mapped, "{kind:?}");
+        assert!(!readiness.semantically_rendered, "{kind:?}");
+        assert!(!readiness.verified, "{kind:?}");
     }
 }
 

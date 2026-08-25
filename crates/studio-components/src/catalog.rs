@@ -72,6 +72,131 @@ pub struct NativeComponent {
     pub host_owned_value: bool,
 }
 
+/// Renderer readiness for one closed protocol kind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentReadiness {
+    /// Closed protocol kind.
+    pub kind: NodeKind,
+    /// Whether the kind is declared by protocol v1.
+    pub protocol_declared: bool,
+    /// Whether the kind maps to a native layer instead of web/DOM.
+    pub native_mapped: bool,
+    /// Whether the renderer honors the declared schema semantics.
+    pub semantically_rendered: bool,
+    /// Whether automated fixtures cover the rendered/state contract.
+    pub verified: bool,
+}
+
+/// Exhaustive protocol-v1 renderer readiness table.
+pub const COMPONENT_RENDERER_READINESS: [ComponentReadiness; 100] = [
+    readiness(NodeKind::Box),
+    readiness(NodeKind::Column),
+    readiness(NodeKind::Row),
+    readiness(NodeKind::Stack),
+    readiness(NodeKind::Grid),
+    readiness(NodeKind::ScrollView),
+    readiness(NodeKind::ListView),
+    readiness(NodeKind::Spacer),
+    readiness(NodeKind::Divider),
+    readiness(NodeKind::Text),
+    readiness(NodeKind::Icon),
+    readiness(NodeKind::Image),
+    readiness(NodeKind::Card),
+    readiness(NodeKind::Badge),
+    readiness(NodeKind::Tag),
+    readiness(NodeKind::Avatar),
+    readiness(NodeKind::Empty),
+    readiness(NodeKind::Skeleton),
+    readiness(NodeKind::ProgressIndicator),
+    readiness(NodeKind::ProgressCircle),
+    readiness(NodeKind::Spinner),
+    readiness(NodeKind::Button),
+    readiness(NodeKind::IconButton),
+    readiness(NodeKind::Checkbox),
+    readiness(NodeKind::Radio),
+    readiness(NodeKind::Switch),
+    readiness(NodeKind::Toggle),
+    readiness(NodeKind::ButtonGroup),
+    readiness(NodeKind::Slider),
+    readiness(NodeKind::RangeSlider),
+    readiness(NodeKind::Select),
+    readiness(NodeKind::Combobox),
+    readiness(NodeKind::NumberInput),
+    readiness(NodeKind::TextInput),
+    readiness(NodeKind::TextArea),
+    readiness(NodeKind::Field),
+    readiness(NodeKind::InputGroup),
+    readiness(NodeKind::OtpInput),
+    readiness(NodeKind::SecretInput),
+    readiness(NodeKind::Dialog),
+    readiness(NodeKind::AlertDialog),
+    readiness(NodeKind::Popover),
+    readiness(NodeKind::Sheet),
+    readiness(NodeKind::BottomSheet),
+    readiness(NodeKind::Toast),
+    readiness(NodeKind::Notification),
+    readiness(NodeKind::Banner),
+    readiness(NodeKind::ContextMenu),
+    readiness(NodeKind::CommandPalette),
+    readiness(NodeKind::Tooltip),
+    readiness(NodeKind::Scaffold),
+    readiness(NodeKind::AppBar),
+    readiness(NodeKind::Sidebar),
+    readiness(NodeKind::NavigationBar),
+    readiness(NodeKind::NavigationRail),
+    readiness(NodeKind::Drawer),
+    readiness(NodeKind::Tabs),
+    readiness(NodeKind::Breadcrumb),
+    readiness(NodeKind::Stepper),
+    readiness(NodeKind::Pagination),
+    readiness(NodeKind::ListTile),
+    readiness(NodeKind::SearchableList),
+    readiness(NodeKind::VirtualList),
+    readiness(NodeKind::DataTable),
+    readiness(NodeKind::Tree),
+    readiness(NodeKind::DescriptionList),
+    readiness(NodeKind::Calendar),
+    readiness(NodeKind::DatePicker),
+    readiness(NodeKind::TimePicker),
+    readiness(NodeKind::Separator),
+    readiness(NodeKind::Accordion),
+    readiness(NodeKind::Collapsible),
+    readiness(NodeKind::HoverCard),
+    readiness(NodeKind::MenuBar),
+    readiness(NodeKind::StatusBar),
+    readiness(NodeKind::KeyboardShortcuts),
+    readiness(NodeKind::Kbd),
+    readiness(NodeKind::ColorPicker),
+    readiness(NodeKind::Rating),
+    readiness(NodeKind::Resizable),
+    readiness(NodeKind::Dock),
+    readiness(NodeKind::Chart),
+    readiness(NodeKind::Editor),
+    readiness(NodeKind::RichText),
+    readiness(NodeKind::Carousel),
+    readiness(NodeKind::DragDrop),
+    readiness(NodeKind::Theme),
+    readiness(NodeKind::AspectRatio),
+    readiness(NodeKind::Alert),
+    readiness(NodeKind::Attachment),
+    readiness(NodeKind::Bubble),
+    readiness(NodeKind::Command),
+    readiness(NodeKind::NativeSelect),
+    readiness(NodeKind::NavigationMenu),
+    readiness(NodeKind::ScrollArea),
+    readiness(NodeKind::Item),
+    readiness(NodeKind::Message),
+    readiness(NodeKind::MessageScroller),
+    readiness(NodeKind::ToggleGroup),
+    readiness(NodeKind::Sonner),
+];
+
+/// Return renderer readiness for one closed protocol kind.
+#[must_use]
+pub const fn component_readiness(kind: NodeKind) -> ComponentReadiness {
+    readiness(kind)
+}
+
 /// Stable component-mapping rejection family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogErrorCode {
@@ -136,6 +261,42 @@ impl ComponentCatalog {
             host_owned_value: node.kind == NodeKind::SecretInput,
         })
     }
+}
+
+const fn readiness(kind: NodeKind) -> ComponentReadiness {
+    ComponentReadiness {
+        kind,
+        protocol_declared: true,
+        native_mapped: true,
+        semantically_rendered: batch_a_rendered(kind),
+        verified: batch_a_rendered(kind),
+    }
+}
+
+const fn batch_a_rendered(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Box
+            | NodeKind::Column
+            | NodeKind::Row
+            | NodeKind::Stack
+            | NodeKind::Grid
+            | NodeKind::ScrollView
+            | NodeKind::ListView
+            | NodeKind::Spacer
+            | NodeKind::Divider
+            | NodeKind::Text
+            | NodeKind::Icon
+            | NodeKind::Image
+            | NodeKind::Card
+            | NodeKind::Badge
+            | NodeKind::Tag
+            | NodeKind::Avatar
+            | NodeKind::Empty
+            | NodeKind::Skeleton
+            | NodeKind::Separator
+            | NodeKind::AspectRatio
+    )
 }
 
 #[allow(clippy::too_many_lines, clippy::match_same_arms)]
