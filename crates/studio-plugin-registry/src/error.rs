@@ -1,0 +1,1 @@
+//! error module (implementation follows).
