@@ -6,14 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ed25519-dalek.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 studio-package = { path = "../studio-package" }
 thiserror.workspace = true
-
-[dev-dependencies]
-ed25519-dalek.workspace = true
 
 [[test]]
 name = "pos_pack_registry"

@@ -11,6 +11,9 @@ use crate::TrustStore;
 
 const SIGNATURE_DOMAIN: &str = "studio.bundle.signature.v1";
 
+/// Domain separation prefix for standalone signed JSON documents such as plugin descriptors.
+const DOCUMENT_SIGNATURE_DOMAIN: &str = "studio.document.signature.v1";
+
 /// Exact logical bundle inputs covered by a publisher signature.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalBundleInput {
@@ -137,6 +140,50 @@ pub fn verify_bundle_signature(
         .map_err(|_| IntegrityError::SignatureInvalid)?;
     let signature = Signature::from_bytes(raw_signature);
     let signed_document = canonical_bundle_document(input)?;
+    verifying_key
+        .verify_strict(&signed_document, &signature)
+        .map_err(|_| IntegrityError::SignatureInvalid)?;
+    Ok(VerifiedIntegrity {
+        document_sha256: Sha256::digest(&signed_document).into(),
+        signed_document,
+    })
+}
+
+/// Construct the domain-separated canonical bytes covered by a standalone document signature.
+///
+/// Unlike [`canonical_bundle_document`] this covers exactly one JSON document with no module or
+/// asset digests, keeping descriptor signatures independent from bundle payloads while reusing
+/// the same provisioned trust store and Ed25519 verification path.
+///
+/// # Errors
+///
+/// Returns [`IntegrityError::CanonicalizationInvalid`] if canonical serialization fails.
+pub fn canonical_document_bytes(document: &Value) -> Result<Vec<u8>, IntegrityError> {
+    canonicalize_json(&json!({
+        "domain": DOCUMENT_SIGNATURE_DOMAIN,
+        "document": document,
+    }))
+}
+
+/// Verify one standalone signed JSON document against a currently enabled provisioned key.
+///
+/// # Errors
+///
+/// Returns a stable [`IntegrityError`] for canonicalization, trust, encoding, or verification
+/// failures, exactly like bundle signature verification.
+pub fn verify_document_signature(
+    document: &Value,
+    signature: &[u8],
+    publisher_id: &str,
+    key_id: &str,
+    trust_store: &TrustStore,
+) -> Result<VerifiedIntegrity, IntegrityError> {
+    let verifying_key = trust_store.enabled_key(publisher_id, key_id)?;
+    let raw_signature: &[u8; 64] = signature
+        .try_into()
+        .map_err(|_| IntegrityError::SignatureInvalid)?;
+    let signature = Signature::from_bytes(raw_signature);
+    let signed_document = canonical_document_bytes(document)?;
     verifying_key
         .verify_strict(&signed_document, &signature)
         .map_err(|_| IntegrityError::SignatureInvalid)?;
