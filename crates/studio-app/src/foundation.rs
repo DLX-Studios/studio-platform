@@ -1,6 +1,11 @@
 //! Native controls used to prove the Wayland-only GPUI foundation.
 
-use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, Image, ImageFormat,
@@ -14,7 +19,7 @@ use gpui_component::{
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     date_picker::{DatePicker, DatePickerState},
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, NumberInput, OtpInput, OtpState},
     popover::Popover,
     progress::{Progress, ProgressCircle},
     radio::Radio,
@@ -67,6 +72,44 @@ fn node_accessibility_label(node: &PluginRenderNode) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .filter(|label| !label.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn prop_bool(node: &PluginRenderNode, key: &str, default: bool) -> bool {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn prop_str<'a>(node: &'a PluginRenderNode, key: &str) -> Option<&'a str> {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn prop_f64(node: &PluginRenderNode, key: &str, default: f64) -> f64 {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(default)
+}
+
+/// Parse one numeric input buffer for `NumberInput` change dispatch.
+fn parse_number_input(raw: &str) -> Option<f64> {
+    raw.trim().parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+/// Stable-ID handling for retained form widgets (ticket 32 decision): every stateful widget is
+/// keyed by the stable protocol node ID and kept in a retained map across targeted property
+/// patches, so GPUI focus follows the same entity and mounted state survives re-renders. Entries
+/// are pruned when a render pass no longer visits their node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputBinding {
+    Text,
+    Multiline,
+    Secret,
+    Number,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -337,10 +380,12 @@ pub struct FoundationGallery {
     model: FoundationGalleryModel,
     root_focus: FocusHandle,
     controls: [FocusHandle; 3],
-    component_input: Entity<InputState>,
-    component_secret_input: Entity<InputState>,
-    component_select: Entity<SelectState<Vec<SharedString>>>,
-    component_slider: Entity<SliderState>,
+    plugin_inputs: BTreeMap<String, Entity<InputState>>,
+    plugin_selects: BTreeMap<String, Entity<SelectState<Vec<SharedString>>>>,
+    plugin_sliders: BTreeMap<String, Entity<SliderState>>,
+    plugin_otps: BTreeMap<String, Entity<OtpState>>,
+    plugin_state_subscriptions: BTreeMap<String, Vec<Subscription>>,
+    visited_input_ids: BTreeSet<String>,
     component_date_picker: Entity<DatePickerState>,
     component_color_picker: Entity<ColorPickerState>,
     _component_subscriptions: Vec<Subscription>,
@@ -352,81 +397,8 @@ impl FoundationGallery {
     /// Creates the gallery and its ordered focus stops.
     #[must_use]
     pub fn new(reduced_motion: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let component_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search services, price or duration")
-        });
-        let component_secret_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Enter payment PIN")
-                .masked(true)
-        });
-        let component_select = cx.new(|cx| {
-            SelectState::new(
-                vec![
-                    SharedString::from("All categories"),
-                    SharedString::from("Hair"),
-                    SharedString::from("Beard"),
-                ],
-                Some(IndexPath::default()),
-                window,
-                cx,
-            )
-        });
-        let component_slider = cx.new(|_| {
-            SliderState::new()
-                .min(0.0)
-                .max(0.5)
-                .step(0.05)
-                .default_value(0.0)
-        });
         let component_date_picker = cx.new(|cx| DatePickerState::new(window, cx));
         let component_color_picker = cx.new(|cx| ColorPickerState::new(window, cx));
-
-        let mut component_subscriptions = Vec::new();
-        component_subscriptions.push(cx.subscribe_in(&component_input, window, {
-            let component_input = component_input.clone();
-            move |this, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let value = component_input.read(cx).value().to_string();
-                    if let Some(surface) = this.plugin_surface.as_mut() {
-                        let _ = surface.process_input("search", InputAction::TextChanged { value });
-                    }
-                    cx.notify();
-                }
-            }
-        }));
-        component_subscriptions.push(cx.subscribe_in(&component_select, window, {
-            move |this, _, event: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let SelectEvent::Confirm(Some(value)) = event else {
-                    return;
-                };
-                if let Some(surface) = this.plugin_surface.as_mut() {
-                    let _ = surface.process_input(
-                        "category",
-                        InputAction::SelectionChanged {
-                            value: value.to_string(),
-                        },
-                    );
-                }
-                cx.notify();
-            }
-        }));
-        component_subscriptions.push(cx.subscribe_in(&component_slider, window, {
-            move |this, _, event: &SliderEvent, _, cx| {
-                let SliderEvent::Change(value) = event else {
-                    return;
-                };
-                if let Some(surface) = this.plugin_surface.as_mut() {
-                    let _ = surface.process_input(
-                        "discount",
-                        InputAction::SliderDrag {
-                            value: f64::from(value.end()),
-                        },
-                    );
-                }
-                cx.notify();
-            }
-        }));
 
         Self {
             model: FoundationGalleryModel::new(reduced_motion),
@@ -436,13 +408,15 @@ impl FoundationGallery {
                 cx.focus_handle().tab_index(2).tab_stop(true),
                 cx.focus_handle().tab_index(3).tab_stop(true),
             ],
-            component_input,
-            component_secret_input,
-            component_select,
-            component_slider,
+            plugin_inputs: BTreeMap::new(),
+            plugin_selects: BTreeMap::new(),
+            plugin_sliders: BTreeMap::new(),
+            plugin_otps: BTreeMap::new(),
+            plugin_state_subscriptions: BTreeMap::new(),
+            visited_input_ids: BTreeSet::new(),
             component_date_picker,
             component_color_picker,
-            _component_subscriptions: component_subscriptions,
+            _component_subscriptions: Vec::new(),
             plugin_surface: None,
             checkout_shell: None,
         }
@@ -497,6 +471,269 @@ impl FoundationGallery {
     /// Mutable access to the host-owned checkout shell for trusted flows.
     pub fn checkout_shell_mut(&mut self) -> Option<&mut NativeCheckoutShell> {
         self.checkout_shell.as_mut()
+    }
+
+    fn dispatch_input(&mut self, node_id: &str, action: InputAction, cx: &mut Context<Self>) {
+        if let Some(surface) = self.plugin_surface.as_mut() {
+            let _ = surface.process_input(node_id, action);
+        }
+        cx.notify();
+    }
+
+    /// Retain (or create) one stable-ID text input state for a plugin node.
+    fn plugin_input(
+        &mut self,
+        node_id: &str,
+        placeholder: &str,
+        initial_value: &str,
+        binding: InputBinding,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_inputs.get(node_id) {
+            return state.clone();
+        }
+        let placeholder = placeholder.to_owned();
+        let initial_value = initial_value.to_owned();
+        let state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder(placeholder);
+            match binding {
+                // Secret inputs are masked at the native layer and their buffers are never
+                // mirrored into host state or events.
+                InputBinding::Secret => state = state.masked(true),
+                InputBinding::Multiline => state = state.multi_line(true),
+                InputBinding::Text | InputBinding::Number => {}
+            }
+            if !initial_value.is_empty() && binding != InputBinding::Secret {
+                state.set_value(initial_value, window, cx);
+            }
+            state
+        });
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            let state = state.clone();
+            move |this, _, event: &InputEvent, _, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let raw = state.read(cx).value().to_string();
+                let action = match binding {
+                    // Secret input values must never enter the protocol event path; only the
+                    // separate HostSecretInput ready flow crosses the boundary.
+                    InputBinding::Secret => None,
+                    InputBinding::Number => parse_number_input(&raw)
+                        .map(|value| InputAction::SliderDrag { value }),
+                    InputBinding::Text | InputBinding::Multiline => {
+                        Some(InputAction::TextChanged { value: raw })
+                    }
+                };
+                if let Some(action) = action {
+                    this.dispatch_input(&node_id, action, cx);
+                }
+            }
+        });
+        self.plugin_inputs
+            .insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID select state for a plugin node.
+    fn plugin_select(
+        &mut self,
+        node_id: &str,
+        options: Vec<SharedString>,
+        selected: Option<IndexPath>,
+        searchable: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<Vec<SharedString>>> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_selects.get(node_id) {
+            return state.clone();
+        }
+        let state = cx.new(|cx| {
+            SelectState::new(options, selected, window, cx).searchable(searchable)
+        });
+        let confirm_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            move |this, _, event: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let SelectEvent::Confirm(Some(value)) = event else {
+                    return;
+                };
+                this.dispatch_input(
+                    &node_id,
+                    InputAction::SelectionChanged {
+                        value: value.to_string(),
+                    },
+                    cx,
+                );
+            }
+        });
+        self.plugin_selects
+            .insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(confirm_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID slider state for a plugin node. A single-value slider
+    /// passes `value_range: None` and its protocol `value` via `single`.
+    #[allow(clippy::too_many_arguments, reason = "closed schema mirrors every slider property")]
+    fn plugin_slider(
+        &mut self,
+        node_id: &str,
+        min: f32,
+        max: f32,
+        step: f32,
+        single: f32,
+        value_range: Option<(f32, f32)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SliderState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_sliders.get(node_id) {
+            return state.clone();
+        }
+        let state = cx.new(|_| {
+            let mut state = SliderState::new().min(min).max(max);
+            state = if step > 0.0 {
+                state.step(step)
+            } else {
+                state
+            };
+            match value_range {
+                Some((start, end)) => state.default_value((start, end)),
+                None => state.default_value(single),
+            }
+        });
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            move |this, _, event: &SliderEvent, _, cx| {
+                let SliderEvent::Change(value) = event else {
+                    return;
+                };
+                this.dispatch_input(
+                    &node_id,
+                    InputAction::SliderDrag {
+                        value: f64::from(value.end()),
+                    },
+                    cx,
+                );
+            }
+        });
+        self.plugin_sliders
+            .insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID OTP state for a plugin node.
+    fn plugin_otp(
+        &mut self,
+        node_id: &str,
+        length: usize,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<OtpState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_otps.get(node_id) {
+            return state.clone();
+        }
+        let value = value.to_owned();
+        let state = cx.new(|cx| OtpState::new(length, window, cx).default_value(value));
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            let state = state.clone();
+            move |this, _, event: &InputEvent, _, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                this.dispatch_input(
+                    &node_id,
+                    InputAction::TextChanged {
+                        value: state.read(cx).value().to_string(),
+                    },
+                    cx,
+                );
+            }
+        });
+        self.plugin_otps.insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    fn prune_retired_widget_states(&mut self) {
+        let live = std::mem::take(&mut self.visited_input_ids);
+        self.plugin_inputs.retain(|id, _| live.contains(id));
+        self.plugin_selects.retain(|id, _| live.contains(id));
+        self.plugin_sliders.retain(|id, _| live.contains(id));
+        self.plugin_otps.retain(|id, _| live.contains(id));
+        self.plugin_state_subscriptions
+            .retain(|id, _| live.contains(id));
+    }
+
+    /// Render a Select or Combobox node from its closed schema (label/value/options/enabled).
+    fn select_like_element(
+        &mut self,
+        node: &PluginRenderNode,
+        opacity: f32,
+        accessibility_label: Option<String>,
+        searchable: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = prop_str(node, "label").unwrap_or("Select").to_owned();
+        let value = prop_str(node, "value").unwrap_or_default().to_owned();
+        let enabled = prop_bool(node, "enabled", true);
+        let options = node
+            .props
+            .get("options")
+            .and_then(serde_json::Value::as_array)
+            .map(|options| {
+                options
+                    .iter()
+                    .filter_map(|option| option.as_str())
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let selected = options
+            .iter()
+            .position(|option| option.as_str() == value.as_str())
+            .map(IndexPath::new);
+        let state =
+            self.plugin_select(&node.id, options, selected, searchable, window, cx);
+        div()
+            .id(node.id.clone())
+            .opacity(opacity)
+            .when_some(accessibility_label, |element, aria| {
+                element.aria_label(aria)
+            })
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
+            .child(
+                Select::new(&state)
+                    .placeholder(value)
+                    .disabled(!enabled),
+            )
+            .into_any_element()
     }
 
     fn animation_indicator(&self) -> AnyElement {
@@ -1476,24 +1713,6 @@ impl FoundationGallery {
                 .bg(rgb(COLOR_CARD))
                 .children(children)
                 .into_any_element(),
-            NodeKind::ButtonGroup
-            | NodeKind::RangeSlider
-            | NodeKind::Combobox
-            | NodeKind::NumberInput
-            | NodeKind::TextArea
-            | NodeKind::Field
-            | NodeKind::InputGroup
-            | NodeKind::OtpInput => div()
-                .id(node.id)
-                .w_full()
-                .min_w_0()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(COLOR_BORDER_SUBTLE))
-                .bg(rgb(COLOR_SURFACE_VARIANT))
-                .children(children)
-                .into_any_element(),
             NodeKind::Text => {
                 let role = node
                     .props
@@ -1541,26 +1760,20 @@ impl FoundationGallery {
             NodeKind::Button if node.control == Some(RuntimeControl::Button) => {
                 let node_id = node.id;
                 let click_id = node_id.clone();
-                let label = node
-                    .props
-                    .get("label")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Button")
-                    .to_owned();
-                let variant = node
-                    .props
-                    .get("variant")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("primary");
-                let enabled = node
-                    .props
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true);
+                let label = prop_str(&node, "label").unwrap_or("Button").to_owned();
+                let variant = prop_str(&node, "variant").unwrap_or("primary");
+                let enabled = prop_bool(&node, "enabled", true);
+                // UNVERIFIED: the closed protocol declares a "selected" button variant but
+                // gpui-component's Button has no selected style; it renders as primary until the
+                // runner/fixer pass confirms host styling policy.
                 let is_card_action = node_id.starts_with("add-");
                 let button = Button::new(node_id)
                     .label(label)
                     .disabled(!enabled)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .when(is_card_action, gpui::Styled::w_full);
                 let button = match variant {
                     "secondary" => button.secondary(),
@@ -1568,104 +1781,356 @@ impl FoundationGallery {
                 };
                 button
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(surface) = this.plugin_surface.as_mut() {
-                            let _ = surface.process_input(&click_id, InputAction::PointerClick);
-                        }
-                        cx.notify();
+                        this.dispatch_input(&click_id, InputAction::PointerClick, cx);
                     }))
                     .into_any_element()
             }
-            NodeKind::TextInput if node.control == Some(RuntimeControl::Input) => div()
-                .id(node.id)
-                .flex_grow_1()
-                .child(Input::new(&self.component_input))
-                .into_any_element(),
-            NodeKind::SecretInput if node.control == Some(RuntimeControl::Input) => {
-                let label = node
-                    .props
-                    .get("label")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Trusted input")
-                    .to_owned();
+            NodeKind::IconButton if node.control == Some(RuntimeControl::Button) => {
+                let icon = prop_str(&node, "icon").unwrap_or("").to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let click_id = node.id.clone();
+                let key_id = click_id.clone();
                 div()
                     .id(node.id)
+                    .role(Role::Button)
+                    .aria_label(accessibility_label.unwrap_or_else(|| icon.clone()))
+                    .opacity(opacity)
+                    .size(px(36.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .text_color(if enabled {
+                        rgb(COLOR_TEXT)
+                    } else {
+                        rgb(COLOR_MUTED)
+                    })
+                    .text_xs()
+                    .when(!enabled, |element| element.opacity(0.5 * opacity))
+                    .child(icon)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch_input(&click_id, InputAction::PointerClick, cx);
+                    }))
+                    // UNVERIFIED: keyboard activation relies on GPUI focusable div key handling;
+                    // touch is covered by pointer synthesis in the Wayland input path.
+                    .focusable()
+                    .tab_stop(true)
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.dispatch_input(&key_id, InputAction::KeyboardActivate, cx);
+                        }
+                    }))
+                    .into_any_element()
+            }
+            NodeKind::Checkbox | NodeKind::Radio | NodeKind::Switch | NodeKind::Toggle => {
+                let label = prop_str(&node, "label").unwrap_or_default().to_owned();
+                let checked = prop_bool(&node, "value", false);
+                let enabled = prop_bool(&node, "enabled", true);
+                let change_id = node.id.clone();
+                let on_change = cx.listener(move |this, checked: &bool, _, cx| {
+                    this.dispatch_input(
+                        &change_id,
+                        InputAction::SelectionChanged {
+                            value: checked.to_string(),
+                        },
+                        cx,
+                    );
+                });
+                let inner: AnyElement = match node.kind {
+                    NodeKind::Radio => Radio::new(node.id.clone())
+                        .label(label)
+                        .checked(checked)
+                        .disabled(!enabled)
+                        .on_click(on_change)
+                        .into_any_element(),
+                    NodeKind::Switch | NodeKind::Toggle => Switch::new(node.id.clone())
+                        .label(label)
+                        .checked(checked)
+                        .disabled(!enabled)
+                        .on_click(on_change)
+                        .into_any_element(),
+                    _ => Checkbox::new(node.id.clone())
+                        .label(label)
+                        .checked(checked)
+                        .disabled(!enabled)
+                        .on_click(on_change)
+                        .into_any_element(),
+                };
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label, |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .max_w_full()
+                    .child(inner)
+                    .into_any_element()
+            }
+            NodeKind::ButtonGroup => {
+                let vertical =
+                    prop_str(&node, "orientation").unwrap_or("horizontal") == "vertical";
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .when(vertical, gpui::Styled::flex_col)
+                    .when(!vertical, gpui::Styled::flex_row)
+                    .gap(px(gap))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Slider if node.control == Some(RuntimeControl::Slider) => {
+                let label = prop_str(&node, "label").unwrap_or("Slider").to_owned();
+                let min = prop_f64(&node, "min", 0.0) as f32;
+                let max = prop_f64(&node, "max", 1.0) as f32;
+                let value = prop_f64(&node, "value", min.into()).clamp(min.into(), max.into());
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_slider(
+                    &node.id,
+                    min,
+                    max,
+                    0.0,
+                    value as f32,
+                    None,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
+                            "{label}: {value:.2}"
+                        )),
+                    )
+                    .child(Slider::new(&state).horizontal().disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::RangeSlider => {
+                let label = prop_str(&node, "label").unwrap_or("Range").to_owned();
+                let min = prop_f64(&node, "min", 0.0) as f32;
+                let max = prop_f64(&node, "max", 1.0) as f32;
+                let start = prop_f64(&node, "start", min.into()).clamp(min.into(), max.into());
+                let end = prop_f64(&node, "end", max.into()).clamp(start, max.into());
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_slider(
+                    &node.id,
+                    min,
+                    max,
+                    0.0,
+                    start,
+                    Some((start as f32, end as f32)),
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
+                            "{label}: {start:.2} – {end:.2}"
+                        )),
+                    )
+                    .child(Slider::new(&state).horizontal().disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::Select if node.control == Some(RuntimeControl::Select) => {
+                self.select_like_element(&node, opacity, accessibility_label, false, window, cx)
+            }
+            NodeKind::Combobox => {
+                // A combobox is rendered as the same closed select contract with native search;
+                // options/value/on_changed semantics stay exactly as declared.
+                self.select_like_element(&node, opacity, accessibility_label, true, window, cx)
+            }
+            NodeKind::TextInput if node.control == Some(RuntimeControl::Input) => {
+                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
+                let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    &placeholder,
+                    &initial_value,
+                    InputBinding::Text,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .flex_grow_1()
+                    .child(Input::new(&state).disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::TextArea => {
+                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
+                let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    &placeholder,
+                    &initial_value,
+                    InputBinding::Multiline,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w_full()
+                    .child(Input::new(&state).disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::NumberInput => {
+                let placeholder = prop_str(&node, "label").unwrap_or_default().to_owned();
+                let initial_value = format!("{}", prop_f64(&node, "value", 0.0));
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    &placeholder,
+                    &initial_value,
+                    InputBinding::Number,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w(px(160.0))
+                    .child(NumberInput::new(&state).disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::SecretInput if node.control == Some(RuntimeControl::Input) => {
+                let label = prop_str(&node, "label")
+                    .unwrap_or("Trusted input")
+                    .to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    "",
+                    "",
+                    InputBinding::Secret,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
-                    .child(Input::new(&self.component_secret_input))
+                    .child(Input::new(&state).disabled(!enabled))
                     .into_any_element()
             }
-            NodeKind::Slider if node.control == Some(RuntimeControl::Slider) => {
-                let value = node
-                    .props
-                    .get("value")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0);
+            NodeKind::Field | NodeKind::InputGroup => {
+                let label = prop_str(&node, "label");
+                let description = prop_str(&node, "description");
+                let error = prop_str(&node, "error");
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
+                    .w_full()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .child(format!("Discount: {:.0}%", value * 100.0))
-                    .child(Slider::new(&self.component_slider).horizontal())
+                    .gap_1()
+                    .when_some(label, |element, label| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(label.to_owned()),
+                        )
+                    })
+                    .children(children)
+                    .when_some(description, |element, description| {
+                        element.child(
+                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
+                                description.to_owned(),
+                            ),
+                        )
+                    })
+                    .when_some(error, |element, error| {
+                        element.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(COLOR_ERROR))
+                                .role(Role::Alert)
+                                .child(error.to_owned()),
+                        )
+                    })
                     .into_any_element()
             }
-            NodeKind::Select if node.control == Some(RuntimeControl::Select) => {
-                let value = node
+            NodeKind::OtpInput => {
+                let label = prop_str(&node, "label").unwrap_or("Code").to_owned();
+                let length = node
                     .props
-                    .get("value")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Select")
-                    .to_owned();
+                    .get("length")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(6)
+                    .clamp(1, 12) as usize;
+                let value = prop_str(&node, "value").unwrap_or_default().to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_otp(&node.id, length, &value, window, cx);
                 div()
                     .id(node.id)
-                    .w(px(190.0))
-                    .child(Select::new(&self.component_select).placeholder(value))
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(!enabled, |element| element.opacity(0.5 * opacity))
+                    .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
+                    .child(OtpInput::new(&state))
                     .into_any_element()
             }
-            NodeKind::Checkbox => Checkbox::new(node.id)
-                .label(
-                    node.props
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .checked(
-                    node.props
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )
-                .into_any_element(),
-            NodeKind::Radio => Radio::new(node.id)
-                .label(
-                    node.props
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .checked(
-                    node.props
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )
-                .into_any_element(),
-            NodeKind::Switch | NodeKind::Toggle => Switch::new(node.id)
-                .label(
-                    node.props
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .checked(
-                    node.props
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )
-                .into_any_element(),
             NodeKind::DatePicker | NodeKind::Calendar => {
                 DatePicker::new(&self.component_date_picker).into_any_element()
             }
@@ -1717,7 +2182,11 @@ impl Render for FoundationGallery {
                 .checkout_shell
                 .as_ref()
                 .map(|shell| shell.current_route().to_owned());
+            self.visited_input_ids.clear();
             let plugin = self.plugin_node(root, window, cx);
+            // Retained form-widget states are keyed by stable node ID; states whose nodes left
+            // the render tree are pruned so removals do not leak native widgets or buffers.
+            self.prune_retired_widget_states();
             let route_bar = checkout_route.clone().map(|route| {
                 div()
                     .id("checkout-route")
@@ -1898,7 +2367,7 @@ impl Render for FoundationGallery {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, image_format};
+    use super::{ImageFormat, image_format, parse_number_input};
 
     #[test]
     fn detects_common_image_formats_from_extension_or_bytes() {
@@ -1919,5 +2388,17 @@ mod tests {
             Some(ImageFormat::Svg)
         );
         assert_eq!(image_format("assets/file.bin", b"not an image"), None);
+    }
+
+    #[test]
+    fn parses_numeric_input_buffers_for_number_dispatch() {
+        assert_eq!(parse_number_input("42"), Some(42.0));
+        assert_eq!(parse_number_input(" 3.5 "), Some(3.5));
+        assert_eq!(parse_number_input("-0.25"), Some(-0.25));
+        // Non-numeric and non-finite buffers are dropped rather than dispatched.
+        assert_eq!(parse_number_input(""), None);
+        assert_eq!(parse_number_input("abc"), None);
+        assert_eq!(parse_number_input("NaN"), None);
+        assert_eq!(parse_number_input("inf"), None);
     }
 }

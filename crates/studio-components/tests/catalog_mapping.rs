@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use studio_components::{
-    COMPONENT_RENDERER_READINESS, ComponentCatalog, DispatchErrorCode, HostEventDispatcher,
-    InputAction, NativeLayer, RuntimeControl, component_readiness,
+    component_readiness, ComponentCatalog, DispatchErrorCode, HostEventDispatcher, InputAction,
+    NativeLayer, RuntimeControl, COMPONENT_RENDERER_READINESS,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;
@@ -200,12 +200,50 @@ fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
         assert!(readiness.verified, "{kind:?}");
     }
 
-    for kind in [NodeKind::Dialog, NodeKind::TextInput, NodeKind::DataTable] {
+    for kind in [NodeKind::Dialog, NodeKind::DataTable, NodeKind::Toast] {
         let readiness = component_readiness(kind);
         assert!(readiness.native_mapped, "{kind:?}");
         assert!(!readiness.semantically_rendered, "{kind:?}");
         assert!(!readiness.verified, "{kind:?}");
     }
+}
+
+#[test]
+fn form_input_kinds_are_semantically_rendered_after_batch_b() {
+    for kind in [
+        NodeKind::Button,
+        NodeKind::IconButton,
+        NodeKind::Checkbox,
+        NodeKind::Radio,
+        NodeKind::Switch,
+        NodeKind::Toggle,
+        NodeKind::ButtonGroup,
+        NodeKind::Slider,
+        NodeKind::RangeSlider,
+        NodeKind::Select,
+        NodeKind::Combobox,
+        NodeKind::NumberInput,
+        NodeKind::TextInput,
+        NodeKind::TextArea,
+        NodeKind::Field,
+        NodeKind::InputGroup,
+        NodeKind::OtpInput,
+        NodeKind::SecretInput,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.semantically_rendered, "{kind:?}");
+        assert!(readiness.verified, "{kind:?}");
+    }
+    // SecretInput stays host-owned even after semantic rendering: its value never enters the
+    // protocol event path (see HostEventDispatcher: SecretInput accepts no TextChanged action).
+    let secret = ComponentCatalog::default()
+        .map(&node(
+            "secret",
+            NodeKind::SecretInput,
+            &[("label", json!("PIN"))],
+        ))
+        .unwrap();
+    assert!(secret.host_owned_value);
 }
 
 #[test]
@@ -331,13 +369,11 @@ fn dispatches_typed_non_secret_events_from_host_owner_context() {
         };
         assert_eq!(event.node_id, node_id);
         assert_eq!(event.event, expected_event);
-        assert!(
-            !serde_json::to_value(event)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("owner")
-        );
+        assert!(!serde_json::to_value(event)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("owner"));
     }
 
     assert_eq!(

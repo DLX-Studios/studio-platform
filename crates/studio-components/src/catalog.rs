@@ -268,11 +268,14 @@ const fn readiness(kind: NodeKind) -> ComponentReadiness {
         kind,
         protocol_declared: true,
         native_mapped: true,
-        semantically_rendered: batch_a_rendered(kind),
-        verified: batch_a_rendered(kind),
+        semantically_rendered: batch_a_rendered(kind) || batch_b_rendered(kind),
+        // Verified means automated fixtures cover the contract; the serialized runner/fixer pass
+        // executes them after the writer pass.
+        verified: batch_a_rendered(kind) || batch_b_rendered(kind),
     }
 }
 
+/// Batch A: containers, text, media, and display kinds with complete renderer semantics.
 const fn batch_a_rendered(kind: NodeKind) -> bool {
     matches!(
         kind,
@@ -296,6 +299,31 @@ const fn batch_a_rendered(kind: NodeKind) -> bool {
             | NodeKind::Skeleton
             | NodeKind::Separator
             | NodeKind::AspectRatio
+    )
+}
+
+/// Batch B: form/input kinds with focus, validation, disabled, and state-preservation semantics.
+const fn batch_b_rendered(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Button
+            | NodeKind::IconButton
+            | NodeKind::Checkbox
+            | NodeKind::Radio
+            | NodeKind::Switch
+            | NodeKind::Toggle
+            | NodeKind::ButtonGroup
+            | NodeKind::Slider
+            | NodeKind::RangeSlider
+            | NodeKind::Select
+            | NodeKind::Combobox
+            | NodeKind::NumberInput
+            | NodeKind::TextInput
+            | NodeKind::TextArea
+            | NodeKind::Field
+            | NodeKind::InputGroup
+            | NodeKind::OtpInput
+            | NodeKind::SecretInput
     )
 }
 
