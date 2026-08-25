@@ -1,0 +1,1 @@
+//! descriptor module (implementation follows).

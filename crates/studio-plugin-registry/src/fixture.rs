@@ -1,0 +1,1 @@
+//! fixture module (implementation follows).
