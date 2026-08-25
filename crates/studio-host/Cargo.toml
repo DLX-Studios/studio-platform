@@ -1,0 +1,20 @@
+[package]
+name = "studio-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-rocksdb"] }
+thiserror.workspace = true
+tokio = { version = "=1.52.1", features = ["fs", "macros", "rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-mem"] }
+tempfile = "=3.27.0"
+
+[lints]
+workspace = true
