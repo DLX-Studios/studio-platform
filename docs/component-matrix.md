@@ -25,9 +25,9 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 | Avatar | Media | yes | yes | yes | yes |
 | Empty | Display | yes | yes | yes | yes |
 | Skeleton | Display | yes | yes | yes | yes |
-| ProgressIndicator | Feedback | yes | yes | no | no |
-| ProgressCircle | Feedback | yes | yes | no | no |
-| Spinner | Feedback | yes | yes | no | no |
+| ProgressIndicator | Feedback | yes | yes | yes | yes |
+| ProgressCircle | Feedback | yes | yes | yes | yes |
+| Spinner | Feedback | yes | yes | yes | yes |
 | Button | Form/input | yes | yes | yes | yes |
 | IconButton | Form/input | yes | yes | yes | yes |
 | Checkbox | Form/input | yes | yes | yes | yes |
@@ -46,35 +46,35 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 | InputGroup | Form/input | yes | yes | yes | yes |
 | OtpInput | Form/input | yes | yes | yes | yes |
 | SecretInput | Form/input | yes | yes | yes | yes |
-| Dialog | Overlay | yes | yes | no | no |
-| AlertDialog | Overlay | yes | yes | no | no |
-| Popover | Overlay | yes | yes | no | no |
-| Sheet | Overlay | yes | yes | no | no |
-| BottomSheet | Overlay | yes | yes | no | no |
-| Toast | Feedback | yes | yes | no | no |
-| Notification | Feedback | yes | yes | no | no |
-| Banner | Feedback | yes | yes | no | no |
-| ContextMenu | Overlay | yes | yes | no | no |
-| CommandPalette | Overlay | yes | yes | no | no |
-| Tooltip | Overlay | yes | yes | no | no |
-| Scaffold | Navigation | yes | yes | no | no |
-| AppBar | Navigation | yes | yes | no | no |
-| Sidebar | Navigation | yes | yes | no | no |
-| NavigationBar | Navigation | yes | yes | no | no |
-| NavigationRail | Navigation | yes | yes | no | no |
-| Drawer | Overlay/navigation | yes | yes | no | no |
-| Tabs | Navigation | yes | yes | no | no |
-| Breadcrumb | Navigation | yes | yes | no | no |
-| Stepper | Navigation | yes | yes | no | no |
-| Pagination | Navigation | yes | yes | no | no |
-| ListTile | Data display | yes | yes | no | no |
-| SearchableList | Data display | yes | yes | no | no |
-| VirtualList | Data display | yes | yes | no | no |
-| DataTable | Data display | yes | yes | no | no |
-| Tree | Data display | yes | yes | no | no |
-| DescriptionList | Data display | yes | yes | no | no |
-| Calendar | Data display | yes | yes | no | no |
-| DatePicker | Data display | yes | yes | no | no |
+| Dialog | Overlay | yes | yes | yes | yes |
+| AlertDialog | Overlay | yes | yes | yes | yes |
+| Popover | Overlay | yes | yes | yes | yes |
+| Sheet | Overlay | yes | yes | yes | yes |
+| BottomSheet | Overlay | yes | yes | yes | yes |
+| Toast | Feedback | yes | yes | yes | yes |
+| Notification | Feedback | yes | yes | yes | yes |
+| Banner | Feedback | yes | yes | yes | yes |
+| ContextMenu | Overlay | yes | yes | yes | yes |
+| CommandPalette | Overlay | yes | yes | yes | yes |
+| Tooltip | Overlay | yes | yes | yes | yes |
+| Scaffold | Navigation | yes | yes | yes | yes |
+| AppBar | Navigation | yes | yes | yes | yes |
+| Sidebar | Navigation | yes | yes | yes | yes |
+| NavigationBar | Navigation | yes | yes | yes | yes |
+| NavigationRail | Navigation | yes | yes | yes | yes |
+| Drawer | Overlay/navigation | yes | yes | yes | yes |
+| Tabs | Navigation | yes | yes | yes | yes |
+| Breadcrumb | Navigation | yes | yes | yes | yes |
+| Stepper | Navigation | yes | yes | yes | yes |
+| Pagination | Navigation | yes | yes | yes | yes |
+| ListTile | Data display | yes | yes | yes | yes |
+| SearchableList | Data display | yes | yes | yes | yes |
+| VirtualList | Data display | yes | yes | yes | yes |
+| DataTable | Data display | yes | yes | yes | yes |
+| Tree | Data display | yes | yes | yes | yes |
+| DescriptionList | Data display | yes | yes | yes | yes |
+| Calendar | Data display | yes | yes | yes | yes |
+| DatePicker | Data display | yes | yes | yes | yes |
 | TimePicker | Data display | yes | yes | no | no |
 | Separator | Container | yes | yes | yes | yes |
 | Accordion | Deferred display | yes | yes | no | no |
@@ -107,3 +107,13 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 | MessageScroller | Deferred data display | yes | yes | no | no |
 | ToggleGroup | Form/input | yes | yes | no | no |
 | Sonner | Deferred feedback | yes | yes | no | no |
+
+## Notes
+
+- `TimePicker` is protocol-declared and native-mapped but has no native time widget mapping yet;
+  it renders through the generic surface and stays unrendered.
+- Data-display kinds express empty and populated states only. Loading/error states are not
+  representable under the closed protocol schema; no renderer-side state semantics were invented.
+- Overlay kinds (Dialog/AlertDialog/Popover/Sheet/BottomSheet/Drawer/Toast/Notification/
+  ContextMenu/CommandPalette) are gated by host-owned dismissal state that resets whenever the
+  protocol reports them closed.

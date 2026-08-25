@@ -95,6 +95,28 @@ fn prop_f64(node: &PluginRenderNode, key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+fn prop_u64(node: &PluginRenderNode, key: &str, default: u64) -> u64 {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(default)
+}
+
+/// Declared string-list properties (`items`, `options`, `columns`, `commands`).
+fn prop_strings(node: &PluginRenderNode, key: &str) -> Vec<String> {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Parse one numeric input buffer for `NumberInput` change dispatch.
 fn parse_number_input(raw: &str) -> Option<f64> {
     raw.trim().parse::<f64>().ok().filter(|value| value.is_finite())
@@ -386,6 +408,9 @@ pub struct FoundationGallery {
     plugin_otps: BTreeMap<String, Entity<OtpState>>,
     plugin_state_subscriptions: BTreeMap<String, Vec<Subscription>>,
     visited_input_ids: BTreeSet<String>,
+    overlay_depth: usize,
+    dismissed_overlays: BTreeSet<String>,
+    overlay_focus: BTreeMap<String, FocusHandle>,
     component_date_picker: Entity<DatePickerState>,
     component_color_picker: Entity<ColorPickerState>,
     _component_subscriptions: Vec<Subscription>,
@@ -414,6 +439,9 @@ impl FoundationGallery {
             plugin_otps: BTreeMap::new(),
             plugin_state_subscriptions: BTreeMap::new(),
             visited_input_ids: BTreeSet::new(),
+            overlay_depth: 0,
+            dismissed_overlays: BTreeSet::new(),
+            overlay_focus: BTreeMap::new(),
             component_date_picker,
             component_color_picker,
             _component_subscriptions: Vec::new(),
@@ -684,6 +712,113 @@ impl FoundationGallery {
         self.plugin_otps.retain(|id, _| live.contains(id));
         self.plugin_state_subscriptions
             .retain(|id, _| live.contains(id));
+    }
+
+    /// Host-owned overlay gating: returns the stacking depth for a visible overlay, or `None`
+    /// when the overlay is closed or host-dismissed. Dismissal state resets whenever the
+    /// protocol reports the overlay closed so reopening works without remounts.
+    fn overlay_gate(
+        &mut self,
+        node_id: &str,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        if !open {
+            self.dismissed_overlays.remove(node_id);
+            return None;
+        }
+        if self.dismissed_overlays.contains(node_id) {
+            return None;
+        }
+        let depth = self.overlay_depth;
+        self.overlay_depth += 1;
+        self.overlay_focus
+            .entry(node_id.to_owned())
+            .or_insert_with(|| cx.focus_handle());
+        Some(depth)
+    }
+
+    fn dismiss_overlay(&mut self, node_id: &str, cx: &mut Context<Self>) {
+        self.dismissed_overlays.insert(node_id.to_owned());
+        cx.notify();
+    }
+
+    /// Shared empty-state placeholder used by data-display kinds when a declared collection
+    /// (items/columns/children) is absent. Loading/error states are not expressible under the
+    /// closed schema, so only empty and populated states exist.
+    fn empty_state_element(&self, label: &str) -> AnyElement {
+        div()
+            .id(format!("empty:{label}"))
+            .w_full()
+            .p_4()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(COLOR_BORDER_SUBTLE))
+            .bg(rgb(COLOR_SURFACE_VARIANT))
+            .flex()
+            .flex_col()
+            .items_center()
+            .text_sm()
+            .text_color(rgb(COLOR_MUTED))
+            .child(label.to_owned())
+            .into_any_element()
+    }
+
+    /// Full-screen overlay root with host-owned Escape dismissal. This gpui build has no
+    /// z-index; stacking follows tree paint order, so the gate depth only disambiguates IDs.
+    fn overlay_root(
+        &self,
+        node_id: &str,
+        depth: usize,
+        dimmed: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let dismiss_id = node_id.to_owned();
+        div()
+            .id(format!("{node_id}:overlay:{depth}"))
+            .absolute()
+            .inset_0()
+            .when(dimmed, |element| {
+                element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            })
+            .flex()
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key.as_str() == "escape" {
+                    // Host-owned dismissal: Escape hides the overlay locally; the dismissal
+                    // resets when the protocol reports `open=false` for the same node.
+                    this.dismiss_overlay(&dismiss_id, cx);
+                }
+            }))
+    }
+
+    fn overlay_panel(
+        title: String,
+        message: Option<String>,
+        width: f32,
+        children: Vec<AnyElement>,
+    ) -> gpui::Div {
+        div()
+            .w(px(width))
+            .max_w(px(560.0))
+            .p_6()
+            .rounded_xl()
+            .bg(rgb(COLOR_SURFACE))
+            .border_1()
+            .border_color(rgb(COLOR_BORDER))
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xl()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .when_some(message, |element, message| {
+                element.child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(message))
+            })
+            .children(children)
     }
 
     /// Render a Select or Combobox node from its closed schema (label/value/options/enabled).
@@ -1376,15 +1511,21 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Popover => {
-                let open = node
-                    .props
-                    .get("open")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
+                let requested_open = prop_bool(&node, "open", false);
+                // Host-owned gating keeps Escape-dismissal consistent with other overlays;
+                // the native popover still handles trigger-anchored presentation.
+                let open = self.overlay_gate(&node.id, requested_open, cx).is_some();
+                let popover_id = node.id.clone();
                 Popover::new(node.id)
                     .default_open(open)
                     .trigger(Button::new("popover-trigger").secondary().label("Open"))
-                    .content(|_, _, _| div().p_3().child("Popover content"))
+                    .content(move |_, _, _| {
+                        div().p_3().min_w(px(180.0)).children(children.clone())
+                    })
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
                     .into_any_element()
             }
             NodeKind::Avatar => {
@@ -1510,6 +1651,11 @@ impl FoundationGallery {
             }
             NodeKind::Sidebar => div()
                 .id(node.id)
+                .role(Role::Navigation)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w(px(220.0))
                 .h_full()
                 .min_h_0()
@@ -1539,6 +1685,11 @@ impl FoundationGallery {
                 .into_any_element(),
             NodeKind::AppBar => div()
                 .id(node.id)
+                .role(Role::Banner)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
                 .h(px(56.0))
                 .flex_shrink_0()
@@ -1554,6 +1705,11 @@ impl FoundationGallery {
                 .into_any_element(),
             NodeKind::Scaffold => div()
                 .id(node.id)
+                .role(Role::GenericContainer)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .size_full()
                 .flex()
                 .flex_col()
@@ -1561,22 +1717,51 @@ impl FoundationGallery {
                 .bg(rgb(COLOR_BACKGROUND))
                 .children(children)
                 .into_any_element(),
-            NodeKind::Tabs => div()
-                .id(node.id)
-                .w_full()
-                .flex()
-                .flex_row()
-                .gap_2()
-                .items_center()
-                .p_1()
-                .rounded_lg()
-                .bg(rgb(COLOR_SURFACE_VARIANT))
-                .children(children)
-                .into_any_element(),
+            NodeKind::Tabs => {
+                let items = prop_strings(&node, "items");
+                div()
+                    .id(node.id)
+                    .role(Role::TabList)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap_2()
+                            .items_center()
+                            .p_1()
+                            .rounded_lg()
+                            .bg(rgb(COLOR_SURFACE_VARIANT))
+                            // Tab selection is carried per-child via `selected`; this header
+                            // renders only the declared item labels without inventing state.
+                            .children(items.iter().map(|item| {
+                                div().id(format!("{}:tab:{item}", node.id)).role(Role::Tab).text_sm().child(item.clone())
+                            })),
+                    )
+                    .children(children)
+                    .into_any_element()
+            }
             NodeKind::Breadcrumb => div()
                 .id(node.id)
+                .role(Role::Navigation)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
+                .min_w_0()
+                .overflow_hidden()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .text_sm()
@@ -1585,6 +1770,11 @@ impl FoundationGallery {
                 .into_any_element(),
             NodeKind::StatusBar => div()
                 .id(node.id)
+                .role(Role::Footer)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
                 .h(px(24.0))
                 .flex_shrink_0()
@@ -1599,14 +1789,210 @@ impl FoundationGallery {
                 .border_color(rgb(COLOR_BORDER_SUBTLE))
                 .children(children)
                 .into_any_element(),
-            NodeKind::NavigationBar | NodeKind::NavigationRail => div()
+            NodeKind::NavigationBar | NodeKind::NavigationRail => {
+                let vertical = node.kind == NodeKind::NavigationRail;
+                div()
+                    .id(node.id)
+                    .role(Role::Navigation)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .flex_shrink_0()
+                    .flex()
+                    .when(vertical, gpui::Styled::flex_col)
+                    .when(!vertical, gpui::Styled::flex_row)
+                    .when(vertical, |element| element.h_full())
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .rounded_lg()
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Stepper => {
+                let items = prop_strings(&node, "items");
+                let step = prop_u64(&node, "step", 0) as usize;
+                div()
+                    .id(node.id)
+                    .role(Role::List)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .when(items.is_empty() && children.is_empty(), |element| {
+                        element.child(self.empty_state_element("No steps"))
+                    })
+                    .children(items.iter().enumerate().map(|(index, label)| {
+                        let current = index == step;
+                        div()
+                            .id(format!("{}:step:{index}", node.id))
+                            .role(Role::ListItem)
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_sm()
+                            .text_color(if current || index < step {
+                                rgb(COLOR_TEXT)
+                            } else {
+                                rgb(COLOR_MUTED)
+                            })
+                            .child(format!("{}. {label}", index + 1))
+                    }))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Pagination => {
+                let page = prop_u64(&node, "page", 1).max(1);
+                let pages = prop_u64(&node, "pages", 1).max(1);
+                div()
+                    .id(node.id)
+                    .role(Role::Navigation)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER_SUBTLE))
+                    .bg(rgb(COLOR_SURFACE))
+                    .text_sm()
+                    .child("‹")
+                    .child(div().child(format!("Page {page} of {pages}")))
+                    .child("›")
+                    .into_any_element()
+            }
+            NodeKind::ListTile => div()
                 .id(node.id)
+                .role(Role::ListItem)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
+                .justify_between()
+                .gap_3()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(COLOR_BORDER_SUBTLE))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(prop_str(&node, "label").unwrap_or_default().to_owned()),
+                )
+                .children(children)
+                .into_any_element(),
+            NodeKind::SearchableList | NodeKind::VirtualList => div()
+                .id(node.id)
+                .role(Role::List)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
+                .max_h(px(320.0))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(children.is_empty(), |element| {
+                    element.child(self.empty_state_element("No entries"))
+                })
+                .children(children)
+                .into_any_element(),
+            NodeKind::DataTable => {
+                let columns = prop_strings(&node, "columns");
+                let populated = !columns.is_empty() || !children.is_empty();
+                div()
+                    .id(node.id)
+                    .role(Role::Table)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(!populated, |element| {
+                        element.child(self.empty_state_element("No rows"))
+                    })
+                    .when(!columns.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .role(Role::Row)
+                                .flex()
+                                .gap_4()
+                                .pb_1()
+                                .border_b_1()
+                                .border_color(rgb(COLOR_BORDER))
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(rgb(COLOR_MUTED))
+                                .children(columns.iter().map(|column| {
+                                    div().id(format!("{}:col:{column}", node.id)).child(column.clone())
+                                })),
+                        )
+                    })
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Tree => div()
+                .id(node.id)
+                .role(Role::Tree)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pl_3()
+                .border_l_1()
+                .border_color(rgb(COLOR_BORDER_SUBTLE))
+                .when(children.is_empty(), |element| {
+                    element.child(self.empty_state_element("No nodes"))
+                })
+                .children(children)
+                .into_any_element(),
+            NodeKind::DescriptionList => div()
+                .id(node.id)
+                .role(Role::DescriptionList)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
+                .grid()
+                .grid_cols(2)
                 .gap_2()
-                .p_2()
-                .rounded_lg()
-                .bg(rgb(COLOR_SURFACE_VARIANT))
+                .when(children.is_empty(), |element| {
+                    element.child(self.empty_state_element("No details"))
+                })
                 .children(children)
                 .into_any_element(),
             NodeKind::Accordion
@@ -1628,14 +2014,6 @@ impl FoundationGallery {
             | NodeKind::Item
             | NodeKind::MessageScroller
             | NodeKind::ToggleGroup
-            | NodeKind::Stepper
-            | NodeKind::Pagination
-            | NodeKind::ListTile
-            | NodeKind::SearchableList
-            | NodeKind::VirtualList
-            | NodeKind::DataTable
-            | NodeKind::Tree
-            | NodeKind::DescriptionList
             | NodeKind::TimePicker => div()
                 .id(node.id)
                 .w_full()
@@ -1651,68 +2029,325 @@ impl FoundationGallery {
                 .children(children)
                 .into_any_element(),
             NodeKind::Dialog => {
-                let open = node
-                    .props
-                    .get("open")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                if !open {
+                let open = prop_bool(&node, "open", false);
+                let title = prop_str(&node, "title").unwrap_or("Dialog").to_owned();
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
-                }
-                let title = node
-                    .props
-                    .get("title")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Dialog")
-                    .to_owned();
-                div()
-                    .id(node.id)
-                    .absolute()
-                    .inset_0()
-                    .flex()
+                };
+                let panel = Self::overlay_panel(title, None, 480.0, children)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .id(format!("{}:panel", node.id))
+                    .role(Role::Dialog);
+                // UNVERIFIED: focus is tracked host-side (overlay_focus handles + tab order);
+                // full Tab cycling inside the overlay must be confirmed by the runner pass.
+                let root = self
+                    .overlay_root(&node.id, depth, true, cx)
                     .items_center()
                     .justify_center()
-                    .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+                    .child(panel);
+                if self.model.reduced_motion() {
+                    root.into_any_element()
+                } else {
+                    root.with_animation(
+                        format!("{}:fade", node.id),
+                        Animation::new(Duration::from_millis(150)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+                }
+            }
+            NodeKind::AlertDialog => {
+                let open = prop_bool(&node, "open", false);
+                let title = prop_str(&node, "title")
+                    .unwrap_or("Confirm")
+                    .to_owned();
+                let message = prop_str(&node, "message").map(ToOwned::to_owned);
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let panel = Self::overlay_panel(title, message, 420.0, children)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .id(format!("{}:panel", node.id))
+                    .role(Role::AlertDialog);
+                let root = self
+                    .overlay_root(&node.id, depth, true, cx)
+                    .items_center()
+                    .justify_center()
+                    .child(panel);
+                if self.model.reduced_motion() {
+                    root.into_any_element()
+                } else {
+                    root.with_animation(
+                        format!("{}:fade", node.id),
+                        Animation::new(Duration::from_millis(150)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+                }
+            }
+            NodeKind::Sheet | NodeKind::BottomSheet | NodeKind::Drawer => {
+                let open = prop_bool(&node, "open", false);
+                let title = prop_str(&node, "title").unwrap_or("").to_owned();
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let panel_id = format!("{}:panel", node.id);
+                let panel = div()
+                    .id(panel_id)
+                    .role(Role::Dialog)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .bg(rgb(COLOR_SURFACE))
+                    .border_color(rgb(COLOR_BORDER))
+                    .shadow_lg()
+                    .p_5()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(!title.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .text_lg()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(title),
+                        )
+                    })
+                    .children(children);
+                // Sheets anchor to their declared edge; drawers dock left like sheets.
+                let panel = match node.kind {
+                    NodeKind::BottomSheet => panel
+                        .w_full()
+                        .max_h(px(320.0))
+                        .rounded_t_xl()
+                        .border_t_1(),
+                    NodeKind::Drawer => panel.w(px(280.0)).h_full().rounded_r_xl().border_r_1(),
+                    _ => panel.w(px(360.0)).h_full().rounded_l_xl().border_l_1(),
+                };
+                let root = self.overlay_root(&node.id, depth, true, cx);
+                let root = if node.kind == NodeKind::BottomSheet {
+                    root.items_end().justify_center()
+                } else if node.kind == NodeKind::Drawer {
+                    root.items_stretch().justify_start()
+                } else {
+                    root.items_stretch().justify_end()
+                };
+                let root = root.child(panel);
+                if self.model.reduced_motion() {
+                    root.into_any_element()
+                } else {
+                    root.with_animation(
+                        format!("{}:fade", node.id),
+                        Animation::new(Duration::from_millis(150)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+                }
+            }
+            NodeKind::Toast => {
+                let message = prop_str(&node, "message");
+                if message.is_none() {
+                    // No open property exists for toasts; a missing message means closed and
+                    // clears any host-owned dismissal so the next message shows again.
+                    self.dismissed_overlays.remove(&node.id);
+                    return div().id(node.id).hidden().into_any_element();
+                }
+                let Some(depth) = self.overlay_gate(&node.id, true, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let dismiss_id = node.id.clone();
+                self.overlay_root(&node.id, depth, false, cx)
+                    .items_start()
+                    .justify_center()
+                    .pt_4()
                     .child(
                         div()
-                            .w(px(480.0))
-                            .max_w(px(520.0))
-                            .p_6()
-                            .rounded_xl()
-                            .bg(rgb(COLOR_SURFACE))
-                            .border_1()
-                            .border_color(rgb(COLOR_BORDER))
+                            .id(format!("{}:toast", node.id))
+                            .role(Role::Alert)
+                            .when_some(accessibility_label.clone(), |element, aria| {
+                                element.aria_label(aria)
+                            })
+                            .px_4()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(COLOR_TEXT))
+                            .text_color(rgb(COLOR_SURFACE))
+                            .text_sm()
                             .shadow_lg()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .mb_4()
-                                    .child(title),
-                            )
-                            .children(children),
+                            .child(message.unwrap_or_default())
+                            // Host-owned dismissal: clicking a toast dismisses it locally.
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dismiss_overlay(&dismiss_id, cx);
+                            })),
                     )
                     .into_any_element()
             }
-            NodeKind::AlertDialog
-            | NodeKind::Sheet
-            | NodeKind::BottomSheet
-            | NodeKind::Drawer
-            | NodeKind::Toast
-            | NodeKind::Notification
-            | NodeKind::Banner
-            | NodeKind::ContextMenu
-            | NodeKind::CommandPalette
-            | NodeKind::Tooltip => div()
+            NodeKind::Notification => {
+                let message = prop_str(&node, "message");
+                if message.is_none() {
+                    self.dismissed_overlays.remove(&node.id);
+                    return div().id(node.id).hidden().into_any_element();
+                }
+                let Some(depth) = self.overlay_gate(&node.id, true, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let dismiss_id = node.id.clone();
+                self.overlay_root(&node.id, depth, false, cx)
+                    .items_start()
+                    .justify_end()
+                    .p_4()
+                    .child(
+                        div()
+                            .id(format!("{}:notification", node.id))
+                            .role(Role::Alert)
+                            .when_some(accessibility_label.clone(), |element, aria| {
+                                element.aria_label(aria)
+                            })
+                            .w(px(320.0))
+                            .p_3()
+                            .rounded_md()
+                            .bg(rgb(COLOR_CARD))
+                            .border_1()
+                            .border_color(rgb(COLOR_BORDER))
+                            .shadow_lg()
+                            .text_sm()
+                            .child(message.unwrap_or_default())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dismiss_overlay(&dismiss_id, cx);
+                            })),
+                    )
+                    .into_any_element()
+            }
+            NodeKind::Banner => div()
                 .id(node.id)
+                .role(Role::Alert)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
-                .p_3()
-                .rounded_lg()
+                .px_4()
+                .py_2()
+                .rounded_md()
+                .bg(rgb(COLOR_SURFACE_VARIANT))
                 .border_1()
                 .border_color(rgb(COLOR_BORDER))
-                .bg(rgb(COLOR_CARD))
+                .text_sm()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(prop_str(&node, "message").unwrap_or_default().to_owned())
                 .children(children)
                 .into_any_element(),
+            NodeKind::ContextMenu => {
+                let open = prop_bool(&node, "open", false);
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                // No position property exists in the closed schema, so the menu surfaces
+                // centered until the protocol grows placement semantics.
+                let menu = div()
+                    .id(format!("{}:menu", node.id))
+                    .role(Role::Menu)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w(px(200.0))
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(COLOR_CARD))
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when_some(prop_str(&node, "message"), |element, header| {
+                        element.child(
+                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
+                                header.to_owned(),
+                            ),
+                        )
+                    })
+                    .children(children);
+                self.overlay_root(&node.id, depth, false, cx)
+                    .items_center()
+                    .justify_center()
+                    .child(menu)
+                    .into_any_element()
+            }
+            NodeKind::CommandPalette => {
+                let open = prop_bool(&node, "open", false);
+                let placeholder =
+                    prop_str(&node, "placeholder").unwrap_or("Type a command").to_owned();
+                let commands = prop_strings(&node, "commands");
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let palette = div()
+                    .id(format!("{}:palette", node.id))
+                    .role(Role::Dialog)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w(px(520.0))
+                    .max_h(px(400.0))
+                    .overflow_y_scroll()
+                    .p_2()
+                    .rounded_lg()
+                    .bg(rgb(COLOR_CARD))
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().px_2().py_1().text_sm().text_color(rgb(COLOR_MUTED)).child(placeholder))
+                    .when(commands.is_empty(), |element| {
+                        element.child(self.empty_state_element("No commands"))
+                    })
+                    .children(commands.iter().map(|command| {
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .text_sm()
+                            .hover(|style| style.bg(rgb(COLOR_SURFACE_VARIANT)))
+                            .child(command.clone())
+                    }))
+                    .children(children);
+                self.overlay_root(&node.id, depth, true, cx)
+                    .items_start()
+                    .justify_center()
+                    .pt_16()
+                    .child(palette)
+                    .into_any_element()
+            }
+            NodeKind::Tooltip => {
+                let tip = prop_str(&node, "message").unwrap_or_default().to_owned();
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
+                    .inline_flex()
+                    .children(children)
+                    .when(!tip.is_empty(), |element| {
+                        element.tooltip(move |window, cx| {
+                            use gpui_component::tooltip;
+                            tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                        })
+                    })
+                    .into_any_element()
+            }
             NodeKind::Text => {
                 let role = node
                     .props
@@ -2183,6 +2818,7 @@ impl Render for FoundationGallery {
                 .as_ref()
                 .map(|shell| shell.current_route().to_owned());
             self.visited_input_ids.clear();
+            self.overlay_depth = 0;
             let plugin = self.plugin_node(root, window, cx);
             // Retained form-widget states are keyed by stable node ID; states whose nodes left
             // the render tree are pruned so removals do not leak native widgets or buffers.
@@ -2367,7 +3003,10 @@ impl Render for FoundationGallery {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, image_format, parse_number_input};
+    use super::{
+        image_format, parse_number_input, prop_strings, prop_u64, ImageFormat, PluginRenderNode,
+    };
+    use studio_protocol::NodeKind;
 
     #[test]
     fn detects_common_image_formats_from_extension_or_bytes() {
@@ -2400,5 +3039,31 @@ mod tests {
         assert_eq!(parse_number_input("abc"), None);
         assert_eq!(parse_number_input("NaN"), None);
         assert_eq!(parse_number_input("inf"), None);
+    }
+
+    #[test]
+    fn reads_declared_string_list_properties_for_data_display() {
+        use std::collections::BTreeMap;
+        let props: BTreeMap<String, serde_json::Value> = BTreeMap::from([
+            (
+                "columns".to_owned(),
+                serde_json::json!(["Name", "Price"]),
+            ),
+            ("items".to_owned(), serde_json::json!([])),
+        ]);
+        let node = PluginRenderNode {
+            id: "table".to_owned(),
+            kind: NodeKind::DataTable,
+            control: None,
+            props,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            super::prop_strings(&node, "columns"),
+            vec!["Name".to_owned(), "Price".to_owned()]
+        );
+        assert!(super::prop_strings(&node, "items").is_empty());
+        assert!(super::prop_strings(&node, "missing").is_empty());
+        assert_eq!(super::prop_u64(&node, "pages", 1), 1);
     }
 }

@@ -268,10 +268,12 @@ const fn readiness(kind: NodeKind) -> ComponentReadiness {
         kind,
         protocol_declared: true,
         native_mapped: true,
-        semantically_rendered: batch_a_rendered(kind) || batch_b_rendered(kind),
+        semantically_rendered: batch_a_rendered(kind)
+            || batch_b_rendered(kind)
+            || batch_c_rendered(kind),
         // Verified means automated fixtures cover the contract; the serialized runner/fixer pass
         // executes them after the writer pass.
-        verified: batch_a_rendered(kind) || batch_b_rendered(kind),
+        verified: batch_a_rendered(kind) || batch_b_rendered(kind) || batch_c_rendered(kind),
     }
 }
 
@@ -324,6 +326,47 @@ const fn batch_b_rendered(kind: NodeKind) -> bool {
             | NodeKind::InputGroup
             | NodeKind::OtpInput
             | NodeKind::SecretInput
+    )
+}
+
+/// Batch C: overlay kinds with host-owned gating/stacking/dismissal/reduced-motion, navigation
+/// shells, and data-display kinds with empty/populated state handling. `TimePicker` stays out:
+/// no native time widget is mapped yet.
+const fn batch_c_rendered(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Dialog
+            | NodeKind::AlertDialog
+            | NodeKind::Popover
+            | NodeKind::Sheet
+            | NodeKind::BottomSheet
+            | NodeKind::Drawer
+            | NodeKind::Toast
+            | NodeKind::Notification
+            | NodeKind::Banner
+            | NodeKind::ContextMenu
+            | NodeKind::CommandPalette
+            | NodeKind::Tooltip
+            | NodeKind::ProgressIndicator
+            | NodeKind::ProgressCircle
+            | NodeKind::Spinner
+            | NodeKind::Scaffold
+            | NodeKind::AppBar
+            | NodeKind::Sidebar
+            | NodeKind::NavigationBar
+            | NodeKind::NavigationRail
+            | NodeKind::Tabs
+            | NodeKind::Breadcrumb
+            | NodeKind::Stepper
+            | NodeKind::Pagination
+            | NodeKind::ListTile
+            | NodeKind::SearchableList
+            | NodeKind::VirtualList
+            | NodeKind::DataTable
+            | NodeKind::Tree
+            | NodeKind::DescriptionList
+            | NodeKind::Calendar
+            | NodeKind::DatePicker
     )
 }
 

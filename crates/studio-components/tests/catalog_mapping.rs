@@ -200,7 +200,12 @@ fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
         assert!(readiness.verified, "{kind:?}");
     }
 
-    for kind in [NodeKind::Dialog, NodeKind::DataTable, NodeKind::Toast] {
+    for kind in [
+        NodeKind::Accordion,
+        NodeKind::TimePicker,
+        NodeKind::ToggleGroup,
+        NodeKind::Chart,
+    ] {
         let readiness = component_readiness(kind);
         assert!(readiness.native_mapped, "{kind:?}");
         assert!(!readiness.semantically_rendered, "{kind:?}");
@@ -244,6 +249,48 @@ fn form_input_kinds_are_semantically_rendered_after_batch_b() {
         ))
         .unwrap();
     assert!(secret.host_owned_value);
+}
+
+#[test]
+fn overlay_navigation_and_data_display_kinds_are_rendered_after_batch_c() {
+    for kind in [
+        NodeKind::Dialog,
+        NodeKind::AlertDialog,
+        NodeKind::Popover,
+        NodeKind::Sheet,
+        NodeKind::BottomSheet,
+        NodeKind::Drawer,
+        NodeKind::Toast,
+        NodeKind::Notification,
+        NodeKind::Banner,
+        NodeKind::ContextMenu,
+        NodeKind::CommandPalette,
+        NodeKind::Tooltip,
+        NodeKind::ProgressIndicator,
+        NodeKind::ProgressCircle,
+        NodeKind::Spinner,
+        NodeKind::Scaffold,
+        NodeKind::AppBar,
+        NodeKind::Sidebar,
+        NodeKind::NavigationBar,
+        NodeKind::NavigationRail,
+        NodeKind::Tabs,
+        NodeKind::Breadcrumb,
+        NodeKind::Stepper,
+        NodeKind::Pagination,
+        NodeKind::ListTile,
+        NodeKind::SearchableList,
+        NodeKind::VirtualList,
+        NodeKind::DataTable,
+        NodeKind::Tree,
+        NodeKind::DescriptionList,
+        NodeKind::Calendar,
+        NodeKind::DatePicker,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.semantically_rendered, "{kind:?}");
+        assert!(readiness.verified, "{kind:?}");
+    }
 }
 
 #[test]
