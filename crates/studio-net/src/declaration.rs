@@ -314,7 +314,7 @@ pub struct RetryPolicy {
 ///
 /// Compilation happens once at broker construction so per-request admission performs no string
 /// grammar work beyond matching.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CompiledRouteGroup {
     id: String,
     origins: Vec<Origin>,

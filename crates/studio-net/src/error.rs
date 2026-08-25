@@ -17,6 +17,10 @@ pub enum BrokerErrorCode {
     PathNotDeclared,
     /// The matched group exists but does not declare the request method.
     MethodNotAllowed,
+    /// The route is declared streaming and must be consumed through [`crate::guest`].
+    RouteIsStreaming,
+    /// The route is not declared streaming but was opened as a stream.
+    RouteNotStreaming,
     /// The request carried a header the matched group does not declare.
     HeaderNotAllowed,
     /// The request body exceeded the effective byte bound.
@@ -58,6 +62,8 @@ impl BrokerErrorCode {
             Self::OriginNotDeclared => "net.route.origin_not_declared",
             Self::PathNotDeclared => "net.route.path_not_declared",
             Self::MethodNotAllowed => "net.route.method_not_allowed",
+            Self::RouteIsStreaming => "net.route.is_streaming",
+            Self::RouteNotStreaming => "net.route.not_streaming",
             Self::HeaderNotAllowed => "net.route.header_not_allowed",
             Self::RequestTooLarge => "net.request.too_large",
             Self::RequestSchemaInvalid => "net.request.schema_invalid",

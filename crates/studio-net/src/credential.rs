@@ -11,12 +11,39 @@
 use std::sync::{Arc, Mutex};
 
 use studio_security::{
-    BrokerCredentialError, BrokerCredentialSink, BrokerSecretInjector, ProtectedSecretErrorCode,
-    SensitiveValueFilter,
+    BrokerCredentialError, BrokerCredentialSink, ProtectedSecretErrorCode, SensitiveValueFilter,
 };
 
 use crate::declaration::CompiledRouteGroup;
 use crate::error::{BrokerError, BrokerErrorCode};
+
+/// Object-safe adapter around the sealed [`studio_security::BrokerSecretInjector`] capability so
+/// the broker can hold one injector behind a `Arc<dyn ...>` without carrying credential-backend
+/// generics or store lifetimes.
+pub trait NamedSecretInjector: Send + Sync {
+    /// Forward to the underlying send-time injection hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying safe [`studio_security::ProtectedSecretError`].
+    fn inject_named_secret(
+        &self,
+        key: &studio_security::ProtectedSecretKey,
+        sink: &mut dyn BrokerCredentialSink,
+    ) -> Result<(), studio_security::ProtectedSecretError>;
+}
+
+impl<B: studio_security::CredentialBackend> NamedSecretInjector
+    for studio_security::BrokerSecretInjectionHandle<'_, B>
+{
+    fn inject_named_secret(
+        &self,
+        key: &studio_security::ProtectedSecretKey,
+        sink: &mut dyn BrokerCredentialSink,
+    ) -> Result<(), studio_security::ProtectedSecretError> {
+        studio_security::BrokerSecretInjector::inject_at_send_time(self, key, sink)
+    }
+}
 
 /// Typed host seam for OAuth provider-plugin sessions (ticket 21).
 ///
@@ -86,9 +113,9 @@ impl BrokerCredentialSink for HeaderInjectionSink<'_> {
 /// Returns [`BrokerErrorCode::CredentialUnavailable`],
 /// [`BrokerErrorCode::InjectionRejected`], or [`BrokerErrorCode::OauthSessionUnavailable`] as
 /// stable codes without any credential context.
-pub fn resolve<I: BrokerSecretInjector + ?Sized>(
+pub fn resolve(
     group: &CompiledRouteGroup,
-    injector: Option<&I>,
+    injector: Option<&Arc<dyn NamedSecretInjector>>,
     oauth: Option<&Arc<dyn OAuthSessionResolver>>,
     headers: &mut Vec<(String, String)>,
     filter: &Mutex<SensitiveValueFilter>,
@@ -123,7 +150,7 @@ pub fn resolve<I: BrokerSecretInjector + ?Sized>(
                 filter,
             );
             injector
-                .inject_at_send_time(key, &mut sink)
+                .inject_named_secret(key, &mut sink)
                 .map_err(|error| map_injection_error(error.code()))
         }
         _ => Err(BrokerError::new(BrokerErrorCode::DeclarationInvalid)),
