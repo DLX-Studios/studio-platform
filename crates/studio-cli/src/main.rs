@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use studio_script::{format, parse, Diagnostic, Severity, CODE_NON_CANONICAL_FORMAT};
 
 #[derive(Parser)]
 #[command(
@@ -35,6 +36,21 @@ enum Commands {
     },
     /// Generate protocol schemas + AssemblyScript bindings
     Generate,
+    /// Validate `.studio` files and emit one structured JSON diagnostic per finding
+    Check {
+        /// Files or directories to check. Directories are searched recursively.
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+    },
+    /// Rewrite `.studio` files using the canonical Studio Script printer
+    Fmt {
+        /// Files or directories to format. Directories are searched recursively.
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Check formatting without modifying files.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -44,7 +60,167 @@ fn main() -> Result<()> {
         Commands::Build { example } => build(&example),
         Commands::Preview { example } => preview(&example),
         Commands::Generate => generate(),
+        Commands::Check { paths } => {
+            if check_studio_files(&paths)? {
+                Ok(())
+            } else {
+                std::process::exit(1);
+            }
+        }
+        Commands::Fmt { paths, check } => {
+            if format_studio_files(&paths, check)? {
+                Ok(())
+            } else {
+                std::process::exit(1);
+            }
+        }
     }
+}
+
+fn studio_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let roots = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths.to_vec()
+    };
+    let mut files = Vec::new();
+    for root in roots {
+        if root.is_file() {
+            files.push(root);
+            continue;
+        }
+        if !root.is_dir() {
+            anyhow::bail!("path does not exist: {}", root.display());
+        }
+        for entry in walkdir::WalkDir::new(root) {
+            let entry = entry?;
+            if entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "studio")
+            {
+                files.push(entry.path().to_path_buf());
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn check_studio_files(paths: &[PathBuf]) -> Result<bool> {
+    let files = studio_files(paths)?;
+    let mut valid = true;
+    for path in files {
+        let source = match std::fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(error) => {
+                print_io_diagnostic(&path, &error);
+                valid = false;
+                continue;
+            }
+        };
+        match parse(&source) {
+            Ok(_) => print_status(&path, true, false),
+            Err(error) => {
+                print_diagnostics(&path, &error.diagnostics);
+                valid = false;
+            }
+        }
+    }
+    Ok(valid)
+}
+
+fn format_studio_files(paths: &[PathBuf], check_only: bool) -> Result<bool> {
+    let files = studio_files(paths)?;
+    let mut valid = true;
+    for path in files {
+        let source = match std::fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(error) => {
+                print_io_diagnostic(&path, &error);
+                valid = false;
+                continue;
+            }
+        };
+        let canonical = match format(&source) {
+            Ok(canonical) => canonical,
+            Err(error) => {
+                print_diagnostics(&path, &error.diagnostics);
+                valid = false;
+                continue;
+            }
+        };
+        if source == canonical {
+            print_status(&path, true, false);
+        } else if check_only {
+            let diagnostic = Diagnostic {
+                code: CODE_NON_CANONICAL_FORMAT,
+                severity: Severity::Error,
+                message: "file is not in canonical Studio Script format".to_owned(),
+                span: studio_script::Span {
+                    start: studio_script::Location {
+                        line: 1,
+                        column: 1,
+                        offset: 0,
+                    },
+                    end: studio_script::Location {
+                        line: 1,
+                        column: 1,
+                        offset: 0,
+                    },
+                },
+            };
+            print_diagnostics(&path, &[diagnostic]);
+            valid = false;
+        } else {
+            std::fs::write(&path, canonical)
+                .with_context(|| format!("write canonical Studio Script to {}", path.display()))?;
+            print_status(&path, true, true);
+        }
+    }
+    Ok(valid)
+}
+
+fn print_status(path: &Path, ok: bool, changed: bool) {
+    let value = serde_json::json!({
+        "path": path.display().to_string(),
+        "ok": ok,
+        "changed": changed,
+    });
+    println!("{value}");
+}
+
+fn print_diagnostics(path: &Path, diagnostics: &[Diagnostic]) {
+    for diagnostic in diagnostics {
+        let value = serde_json::json!({
+            "path": path.display().to_string(),
+            "code": diagnostic.code,
+            "severity": match diagnostic.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            },
+            "message": diagnostic.message,
+            "line": diagnostic.span.start.line,
+            "column": diagnostic.span.start.column,
+            "offset": diagnostic.span.start.offset,
+        });
+        println!("{value}");
+    }
+}
+
+fn print_io_diagnostic(path: &Path, error: &std::io::Error) {
+    let value = serde_json::json!({
+        "path": path.display().to_string(),
+        "code": "STUDIO_IO",
+        "severity": "error",
+        "message": error.to_string(),
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+    });
+    println!("{value}");
 }
 
 fn repo_root() -> PathBuf {

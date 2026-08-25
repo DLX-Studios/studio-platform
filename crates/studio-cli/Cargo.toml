@@ -17,3 +17,4 @@ serde_json = "1.0"
 studio-package = { path = "../studio-package" }
 walkdir = "2.5"
 regex = "1.11"
+studio-script = { path = "../studio-script" }
