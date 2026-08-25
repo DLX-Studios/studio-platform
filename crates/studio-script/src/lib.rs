@@ -58,6 +58,13 @@
 //! The parser applies resource limits before allocating untrusted structures.
 //! [`ParseOptions`] can be tightened by callers processing hostile or
 //! user-supplied fixtures.
+//!
+//! # Typed IR
+//!
+//! The typed Studio intermediate representation ([`ir`]) lives behind this
+//! boundary; it never leaks into caller-facing parser types.
+
+pub mod ir;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
