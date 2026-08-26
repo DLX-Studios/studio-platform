@@ -7,6 +7,8 @@ rust-version.workspace = true
 description = "Studio Script parser of record, canonical printer, and compiler boundary"
 
 [dependencies]
+serde_json.workspace = true
+studio-protocol = { path = "../studio-protocol" }
 thiserror.workspace = true
 
 [lints]
