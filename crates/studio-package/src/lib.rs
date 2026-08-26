@@ -18,7 +18,8 @@ pub use integrity::{
     canonical_bundle_document, canonicalize_json, verify_bundle_signature,
 };
 pub use manifest::{
-    BundleLimits, Capability, ManifestPolicy, ManifestV1, Publisher, parse_manifest,
+    BundleLimits, Capability, ManifestPolicy, ManifestV1, Publisher, SecretDeclaration,
+    parse_manifest,
 };
 pub use pack::{PackError, PackInput, PackMode, pack_bundle};
 pub use sign::sign_bundle;

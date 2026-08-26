@@ -16,6 +16,7 @@ thiserror.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+studio-security = { path = "../studio-security" }
 serde_json.workspace = true
 zip.workspace = true
 

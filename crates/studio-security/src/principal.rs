@@ -12,6 +12,7 @@ pub enum TrustMode {
 /// Complete identity used for host authorization and opaque-reference scoping.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PluginPrincipal {
+    publisher_id: String,
     publisher_key_id: String,
     plugin_id: String,
     bundle_digest: [u8; 32],
@@ -34,17 +35,54 @@ impl PluginPrincipal {
         trust_mode: TrustMode,
     ) -> Result<Self, crate::SecurityError> {
         let publisher_key_id = publisher_key_id.into();
+        Self::new_verified(
+            publisher_key_id.clone(),
+            publisher_key_id,
+            plugin_id,
+            bundle_digest,
+            instance_id,
+            trust_mode,
+        )
+    }
+
+    /// Create a principal with distinct verified publisher and publisher-key identities.
+    ///
+    /// The host calls this only after matching the manifest publisher/key pair to a verified
+    /// bundle signature. The stable publisher identity is intentionally separate from the key
+    /// identity so publisher signing-key rotation does not move protected application state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::SecurityError`] when a textual identity is empty, oversized, or contains
+    /// control characters.
+    pub fn new_verified(
+        publisher_id: impl Into<String>,
+        publisher_key_id: impl Into<String>,
+        plugin_id: impl Into<String>,
+        bundle_digest: [u8; 32],
+        instance_id: [u8; 16],
+        trust_mode: TrustMode,
+    ) -> Result<Self, crate::SecurityError> {
+        let publisher_id = publisher_id.into();
+        let publisher_key_id = publisher_key_id.into();
         let plugin_id = plugin_id.into();
-        if !valid_id(&publisher_key_id) || !valid_id(&plugin_id) {
+        if !valid_id(&publisher_id) || !valid_id(&publisher_key_id) || !valid_id(&plugin_id) {
             return Err(crate::SecurityError::request_invalid());
         }
         Ok(Self {
+            publisher_id,
             publisher_key_id,
             plugin_id,
             bundle_digest,
             instance_id,
             trust_mode,
         })
+    }
+
+    /// Stable verified publisher identity.
+    #[must_use]
+    pub fn publisher_id(&self) -> &str {
+        &self.publisher_id
     }
 
     /// Provisioned publisher key identity.
