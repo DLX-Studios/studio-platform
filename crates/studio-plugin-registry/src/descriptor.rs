@@ -831,9 +831,11 @@ fn validate_secret_name(value: &str) -> Result<(), DescriptorError> {
     let valid = !value.is_empty()
         && value.len() <= MAX_ID_BYTES
         && value.starts_with(|character: char| character.is_ascii_lowercase())
-        && value
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '.' | '-' | '_'));
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-' | '_')
+        });
     if valid {
         Ok(())
     } else {
