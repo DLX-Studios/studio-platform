@@ -10,10 +10,10 @@ mod secret;
 
 pub use capability::{ActionGate, CapabilityId, SecurityError, SecurityErrorCode};
 pub use environment::{
-    apply_promotion, resolve_active_environment, ActiveEnvironment, EnvironmentDataKey,
-    EnvironmentDataScope, EnvironmentDataStore, EnvironmentError, EnvironmentErrorCode,
-    PromotionDirection, PromotionEntry, PromotionPlan, PromotionReceipt,
-    ProtectedConfiguration, SecretFreeMetadata,
+    ActiveEnvironment, EnvironmentDataKey, EnvironmentDataScope, EnvironmentDataStore,
+    EnvironmentError, EnvironmentErrorCode, PromotionDirection, PromotionEntry, PromotionPlan,
+    PromotionReceipt, ProtectedConfiguration, SecretFreeMetadata, apply_promotion,
+    resolve_active_environment,
 };
 pub use principal::{PluginPrincipal, TrustMode};
 pub use protected::{

@@ -11,8 +11,7 @@ use std::{collections::BTreeMap, error::Error, fmt};
 use sha2::{Digest, Sha256};
 
 use crate::protected::{
-    ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus,
-    TrustMode,
+    ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus, TrustMode,
 };
 
 const DATA_PARTITION_DOMAIN: &[u8] = b"studio.environment.data-partition.v1";
@@ -88,9 +87,7 @@ impl fmt::Display for EnvironmentError {
             EnvironmentErrorCode::ConfigAmbiguous => {
                 "conflicting active environment configuration entries"
             }
-            EnvironmentErrorCode::CrossEnvironmentDenied => {
-                "cross-environment access denied"
-            }
+            EnvironmentErrorCode::CrossEnvironmentDenied => "cross-environment access denied",
         })
     }
 }
@@ -452,11 +449,9 @@ impl PromotionPlan {
             .map(SecretFreeMetadata::describe)
             .collect();
         match direction {
-            PromotionDirection::DevelopmentToStaging
-            | PromotionDirection::StagingToProduction => Ok(Self {
-                direction,
-                entries,
-            }),
+            PromotionDirection::DevelopmentToStaging | PromotionDirection::StagingToProduction => {
+                Ok(Self { direction, entries })
+            }
         }
     }
 
@@ -548,9 +543,9 @@ fn derive_data_partition(application: &str, environment: ApplicationEnvironment)
 fn validate_logical_key(logical: &str) -> Result<(), EnvironmentError> {
     let valid = !logical.is_empty()
         && logical.len() <= 256
-        && logical
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'));
+        && logical.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        });
     if valid {
         Ok(())
     } else {

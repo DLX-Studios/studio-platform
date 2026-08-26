@@ -46,9 +46,8 @@ fn main() {
             .await
             .expect("worker commits durable batch");
 
-        let interrupted =
-            StoreBatch::new("forced-termination", sample_entries("interrupted"))
-                .expect("worker batch is valid");
+        let interrupted = StoreBatch::new("forced-termination", sample_entries("interrupted"))
+            .expect("worker batch is valid");
         store
             .test_pause_inside_uncommitted_transaction(
                 &interrupted,

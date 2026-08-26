@@ -119,7 +119,10 @@ fn prop_strings(node: &PluginRenderNode, key: &str) -> Vec<String> {
 
 /// Parse one numeric input buffer for `NumberInput` change dispatch.
 fn parse_number_input(raw: &str) -> Option<f64> {
-    raw.trim().parse::<f64>().ok().filter(|value| value.is_finite())
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
 }
 
 /// Stable-ID handling for retained form widgets (ticket 32 decision): every stateful widget is
@@ -550,8 +553,9 @@ impl FoundationGallery {
                     // Secret input values must never enter the protocol event path; only the
                     // separate HostSecretInput ready flow crosses the boundary.
                     InputBinding::Secret => None,
-                    InputBinding::Number => parse_number_input(&raw)
-                        .map(|value| InputAction::SliderDrag { value }),
+                    InputBinding::Number => {
+                        parse_number_input(&raw).map(|value| InputAction::SliderDrag { value })
+                    }
                     InputBinding::Text | InputBinding::Multiline => {
                         Some(InputAction::TextChanged { value: raw })
                     }
@@ -561,8 +565,7 @@ impl FoundationGallery {
                 }
             }
         });
-        self.plugin_inputs
-            .insert(node_id.to_owned(), state.clone());
+        self.plugin_inputs.insert(node_id.to_owned(), state.clone());
         self.plugin_state_subscriptions
             .entry(node_id.to_owned())
             .or_default()
@@ -584,9 +587,8 @@ impl FoundationGallery {
         if let Some(state) = self.plugin_selects.get(node_id) {
             return state.clone();
         }
-        let state = cx.new(|cx| {
-            SelectState::new(options, selected, window, cx).searchable(searchable)
-        });
+        let state =
+            cx.new(|cx| SelectState::new(options, selected, window, cx).searchable(searchable));
         let confirm_subscription = cx.subscribe_in(&state, window, {
             let node_id = node_id.to_owned();
             move |this, _, event: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -613,7 +615,10 @@ impl FoundationGallery {
 
     /// Retain (or create) one stable-ID slider state for a plugin node. A single-value slider
     /// passes `value_range: None` and its protocol `value` via `single`.
-    #[allow(clippy::too_many_arguments, reason = "closed schema mirrors every slider property")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "closed schema mirrors every slider property"
+    )]
     fn plugin_slider(
         &mut self,
         node_id: &str,
@@ -631,11 +636,7 @@ impl FoundationGallery {
         }
         let state = cx.new(|_| {
             let mut state = SliderState::new().min(min).max(max);
-            state = if step > 0.0 {
-                state.step(step)
-            } else {
-                state
-            };
+            state = if step > 0.0 { state.step(step) } else { state };
             match value_range {
                 Some((start, end)) => state.default_value((start, end)),
                 None => state.default_value(single),
@@ -717,12 +718,7 @@ impl FoundationGallery {
     /// Host-owned overlay gating: returns the stacking depth for a visible overlay, or `None`
     /// when the overlay is closed or host-dismissed. Dismissal state resets whenever the
     /// protocol reports the overlay closed so reopening works without remounts.
-    fn overlay_gate(
-        &mut self,
-        node_id: &str,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<usize> {
+    fn overlay_gate(&mut self, node_id: &str, open: bool, cx: &mut Context<Self>) -> Option<usize> {
         if !open {
             self.dismissed_overlays.remove(node_id);
             return None;
@@ -778,9 +774,7 @@ impl FoundationGallery {
             .id(format!("{node_id}:overlay:{depth}"))
             .absolute()
             .inset_0()
-            .when(dimmed, |element| {
-                element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
-            })
+            .when(dimmed, |element| element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5)))
             .flex()
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key.as_str() == "escape" {
@@ -850,8 +844,7 @@ impl FoundationGallery {
             .iter()
             .position(|option| option.as_str() == value.as_str())
             .map(IndexPath::new);
-        let state =
-            self.plugin_select(&node.id, options, selected, searchable, window, cx);
+        let state = self.plugin_select(&node.id, options, selected, searchable, window, cx);
         div()
             .id(node.id.clone())
             .opacity(opacity)
@@ -863,11 +856,7 @@ impl FoundationGallery {
             .flex_col()
             .gap_1()
             .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
-            .child(
-                Select::new(&state)
-                    .placeholder(value)
-                    .disabled(!enabled),
-            )
+            .child(Select::new(&state).placeholder(value).disabled(!enabled))
             .into_any_element()
     }
 
@@ -1019,27 +1008,27 @@ impl FoundationGallery {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("stretch");
                 div()
-                .id(node.id)
-                .opacity(opacity)
-                .when_some(accessibility_label.clone(), |element, label| {
-                    element.aria_label(label)
-                })
-                .w_full()
-                .min_h_0()
-                .flex_grow(flex)
-                .when(is_order_content, |element| {
-                    element.h_full().min_h_0().justify_between()
-                })
-                .flex()
-                .flex_col()
-                .when(alignment == "start", gpui::Styled::items_start)
-                .when(alignment == "center", gpui::Styled::items_center)
-                .when(alignment == "end", gpui::Styled::items_end)
-                .when(alignment == "stretch", gpui::Styled::items_stretch)
-                .when(alignment == "space_between", gpui::Styled::justify_between)
-                .gap(px(gap))
-                .children(children)
-                .into_any_element()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .min_h_0()
+                    .flex_grow(flex)
+                    .when(is_order_content, |element| {
+                        element.h_full().min_h_0().justify_between()
+                    })
+                    .flex()
+                    .flex_col()
+                    .when(alignment == "start", gpui::Styled::items_start)
+                    .when(alignment == "center", gpui::Styled::items_center)
+                    .when(alignment == "end", gpui::Styled::items_end)
+                    .when(alignment == "stretch", gpui::Styled::items_stretch)
+                    .when(alignment == "space_between", gpui::Styled::justify_between)
+                    .gap(px(gap))
+                    .children(children)
+                    .into_any_element()
             }
             NodeKind::Row => {
                 let is_main_row = node.id == "main-row";
@@ -1519,9 +1508,7 @@ impl FoundationGallery {
                 Popover::new(node.id)
                     .default_open(open)
                     .trigger(Button::new("popover-trigger").secondary().label("Open"))
-                    .content(move |_, _, _| {
-                        div().p_3().min_w(px(180.0)).children(children.clone())
-                    })
+                    .content(move |_, _, _| div().p_3().min_w(px(180.0)).children(children.clone()))
                     .opacity(opacity)
                     .when_some(accessibility_label.clone(), |element, aria| {
                         element.aria_label(aria)
@@ -1744,7 +1731,11 @@ impl FoundationGallery {
                             // Tab selection is carried per-child via `selected`; this header
                             // renders only the declared item labels without inventing state.
                             .children(items.iter().map(|item| {
-                                div().id(format!("{}:tab:{item}", node.id)).role(Role::Tab).text_sm().child(item.clone())
+                                div()
+                                    .id(format!("{}:tab:{item}", node.id))
+                                    .role(Role::Tab)
+                                    .text_sm()
+                                    .child(item.clone())
                             })),
                     )
                     .children(children)
@@ -1951,7 +1942,9 @@ impl FoundationGallery {
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(COLOR_MUTED))
                                 .children(columns.iter().map(|column| {
-                                    div().id(format!("{}:col:{column}", node.id)).child(column.clone())
+                                    div()
+                                        .id(format!("{}:col:{column}", node.id))
+                                        .child(column.clone())
                                 })),
                         )
                     })
@@ -2060,9 +2053,7 @@ impl FoundationGallery {
             }
             NodeKind::AlertDialog => {
                 let open = prop_bool(&node, "open", false);
-                let title = prop_str(&node, "title")
-                    .unwrap_or("Confirm")
-                    .to_owned();
+                let title = prop_str(&node, "title").unwrap_or("Confirm").to_owned();
                 let message = prop_str(&node, "message").map(ToOwned::to_owned);
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
@@ -2122,11 +2113,9 @@ impl FoundationGallery {
                     .children(children);
                 // Sheets anchor to their declared edge; drawers dock left like sheets.
                 let panel = match node.kind {
-                    NodeKind::BottomSheet => panel
-                        .w_full()
-                        .max_h(px(320.0))
-                        .rounded_t_xl()
-                        .border_t_1(),
+                    NodeKind::BottomSheet => {
+                        panel.w_full().max_h(px(320.0)).rounded_t_xl().border_t_1()
+                    }
                     NodeKind::Drawer => panel.w(px(280.0)).h_full().rounded_r_xl().border_r_1(),
                     _ => panel.w(px(360.0)).h_full().rounded_l_xl().border_l_1(),
                 };
@@ -2270,9 +2259,10 @@ impl FoundationGallery {
                     .gap_1()
                     .when_some(prop_str(&node, "message"), |element, header| {
                         element.child(
-                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
-                                header.to_owned(),
-                            ),
+                            div()
+                                .text_xs()
+                                .text_color(rgb(COLOR_MUTED))
+                                .child(header.to_owned()),
                         )
                     })
                     .children(children);
@@ -2284,8 +2274,9 @@ impl FoundationGallery {
             }
             NodeKind::CommandPalette => {
                 let open = prop_bool(&node, "open", false);
-                let placeholder =
-                    prop_str(&node, "placeholder").unwrap_or("Type a command").to_owned();
+                let placeholder = prop_str(&node, "placeholder")
+                    .unwrap_or("Type a command")
+                    .to_owned();
                 let commands = prop_strings(&node, "commands");
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
@@ -2308,7 +2299,14 @@ impl FoundationGallery {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().px_2().py_1().text_sm().text_color(rgb(COLOR_MUTED)).child(placeholder))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(placeholder),
+                    )
                     .when(commands.is_empty(), |element| {
                         element.child(self.empty_state_element("No commands"))
                     })
@@ -2506,8 +2504,7 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::ButtonGroup => {
-                let vertical =
-                    prop_str(&node, "orientation").unwrap_or("horizontal") == "vertical";
+                let vertical = prop_str(&node, "orientation").unwrap_or("horizontal") == "vertical";
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2529,16 +2526,8 @@ impl FoundationGallery {
                 let max = prop_f64(&node, "max", 1.0) as f32;
                 let value = prop_f64(&node, "value", min.into()).clamp(min.into(), max.into());
                 let enabled = prop_bool(&node, "enabled", true);
-                let state = self.plugin_slider(
-                    &node.id,
-                    min,
-                    max,
-                    0.0,
-                    value as f32,
-                    None,
-                    window,
-                    cx,
-                );
+                let state =
+                    self.plugin_slider(&node.id, min, max, 0.0, value as f32, None, window, cx);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2551,9 +2540,10 @@ impl FoundationGallery {
                     .flex_col()
                     .gap_2()
                     .child(
-                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
-                            "{label}: {value:.2}"
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(format!("{label}: {value:.2}")),
                     )
                     .child(Slider::new(&state).horizontal().disabled(!enabled))
                     .into_any_element()
@@ -2587,9 +2577,10 @@ impl FoundationGallery {
                     .flex_col()
                     .gap_2()
                     .child(
-                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
-                            "{label}: {start:.2} – {end:.2}"
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(format!("{label}: {start:.2} – {end:.2}")),
                     )
                     .child(Slider::new(&state).horizontal().disabled(!enabled))
                     .into_any_element()
@@ -2603,7 +2594,9 @@ impl FoundationGallery {
                 self.select_like_element(&node, opacity, accessibility_label, true, window, cx)
             }
             NodeKind::TextInput if node.control == Some(RuntimeControl::Input) => {
-                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
+                let placeholder = prop_str(&node, "placeholder")
+                    .unwrap_or_default()
+                    .to_owned();
                 let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
                 let enabled = prop_bool(&node, "enabled", true);
                 let state = self.plugin_input(
@@ -2626,7 +2619,9 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::TextArea => {
-                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
+                let placeholder = prop_str(&node, "placeholder")
+                    .unwrap_or_default()
+                    .to_owned();
                 let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
                 let enabled = prop_bool(&node, "enabled", true);
                 let state = self.plugin_input(
@@ -2676,14 +2671,7 @@ impl FoundationGallery {
                     .unwrap_or("Trusted input")
                     .to_owned();
                 let enabled = prop_bool(&node, "enabled", true);
-                let state = self.plugin_input(
-                    &node.id,
-                    "",
-                    "",
-                    InputBinding::Secret,
-                    window,
-                    cx,
-                );
+                let state = self.plugin_input(&node.id, "", "", InputBinding::Secret, window, cx);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2724,9 +2712,10 @@ impl FoundationGallery {
                     .children(children)
                     .when_some(description, |element, description| {
                         element.child(
-                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
-                                description.to_owned(),
-                            ),
+                            div()
+                                .text_xs()
+                                .text_color(rgb(COLOR_MUTED))
+                                .child(description.to_owned()),
                         )
                     })
                     .when_some(error, |element, error| {
@@ -3004,7 +2993,7 @@ impl Render for FoundationGallery {
 #[cfg(test)]
 mod tests {
     use super::{
-        image_format, parse_number_input, prop_strings, prop_u64, ImageFormat, PluginRenderNode,
+        ImageFormat, PluginRenderNode, image_format, parse_number_input, prop_strings, prop_u64,
     };
     use studio_protocol::NodeKind;
 
@@ -3045,10 +3034,7 @@ mod tests {
     fn reads_declared_string_list_properties_for_data_display() {
         use std::collections::BTreeMap;
         let props: BTreeMap<String, serde_json::Value> = BTreeMap::from([
-            (
-                "columns".to_owned(),
-                serde_json::json!(["Name", "Price"]),
-            ),
+            ("columns".to_owned(), serde_json::json!(["Name", "Price"])),
             ("items".to_owned(), serde_json::json!([])),
         ]);
         let node = PluginRenderNode {
