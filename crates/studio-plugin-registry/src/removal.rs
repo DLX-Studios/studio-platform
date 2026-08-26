@@ -54,12 +54,7 @@ impl ProjectUsage {
 
     /// Whether one exact artifact is recorded.
     #[must_use]
-    pub fn contains(
-        &self,
-        project_id: &str,
-        plugin_id: &str,
-        artifact: &OwnedArtifact,
-    ) -> bool {
+    pub fn contains(&self, project_id: &str, plugin_id: &str, artifact: &OwnedArtifact) -> bool {
         self.entries
             .get(&(project_id.to_owned(), plugin_id.to_owned()))
             .is_some_and(|artifacts| artifacts.contains(artifact))

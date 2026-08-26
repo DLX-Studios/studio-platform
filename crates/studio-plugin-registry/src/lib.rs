@@ -15,12 +15,12 @@ mod removal;
 
 pub use consent::{ConsentDecision, ConsentLedger};
 pub use descriptor::{
-    ActionContribution, ActionOperation, CompatibilityRange, CompositionContribution,
-    CompositionNode, Contributions, DeclaredCapability, DescriptorPublisher, DescriptorPolicy,
-    DescriptorSignature, HookBudget, HookDeclaration, LifecycleHook, PluginDescriptorV1,
-    PrimitiveInputValue, SelectOption, SettingsField, SettingsFieldType, SettingsGroup,
-    SignedDescriptorEnvelope, DESCRIPTOR_SCHEMA_VERSION, MAX_DESCRIPTOR_BYTES,
-    MAX_HOOK_MEMORY_BYTES, MAX_HOOK_TIME_MS, parse_descriptor_envelope, validate_descriptor_value,
+    ActionContribution, ActionOperation, CommandContribution, CompatibilityRange,
+    CompositionContribution, CompositionNode, Contributions, DESCRIPTOR_SCHEMA_VERSION,
+    DeclaredCapability, DescriptorPolicy, DescriptorPublisher, DescriptorSignature, HookBudget,
+    HookDeclaration, LifecycleHook, MAX_DESCRIPTOR_BYTES, MAX_HOOK_MEMORY_BYTES, MAX_HOOK_TIME_MS,
+    PluginDescriptorV1, PrimitiveInputValue, SelectOption, SettingsField, SettingsFieldType,
+    SettingsGroup, SignedDescriptorEnvelope, parse_descriptor_envelope, validate_descriptor_value,
 };
 pub use error::{DescriptorError, DescriptorErrorCode, RegistryError, RegistryErrorCode};
 pub use fixture::{
