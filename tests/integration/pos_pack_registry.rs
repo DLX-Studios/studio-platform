@@ -9,8 +9,9 @@ use studio_plugin_registry::{
     ActionContribution, ApprovedKindCatalog, CommandContribution, CompositionContribution,
     CompositionNode, DeclaredCapability, DescriptorErrorCode, DescriptorPolicy,
     CompatibilityRange, HookBudget, HookCallback, HookDeclaration, LifecycleHook,
-    OwnedArtifact, PluginDescriptorV1, PluginState, RegistryErrorCode, SignedDescriptorEnvelope,
-    ViolationReason, pos_pack_descriptor, pos_pack_envelope, pos_pack_seed, pos_pack_trust_keys,
+    OwnedArtifact, PluginDescriptorV1, PluginState, RegistryErrorCode, SettingsField,
+    SettingsFieldType, SignedDescriptorEnvelope, ViolationReason, pos_pack_descriptor,
+    pos_pack_envelope, pos_pack_seed, pos_pack_trust_keys,
 };
 
 const PROJECT: &str = "project-1";
@@ -369,6 +370,39 @@ fn third_party_descriptors_cannot_register_renderer_kinds_or_unknown_fields() {
     let error = registry
         .admit(&command_without_action)
         .expect_err("commands must reference declared actions");
+    assert_eq!(error.code(), RegistryErrorCode::DescriptorInvalid);
+}
+
+#[test]
+fn secret_references_follow_protected_secret_store_conventions() {
+    let bad_name = signed_variant(|descriptor| {
+        if let studio_plugin_registry::SettingsFieldType::SecretReference { name, .. } =
+            &mut descriptor.contributions.settings_groups[0].fields[5].kind
+        {
+            *name = "Manager PIN".to_owned();
+        }
+    });
+    let mut registry = registry();
+    let error = registry
+        .admit(&bad_name)
+        .expect_err("secret names must follow ticket-18 protected-store rules");
+    assert_eq!(error.code(), RegistryErrorCode::DescriptorInvalid);
+
+    let duplicate = signed_variant(|descriptor| {
+        descriptor.contributions.settings_groups[0]
+            .fields
+            .push(studio_plugin_registry::SettingsField {
+                id: "servicePinMirror".to_owned(),
+                label: "Duplicate pin reference".to_owned(),
+                kind: studio_plugin_registry::SettingsFieldType::SecretReference {
+                    name: "manager.service-pin".to_owned(),
+                    purpose: "Duplicates an existing declaration".to_owned(),
+                },
+            });
+    });
+    let error = registry
+        .admit(&duplicate)
+        .expect_err("duplicate secret names must be rejected");
     assert_eq!(error.code(), RegistryErrorCode::DescriptorInvalid);
 }
 

@@ -15,6 +15,16 @@ that issue resolves.
   [`TrustStore`](../../crates/studio-package/src/trust.rs) and Ed25519 verification path
   used for bundle signatures. Only the domain separation differs.
 
+## Alignment with ticket 18 (protected secret store)
+
+Branch merges `origin/tt/18-protected-secret-store`. Descriptor secret references follow
+the landed conventions exactly: `SettingsFieldType::SecretReference { name, purpose }`
+mirrors manifest `SecretDeclaration` and `ProtectedSecretKey` — `name` is a stable
+lowercase identifier (`[a-z0-9._-]`, ≤ 128, lowercase first character), `purpose` is safe
+host-visible text (≤ 256), and names are unique per descriptor. Designer-configured values
+therefore resolve against the same app/environment-scoped protected partitions; plaintext
+never appears in descriptors, consent records, or usage ledgers.
+
 ## Decisions taken under the closed/deny-by-default reading
 
 | Question from issue 07 | Decision here |
