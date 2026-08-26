@@ -144,6 +144,7 @@ pub fn pos_pack_descriptor() -> PluginDescriptorV1 {
                 id: "servicePin".to_owned(),
                 label: "Manager service pin".to_owned(),
                 kind: SettingsFieldType::SecretReference {
+                    name: "manager.service-pin".to_owned(),
                     purpose: "Approves tip adjustments on receipts".to_owned(),
                 },
             },

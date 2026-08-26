@@ -31,6 +31,8 @@ const MAX_TREE_DEPTH: usize = 16;
 const MAX_TREE_NODES: usize = 256;
 const MAX_TEXT_BYTES: usize = 128;
 const MAX_ID_BYTES: usize = 128;
+/// Matches the bundle-manifest `secrets.purpose` ceiling.
+const MAX_SECRET_PURPOSE_BYTES: usize = 256;
 
 /// Complete closed plugin-descriptor-v1 wire shape.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -233,9 +235,16 @@ pub enum SettingsFieldType {
         #[serde(default)]
         default: Option<String>,
     },
-    /// Reference to a protected secret; plaintext never enters guest memory.
+    /// Reference to a protected secret declared by name and purpose; values live only in
+    /// the host's protected store and never enter guest memory.
+    ///
+    /// `name` follows the same rules as bundle-manifest [`studio_package::manifest`]
+    /// `SecretDeclaration.name` and `ProtectedSecretKey`, so Designer-configured values
+    /// resolve against the same app-scoped protected partitions landed by ticket 18.
     SecretReference {
-        /// What the secret is used for, shown during consent.
+        /// Stable lowercase identifier matching the plugin's declared protected secrets.
+        name: String,
+        /// Safe host-visible explanation shown during configuration and consent.
         purpose: String,
     },
     /// Device or station picker constrained to one device kind.
@@ -544,6 +553,7 @@ fn validate_contributions(descriptor: &PluginDescriptorV1) -> Result<(), Descrip
         validate_tree(&composition.tree)?;
     }
     let mut group_ids = std::collections::BTreeSet::new();
+    let mut secret_names = std::collections::BTreeSet::new();
     for group in &descriptor.contributions.settings_groups {
         validate_id_text(&group.id, "contribution.id")?;
         validate_safe_text(&group.title, "settings.title")?;
@@ -556,6 +566,11 @@ fn validate_contributions(descriptor: &PluginDescriptorV1) -> Result<(), Descrip
             validate_safe_text(&field.label, "settings.field.label")?;
             if !field_ids.insert(field.id.as_str()) {
                 return Err(DescriptorError::duplicate_contribution(&field.id));
+            }
+            if let SettingsFieldType::SecretReference { name, .. } = &field.kind
+                && !secret_names.insert(name.as_str())
+            {
+                return Err(DescriptorError::duplicate_contribution(name));
             }
             validate_field_type(&field.kind)?;
         }
@@ -661,8 +676,13 @@ fn validate_field_type(kind: &SettingsFieldType) -> Result<(), DescriptorError> 
                 )));
             }
         }
-        SettingsFieldType::SecretReference { purpose } => {
-            validate_safe_text(purpose, "secretReference.purpose")?;
+        SettingsFieldType::SecretReference { name, purpose } => {
+            validate_secret_name(name)?;
+            if purpose.is_empty() || purpose.len() > MAX_SECRET_PURPOSE_BYTES {
+                return Err(DescriptorError::schema_field_invalid(
+                    "secretReference.purpose".to_owned(),
+                ));
+            }
         }
         SettingsFieldType::DevicePicker { device_kind } => {
             validate_id_text(device_kind, "devicePicker.deviceKind")?;
@@ -803,6 +823,24 @@ fn validate_safe_text(value: &str, field: &'static str) -> Result<(), Descriptor
         return Err(DescriptorError::schema_field_invalid(field.to_owned()));
     }
     Ok(())
+}
+
+/// Mirrors `SecretDeclaration.name` / `ProtectedSecretKey` validation from ticket 18 so
+/// descriptor-declared secret references resolve against the same protected partitions.
+fn validate_secret_name(value: &str) -> Result<(), DescriptorError> {
+    let valid = !value.is_empty()
+        && value.len() <= MAX_ID_BYTES
+        && value.starts_with(|character: char| character.is_ascii_lowercase())
+        && value
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '.' | '-' | '_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(DescriptorError::schema_field_invalid(
+            "secretReference.name".to_owned(),
+        ))
+    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
