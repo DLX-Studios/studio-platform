@@ -84,8 +84,30 @@ impl ConsentLedger {
 
     /// Drop every decision recorded for one plugin across all projects.
     pub fn revoke_plugin(&mut self, plugin_id: &str) {
+        self.decisions.retain(|key, _| key.plugin_id != plugin_id);
+    }
+
+    /// Drop every decision recorded for one plugin in one project.
+    pub fn revoke_project_plugin(&mut self, project_id: &str, plugin_id: &str) {
         self.decisions
-            .retain(|key, _| key.plugin_id != plugin_id);
+            .retain(|key, _| key.project_id != project_id || key.plugin_id != plugin_id);
+    }
+
+    /// Recorded decision for one capability, if the user made one.
+    #[must_use]
+    pub fn decision(
+        &self,
+        project_id: &str,
+        plugin_id: &str,
+        capability: DeclaredCapability,
+    ) -> Option<ConsentDecision> {
+        self.decisions
+            .get(&ConsentKey {
+                project_id: project_id.to_owned(),
+                plugin_id: plugin_id.to_owned(),
+                capability,
+            })
+            .copied()
     }
 
     /// Whether one capability is currently granted; absent decisions are denied.
@@ -105,11 +127,7 @@ impl ConsentLedger {
 
     /// All currently granted capabilities for one `(project, plugin)` pair.
     #[must_use]
-    pub fn granted_for(
-        &self,
-        project_id: &str,
-        plugin_id: &str,
-    ) -> BTreeSet<DeclaredCapability> {
+    pub fn granted_for(&self, project_id: &str, plugin_id: &str) -> BTreeSet<DeclaredCapability> {
         self.decisions
             .iter()
             .filter(|(key, decision)| {

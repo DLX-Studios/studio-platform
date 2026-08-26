@@ -82,7 +82,7 @@ pub struct CompatibilityRange {
 }
 
 /// Closed capability catalog shared with bundle manifests for milestone one.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum DeclaredCapability {
     /// Deterministic payment simulator.
     #[serde(rename = "payment.simulate")]
@@ -152,7 +152,7 @@ pub struct CompositionNode {
 
 /// Closed scalar input values allowed inside contributed trees.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum PrimitiveInputValue {
     /// Plain text value.
     Text(String),
@@ -190,7 +190,7 @@ pub struct SettingsField {
 
 /// Closed settings-field catalog including secret references and device pickers.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum SettingsFieldType {
     /// Free text input.
     Text {
@@ -290,7 +290,7 @@ pub struct ActionContribution {
 
 /// Closed declarative operations executable without plugin code.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum ActionOperation {
     /// Navigate to a declared screen.
     Navigate {
@@ -431,7 +431,10 @@ impl PluginDescriptorV1 {
     /// Whether the plugin declared one action id.
     #[must_use]
     pub fn declares_action(&self, id: &str) -> bool {
-        self.contributions.actions.iter().any(|action| action.id == id)
+        self.contributions
+            .actions
+            .iter()
+            .any(|action| action.id == id)
     }
 
     /// Whether every requested capability lacks consent according to `consented`.
@@ -591,9 +594,13 @@ fn validate_contributions(descriptor: &PluginDescriptorV1) -> Result<(), Descrip
             }
         }
     }
+    let mut command_ids = std::collections::BTreeSet::new();
     for command in &descriptor.contributions.commands {
         validate_id_text(&command.id, "contribution.id")?;
         validate_safe_text(&command.title, "command.title")?;
+        if !command_ids.insert(command.id.as_str()) {
+            return Err(DescriptorError::duplicate_contribution(&command.id));
+        }
         if !descriptor.declares_action(&command.action) {
             return Err(DescriptorError::contribution_invalid(format!(
                 "command {} references undeclared action {}",
@@ -621,7 +628,9 @@ fn validate_tree(node: &CompositionNode) -> Result<(), DescriptorError> {
             walk(child, depth + 1, count)?;
         }
         Ok(())
-    }    let mut count = 0;
+    }
+
+    let mut count = 0;
     walk(node, 1, &mut count)
 }
 
@@ -636,18 +645,40 @@ fn validate_kind_reference(kind: &str) -> Result<(), DescriptorError> {
 
 fn validate_field_type(kind: &SettingsFieldType) -> Result<(), DescriptorError> {
     match kind {
-        SettingsFieldType::Text { default, .. } => {
+        SettingsFieldType::Text {
+            default,
+            max_length,
+        } => {
+            if max_length.is_some_and(|limit| limit == 0) {
+                return Err(DescriptorError::contribution_invalid(
+                    "text field maximum length must be positive".to_owned(),
+                ));
+            }
             if let Some(value) = default {
                 validate_safe_text(value, "settings.text.default")?;
+                if max_length.is_some_and(|limit| {
+                    usize::try_from(limit).is_ok_and(|limit| value.chars().count() > limit)
+                }) {
+                    return Err(DescriptorError::contribution_invalid(
+                        "text field default exceeds maximum length".to_owned(),
+                    ));
+                }
             }
         }
-        SettingsFieldType::Number { min, max, .. } => {
+        SettingsFieldType::Number { min, max, default } => {
             if let (Some(min), Some(max)) = (min, max) {
                 if min > max {
                     return Err(DescriptorError::contribution_invalid(
                         "number field bounds inverted".to_owned(),
                     ));
                 }
+            }
+            if let Some(default) = default
+                && (min.is_some_and(|min| *default < min) || max.is_some_and(|max| *default > max))
+            {
+                return Err(DescriptorError::contribution_invalid(
+                    "number field default outside declared bounds".to_owned(),
+                ));
             }
         }
         SettingsFieldType::Color { default } => {
@@ -668,6 +699,17 @@ fn validate_field_type(kind: &SettingsFieldType) -> Result<(), DescriptorError> 
                     "select field requires options".to_owned(),
                 ));
             }
+            let mut values = std::collections::BTreeSet::new();
+            for option in options {
+                validate_id_text(&option.value, "settings.select.option.value")?;
+                validate_safe_text(&option.label, "settings.select.option.label")?;
+                if !values.insert(option.value.as_str()) {
+                    return Err(DescriptorError::contribution_invalid(format!(
+                        "duplicate select option {}",
+                        option.value
+                    )));
+                }
+            }
             if let Some(value) = default
                 && !options.iter().any(|option| option.value == *value)
             {
@@ -678,7 +720,10 @@ fn validate_field_type(kind: &SettingsFieldType) -> Result<(), DescriptorError> 
         }
         SettingsFieldType::SecretReference { name, purpose } => {
             validate_secret_name(name)?;
-            if purpose.is_empty() || purpose.len() > MAX_SECRET_PURPOSE_BYTES {
+            if purpose.is_empty()
+                || purpose.len() > MAX_SECRET_PURPOSE_BYTES
+                || purpose.chars().any(char::is_control)
+            {
                 return Err(DescriptorError::schema_field_invalid(
                     "secretReference.purpose".to_owned(),
                 ));
@@ -806,12 +851,9 @@ fn validate_id_text(value: &str, field: &'static str) -> Result<(), DescriptorEr
     if value.is_empty()
         || value.len() > MAX_ID_BYTES
         || value.chars().any(char::is_control)
-        || !value
-            .chars()
-            .all(|character| {
-                character.is_ascii_alphanumeric()
-                    || matches!(character, '.' | '-' | '_')
-            })
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
     {
         return Err(DescriptorError::schema_field_invalid(field.to_owned()));
     }

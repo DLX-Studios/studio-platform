@@ -35,7 +35,5 @@ pub fn sign_document(
     signing_seed: &[u8; 32],
 ) -> Result<[u8; 64], IntegrityError> {
     let bytes = canonical_document_bytes(document)?;
-    Ok(SigningKey::from_bytes(signing_seed)
-        .sign(&bytes)
-        .to_bytes())
+    Ok(SigningKey::from_bytes(signing_seed).sign(&bytes).to_bytes())
 }

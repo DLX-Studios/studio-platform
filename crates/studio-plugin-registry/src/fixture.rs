@@ -6,11 +6,11 @@ use ed25519_dalek::SigningKey;
 
 use crate::descriptor::{
     ActionContribution, ActionOperation, CommandContribution, CompatibilityRange,
-    CompositionContribution, CompositionNode, Contributions, DeclaredCapability,
-    HookBudget, HookDeclaration, LifecycleHook, PluginDescriptorV1, PrimitiveInputValue,
-    SelectOption, SettingsField, SettingsFieldType, SettingsGroup, SignedDescriptorEnvelope,
+    CompositionContribution, CompositionNode, Contributions, DeclaredCapability, HookBudget,
+    HookDeclaration, LifecycleHook, PluginDescriptorV1, PrimitiveInputValue, SelectOption,
+    SettingsField, SettingsFieldType, SettingsGroup, SignedDescriptorEnvelope,
 };
-use studio_package::{TrustedPublisherKey, TrustStore};
+use studio_package::{TrustStore, TrustedPublisherKey};
 
 /// Fixture publisher identity.
 pub const POS_PACK_PUBLISHER: &str = "com.studio";

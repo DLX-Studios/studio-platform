@@ -3,17 +3,16 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use semver::Version;
 use serde_json::Value;
 use studio_package::{TrustStore, VerifiedIntegrity, verify_document_signature};
 
-use crate::consent::ConsentLedger;
+use crate::consent::{ConsentDecision, ConsentLedger};
 use crate::descriptor::{
-    CompositionNode, DeclaredCapability, DescriptorError, DescriptorErrorCode, DescriptorPolicy,
-    LifecycleHook, PluginDescriptorV1, SignedDescriptorEnvelope,
+    CompositionNode, DeclaredCapability, DescriptorPolicy, LifecycleHook, PluginDescriptorV1,
+    SignedDescriptorEnvelope,
 };
-use crate::error::RegistryError;
-use crate::lifecycle::{HookRunner, PluginState, ViolationRecord, ViolationReason};
+use crate::error::{DescriptorError, DescriptorErrorCode, RegistryError};
+use crate::lifecycle::{HookRunner, PluginState, ViolationReason, ViolationRecord};
 use crate::removal::{OwnedArtifact, ProjectUsage};
 
 /// Primitive kinds third-party composition trees may reference.
@@ -146,12 +145,13 @@ impl ExtensionRegistry {
     /// Pipeline: envelope/signature attribution match -> Ed25519 verification against the
     /// provisioned trust store (reusing bundle trust machinery with a document-domain
     /// signature) -> closed-schema parsing and validation -> compatibility check ->
-    /// structural contribution-kind approval. Re-admitting an id replaces any prior
-    /// registration and drops its registered hooks.
+    /// structural contribution-kind approval -> bounded admission hook. Re-admitting an id
+    /// replaces the prior descriptor while preserving host-wired lifecycle callbacks.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError`] for every rejection family; nothing is mutated on failure.
+    /// Returns [`RegistryError`] for every rejection family. Failed admission never changes
+    /// admitted/project state; a contained admission-hook violation is appended to the audit log.
     pub fn admit(&mut self, envelope: &SignedDescriptorEnvelope) -> Result<(), RegistryError> {
         let publisher_id = envelope
             .descriptor
@@ -183,13 +183,31 @@ impl ExtensionRegistry {
         .map_err(|error| RegistryError::admission_signature_invalid(error.to_string()))?;
         let descriptor = validate_for_admission(&envelope.descriptor, &self.policy)?;
         validate_kind_references(&descriptor, &self.approved_kinds)?;
-        self.hooks.unregister_plugin(&descriptor.id);
+        if let Some(budget) = descriptor.hook_budget(LifecycleHook::Admission)
+            && let Err(reason) =
+                self.hooks
+                    .dispatch(&descriptor.id, "", LifecycleHook::Admission, budget)
+        {
+            self.violations.push(ViolationRecord {
+                plugin_id: descriptor.id.clone(),
+                hook: LifecycleHook::Admission,
+                reason: reason.clone(),
+            });
+            return Err(RegistryError::hook_violation(
+                LifecycleHook::Admission,
+                reason,
+            ));
+        }
+        let state = self
+            .admitted
+            .get(&descriptor.id)
+            .map_or(PluginState::Admitted, |extension| extension.state);
         self.admitted.insert(
             descriptor.id.clone(),
             AdmittedExtension {
                 descriptor,
                 integrity: verified,
-                state: PluginState::Admitted,
+                state,
             },
         );
         Ok(())
@@ -212,10 +230,10 @@ impl ExtensionRegistry {
         plugin_id: &str,
         capability: DeclaredCapability,
     ) -> Result<(), RegistryError> {
-        let extension =
-            self.admitted
-                .get(plugin_id)
-                .ok_or_else(RegistryError::unknown_plugin)?;
+        let extension = self
+            .admitted
+            .get(plugin_id)
+            .ok_or_else(RegistryError::unknown_plugin)?;
         if !extension.descriptor.capabilities.contains(&capability) {
             return Err(RegistryError::consent_denied(format!(
                 "{plugin_id} never declared {}",
@@ -237,10 +255,10 @@ impl ExtensionRegistry {
         plugin_id: &str,
         capability: DeclaredCapability,
     ) -> Result<(), RegistryError> {
-        let extension =
-            self.admitted
-                .get(plugin_id)
-                .ok_or_else(RegistryError::unknown_plugin)?;
+        let extension = self
+            .admitted
+            .get(plugin_id)
+            .ok_or_else(RegistryError::unknown_plugin)?;
         if !extension.descriptor.capabilities.contains(&capability) {
             return Err(RegistryError::consent_denied(format!(
                 "{plugin_id} never declared {}",
@@ -248,7 +266,25 @@ impl ExtensionRegistry {
             )));
         }
         self.consents.deny(project_id, plugin_id, capability);
+        if self
+            .active
+            .remove(&(project_id.to_owned(), plugin_id.to_owned()))
+        {
+            self.run_hook(project_id, plugin_id, LifecycleHook::Deactivate)?;
+            self.refresh_state(plugin_id);
+        }
         Ok(())
+    }
+
+    /// Inspect the explicit consent decision for one project capability.
+    #[must_use]
+    pub fn consent_decision(
+        &self,
+        project_id: &str,
+        plugin_id: &str,
+        capability: DeclaredCapability,
+    ) -> Option<ConsentDecision> {
+        self.consents.decision(project_id, plugin_id, capability)
     }
 
     /// Revoke a recorded consent decision; deactivates the extension for the project.
@@ -266,7 +302,11 @@ impl ExtensionRegistry {
             return Err(RegistryError::unknown_plugin());
         }
         let revoked = self.consents.revoke(project_id, plugin_id, capability);
-        if revoked && self.active.remove(&(project_id.to_owned(), plugin_id.to_owned())) {
+        if revoked
+            && self
+                .active
+                .remove(&(project_id.to_owned(), plugin_id.to_owned()))
+        {
             self.run_hook(project_id, plugin_id, LifecycleHook::Deactivate)?;
             self.refresh_state(plugin_id);
         }
@@ -341,7 +381,10 @@ impl ExtensionRegistry {
     ///
     /// Fails unless the extension is active for the project, or the hook must be contained.
     pub fn project_open(&mut self, project_id: &str, plugin_id: &str) -> Result<(), RegistryError> {
-        if !self.active.contains(&(project_id.to_owned(), plugin_id.to_owned())) {
+        if !self
+            .active
+            .contains(&(project_id.to_owned(), plugin_id.to_owned()))
+        {
             return Err(RegistryError::state_invalid(format!(
                 "{plugin_id} is not active for {project_id}"
             )));
@@ -355,7 +398,10 @@ impl ExtensionRegistry {
     ///
     /// Fails unless the extension is active, or the hook must be contained.
     pub fn deactivate(&mut self, project_id: &str, plugin_id: &str) -> Result<(), RegistryError> {
-        if !self.active.remove(&(project_id.to_owned(), plugin_id.to_owned())) {
+        if !self
+            .active
+            .remove(&(project_id.to_owned(), plugin_id.to_owned()))
+        {
             return Err(RegistryError::state_invalid(format!(
                 "{plugin_id} is not active for {project_id}"
             )));
@@ -376,10 +422,18 @@ impl ExtensionRegistry {
         plugin_id: &str,
         artifact: OwnedArtifact,
     ) -> Result<(), RegistryError> {
-        let extension =
-            self.admitted
-                .get(plugin_id)
-                .ok_or_else(RegistryError::unknown_plugin)?;
+        let extension = self
+            .admitted
+            .get(plugin_id)
+            .ok_or_else(RegistryError::unknown_plugin)?;
+        if !self
+            .installed
+            .contains(&(project_id.to_owned(), plugin_id.to_owned()))
+        {
+            return Err(RegistryError::state_invalid(format!(
+                "{plugin_id} is not installed into {project_id}"
+            )));
+        }
         let declared = match &artifact {
             OwnedArtifact::Composition(id) => extension.descriptor.declares_composition(id),
             OwnedArtifact::SettingsGroup(id) => extension.descriptor.declares_settings_group(id),
@@ -412,13 +466,23 @@ impl ExtensionRegistry {
         if !self.admitted.contains_key(plugin_id) {
             return Err(RegistryError::unknown_plugin());
         }
+        if !self
+            .installed
+            .contains(&(project_id.to_owned(), plugin_id.to_owned()))
+        {
+            return Err(RegistryError::state_invalid(format!(
+                "{plugin_id} is not installed into {project_id}"
+            )));
+        }
         let report = RemovalReport {
             project_id: project_id.to_owned(),
             plugin_id: plugin_id.to_owned(),
             remaining_artifacts: self.usage.remaining(project_id, plugin_id),
         };
-        self.pending_removals
-            .insert((project_id.to_owned(), plugin_id.to_owned()), report.clone());
+        self.pending_removals.insert(
+            (project_id.to_owned(), plugin_id.to_owned()),
+            report.clone(),
+        );
         Ok(report)
     }
 
@@ -448,6 +512,11 @@ impl ExtensionRegistry {
             .get(&pair)
             .cloned()
             .ok_or_else(|| RegistryError::removal_plan_invalid("plan vanished"))?;
+        if self.usage.remaining(project_id, plugin_id) != report.remaining_artifacts {
+            return Err(RegistryError::removal_plan_invalid(
+                "project usage changed after the removal report; re-plan removal",
+            ));
+        }
         if !force && !report.remaining_artifacts.is_empty() {
             return Err(RegistryError::removal_blocked(
                 report.remaining_artifacts.len(),
@@ -458,9 +527,7 @@ impl ExtensionRegistry {
         }
         self.run_hook(project_id, plugin_id, LifecycleHook::Remove)?;
         self.usage.release_all(project_id, plugin_id);
-        for capability in self.consents.granted_for(project_id, plugin_id) {
-            self.consents.revoke(project_id, plugin_id, capability);
-        }
+        self.consents.revoke_project_plugin(project_id, plugin_id);
         self.installed.remove(&pair);
         self.pending_removals.remove(&pair);
         self.refresh_state(plugin_id);
@@ -487,10 +554,10 @@ impl ExtensionRegistry {
     }
 
     fn check_runnable(&self, plugin_id: &str) -> Result<(), RegistryError> {
-        let extension =
-            self.admitted
-                .get(plugin_id)
-                .ok_or_else(RegistryError::unknown_plugin)?;
+        let extension = self
+            .admitted
+            .get(plugin_id)
+            .ok_or_else(RegistryError::unknown_plugin)?;
         if extension.state == PluginState::Quarantined {
             return Err(RegistryError::state_invalid(format!(
                 "{plugin_id} is quarantined after a hook-budget violation"
@@ -537,10 +604,7 @@ impl ExtensionRegistry {
     }
 
     fn refresh_state(&mut self, plugin_id: &str) {
-        let still_installed = self
-            .installed
-            .iter()
-            .any(|(_, owner)| owner == plugin_id);
+        let still_installed = self.installed.iter().any(|(_, owner)| owner == plugin_id);
         if let Some(extension) = self.admitted.get_mut(plugin_id)
             && extension.state != PluginState::Quarantined
         {
@@ -596,8 +660,8 @@ mod tests {
     use super::*;
     use crate::descriptor::CompatibilityRange;
     use crate::fixture::{
-        POS_PACK_KEY_ID, POS_PACK_PUBLISHER, pos_pack_descriptor, pos_pack_envelope,
-        pos_pack_seed, pos_pack_trust_keys,
+        POS_PACK_KEY_ID, POS_PACK_PUBLISHER, pos_pack_descriptor, pos_pack_envelope, pos_pack_seed,
+        pos_pack_trust_keys,
     };
 
     fn registry() -> ExtensionRegistry {
@@ -622,18 +686,15 @@ mod tests {
     #[test]
     fn rejects_a_tampered_descriptor_before_activation() {
         let mut envelope = pos_pack_envelope();
-        if let Some(name) = envelope
-            .descriptor
-            .get_mut("name")
-            .and_then(Value::as_str_mut)
-        {
-            *name = "Tampered Pack".to_owned();
-        }
+        envelope.descriptor["name"] = Value::String("Tampered Pack".to_owned());
         let mut registry = registry();
         let error = registry
             .admit(&envelope)
             .expect_err("tampered descriptor must fail");
-        assert_eq!(error.code(), crate::error::RegistryErrorCode::AdmissionSignatureInvalid);
+        assert_eq!(
+            error.code(),
+            crate::error::RegistryErrorCode::AdmissionSignatureInvalid
+        );
         assert!(registry.plugin("com.studio.pack.pos").is_none());
     }
 
@@ -676,9 +737,9 @@ mod tests {
 
     #[test]
     fn rejects_unknown_schema_fields_structurally() {
-        let mut value = serde_json::to_value(pos_pack_descriptor()).expect("serialize");
-        value["rendererKinds"] = serde_json::json!(["fancy"]);
-        let bytes = serde_json::to_vec(&value).expect("encode");
+        let mut envelope = pos_pack_envelope();
+        envelope.descriptor["rendererKinds"] = serde_json::json!(["fancy"]);
+        let bytes = serde_json::to_vec(&envelope).expect("encode");
         let policy = DescriptorPolicy::default();
         let error = crate::descriptor::parse_descriptor_envelope(&bytes, &policy)
             .expect_err("unknown field must fail");

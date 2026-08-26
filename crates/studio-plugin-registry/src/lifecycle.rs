@@ -1,6 +1,7 @@
 //! Bounded lifecycle hook execution with violation containment.
 
 use std::collections::BTreeMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
 use crate::descriptor::{HookBudget, LifecycleHook};
@@ -29,6 +30,8 @@ pub struct HookContext<'a> {
     pub hook: LifecycleHook,
     /// Declared wall-clock budget in milliseconds.
     pub budget_ms: u64,
+    /// Declared memory/output budget in bytes.
+    pub budget_memory_bytes: usize,
 }
 
 /// Handler-declared failure; treated identically to a budget overrun.
@@ -95,8 +98,7 @@ pub struct HookRunner {
 impl HookRunner {
     /// Register a handler for one plugin/hook position, replacing any prior handler.
     pub fn register(&mut self, plugin_id: &str, hook: LifecycleHook, handler: HookCallback) {
-        self.handlers
-            .insert((plugin_id.to_owned(), hook), handler);
+        self.handlers.insert((plugin_id.to_owned(), hook), handler);
     }
 
     /// Drop every handler registered for one plugin.
@@ -133,12 +135,13 @@ impl HookRunner {
             plugin_id,
             hook,
             budget_ms: budget.time_ms,
+            budget_memory_bytes: budget.memory_bytes,
         };
         let started = Instant::now();
-        let outcome = handler(&context);
+        let outcome =
+            catch_unwind(AssertUnwindSafe(|| handler(&context))).unwrap_or(Err(HookFailure));
         let elapsed = started.elapsed();
-        self.handlers
-            .insert((plugin_id.to_owned(), hook), handler);
+        self.handlers.insert((plugin_id.to_owned(), hook), handler);
         let report = HookRunReport {
             hook,
             ran: true,
@@ -152,7 +155,8 @@ impl HookRunner {
         if elapsed > Duration::from_millis(budget.time_ms) {
             return Err(ViolationReason::TimeBudgetExceeded {
                 allowed_ms: budget.time_ms,
-                actual_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                actual_ms: u64::try_from(elapsed.as_nanos().div_ceil(1_000_000))
+                    .unwrap_or(u64::MAX),
             });
         }
         if output.len() > budget.memory_bytes {

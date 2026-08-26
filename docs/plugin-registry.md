@@ -29,11 +29,12 @@ never appears in descriptors, consent records, or usage ledgers.
 
 | Question from issue 07 | Decision here |
 | --- | --- |
-| How are renderer kinds reserved? | Structural: the closed schema (`deny_unknown_fields` at every level) exposes no field that registers kinds; composition trees may only reference `ApprovedKindCatalog` entries (snake_case primitive kinds matching `studio-protocol` `NodeKind` serialization). |
+| How are renderer kinds reserved? | Structural: the closed schema (`deny_unknown_fields` at every level) exposes no field that registers kinds; composition trees may only reference host-supplied `ApprovedKindCatalog` entries. The shipped default is a conservative subset of snake_case `studio-protocol` `NodeKind` values. |
+| Integrity shape | Schema v1 fixes JCS canonicalization, the `studio.document.signature.v1` domain, and Ed25519. The envelope carries publisher/key attribution plus the signature; admission retains the verified canonical document digest for audit. |
 | Capability catalog | Reuses the milestone-one closed catalog (`payment.simulate`, `printer.simulate`) shared with bundle manifests. Grows only host-side. |
-| Consent scope | Per `(project, plugin, capability)` triple, explicit grant/deny records, revocation deactivates active extensions immediately. |
-| Hook budgets | Declared per hook in the descriptor, capped by host ceilings (≤ 5000 ms, ≤ 4 MiB). Violations quarantine the extension; every later hook is refused. |
-| Removal safety | `plan_removal` audits owned project artifacts and stores a pending plan without mutation; `complete_removal(force=false)` refuses while artifacts remain, `force=true` treats the report as the pre-mutation disclosure. |
+| Consent scope | Per `(project, plugin, capability)` triple, inspectable grant/deny records; revocation or an explicit denial deactivates active extensions immediately. |
+| Hook budgets | Declared per hook in the descriptor, capped by host ceilings (≤ 5000 ms, ≤ 4 MiB). The admission hook runs only after signature, compatibility, descriptor, and kind validation. Later violations quarantine the extension; every further hook is refused. |
+| Removal safety | `plan_removal` audits owned project artifacts and stores a pending plan without mutation; any usage change makes the report stale. `complete_removal(force=false)` refuses while artifacts remain, while `force=true` only proceeds against a still-current pre-mutation disclosure. |
 
 ## Underspecified points flagged for issue 07
 
@@ -56,8 +57,8 @@ never appears in descriptors, consent records, or usage ledgers.
 - **Wire compatibility of signature formats.** Descriptor signatures use a new document
   domain rather than `CanonicalBundleInput`; whether future packaging folds descriptors
   into bundle manifests is unresolved until issue 07 lands.
-- **Primitive-kind spellings.** `DEFAULT_PRIMITIVE_CATALOG` mirrors `NodeKind`
-  snake_case serialization at time of writing; a generated catalog from
+- **Primitive-kind coverage.** `DEFAULT_PRIMITIVE_CATALOG` is a hand-maintained conservative
+  subset of `NodeKind` snake_case serialization. A generated readiness-aware catalog from
   `studio-components` should replace it.
 
 ## Tests
@@ -67,7 +68,8 @@ never appears in descriptors, consent records, or usage ledgers.
 - Integration: `tests/integration/pos_pack_registry.rs` walks the authored first-party
   `pos-pack` fixture through admission → consent → install → lifecycle → removal report,
   plus tamper rejection, expired compatibility, disabled trust keys, time/output budget
-  containment, revocation, and closed-schema rejection families.
+  containment, guest-trap containment, explicit denial/revocation, stale-removal protection,
+  and closed-schema rejection families.
 
 Authored but not executed here (code-only writer); the serialized runner owns
 `cargo fmt/clippy/test --locked`.

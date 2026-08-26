@@ -6173,6 +6173,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-plugin-registry"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "semver",
+ "serde",
+ "serde_json",
+ "studio-package",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "studio-protocol"
 version = "0.1.0"
 dependencies = [

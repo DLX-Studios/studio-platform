@@ -33,7 +33,7 @@ pub struct DescriptorError {
 }
 
 impl DescriptorError {
-    pub(crate) const fn byte_limit() -> Self {
+    pub(crate) fn byte_limit() -> Self {
         Self {
             code: DescriptorErrorCode::ByteLimitExceeded,
             detail: "descriptor byte limit exceeded".to_owned(),
@@ -82,7 +82,7 @@ impl DescriptorError {
         }
     }
 
-    pub(crate) const fn signature_invalid() -> Self {
+    pub(crate) fn signature_invalid() -> Self {
         Self {
             code: DescriptorErrorCode::SignatureInvalid,
             detail: "descriptor signature invalid".to_owned(),
@@ -168,7 +168,7 @@ impl RegistryError {
         }
     }
 
-    pub(crate) const fn unknown_plugin() -> Self {
+    pub(crate) fn unknown_plugin() -> Self {
         Self {
             code: RegistryErrorCode::UnknownPlugin,
             detail: "plugin is not admitted".to_owned(),
