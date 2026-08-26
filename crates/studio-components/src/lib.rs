@@ -10,7 +10,8 @@ mod transition;
 mod update;
 
 pub use catalog::{
-    CatalogError, CatalogErrorCode, ComponentCatalog, NativeComponent, NativeLayer, TargetSize,
+    COMPONENT_RENDERER_READINESS, CatalogError, CatalogErrorCode, ComponentCatalog,
+    ComponentReadiness, NativeComponent, NativeLayer, TargetSize, component_readiness,
 };
 pub use controls::RuntimeControl;
 pub use events::{DispatchError, DispatchErrorCode, HostEventDispatcher, InputAction};

@@ -1,6 +1,11 @@
 //! Native controls used to prove the Wayland-only GPUI foundation.
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, Image, ImageFormat,
@@ -14,7 +19,7 @@ use gpui_component::{
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     date_picker::{DatePicker, DatePickerState},
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, NumberInput, OtpInput, OtpState},
     popover::Popover,
     progress::{Progress, ProgressCircle},
     radio::Radio,
@@ -28,7 +33,8 @@ use gpui_component::{
     tag::Tag,
 };
 use studio_actions::{Checkout, Money};
-use studio_components::{InputAction, RuntimeControl};
+use studio_components::{InputAction, PropertyTransition, RuntimeControl};
+use studio_navigation::MotionPreference;
 use studio_protocol::NodeKind;
 
 use crate::{
@@ -50,6 +56,196 @@ const COLOR_TEXT: u32 = 0x0018_2735;
 const COLOR_MUTED: u32 = 0x008b_949e;
 const COLOR_SUCCESS: u32 = 0x00dc_fce7;
 const COLOR_WARNING: u32 = 0x0085_3b00;
+const COLOR_ERROR: u32 = 0x00fe_f2f2;
+
+fn node_opacity(node: &PluginRenderNode) -> f32 {
+    node.props
+        .get("opacity")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0) as f32
+}
+
+fn node_accessibility_label(node: &PluginRenderNode) -> Option<String> {
+    node.props
+        .get("accessibility_label")
+        .and_then(serde_json::Value::as_str)
+        .filter(|label| !label.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn prop_bool(node: &PluginRenderNode, key: &str, default: bool) -> bool {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn prop_str<'a>(node: &'a PluginRenderNode, key: &str) -> Option<&'a str> {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn prop_f64(node: &PluginRenderNode, key: &str, default: f64) -> f64 {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(default)
+}
+
+fn prop_u64(node: &PluginRenderNode, key: &str, default: u64) -> u64 {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(default)
+}
+
+/// Declared string-list properties (`items`, `options`, `columns`, `commands`).
+fn prop_strings(node: &PluginRenderNode, key: &str) -> Vec<String> {
+    node.props
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse one numeric input buffer for `NumberInput` change dispatch.
+fn parse_number_input(raw: &str) -> Option<f64> {
+    raw.trim().parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+/// Stable-ID handling for retained form widgets (ticket 32 decision): every stateful widget is
+/// keyed by the stable protocol node ID and kept in a retained map across targeted property
+/// patches, so GPUI focus follows the same entity and mounted state survives re-renders. Entries
+/// are pruned when a render pass no longer visits their node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputBinding {
+    Text,
+    Multiline,
+    Secret,
+    Number,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransitionCurve {
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+impl TransitionCurve {
+    fn sample(self, delta: f32) -> f32 {
+        match self {
+            Self::Linear => delta,
+            Self::EaseIn => delta * delta,
+            Self::EaseOut => 1.0 - (1.0 - delta).powi(2),
+            Self::EaseInOut if delta < 0.5 => 2.0 * delta * delta,
+            Self::EaseInOut => 1.0 - (-2.0 * delta + 2.0).powi(2) / 2.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NodeTransition {
+    duration: Duration,
+    curve: TransitionCurve,
+}
+
+fn node_transition(node: &PluginRenderNode, reduced_motion: bool) -> Option<NodeTransition> {
+    let transition = node.props.get("transition")?.as_object()?;
+    let duration = Duration::from_millis(transition.get("duration_ms")?.as_u64()?);
+    let preference = if reduced_motion {
+        MotionPreference::Reduced
+    } else {
+        MotionPreference::Standard
+    };
+    let duration = PropertyTransition::resolve(duration, preference).duration();
+    let curve = match transition.get("curve")?.as_str()? {
+        "ease_in" => TransitionCurve::EaseIn,
+        "ease_out" => TransitionCurve::EaseOut,
+        "ease_in_out" => TransitionCurve::EaseInOut,
+        _ => TransitionCurve::Linear,
+    };
+    Some(NodeTransition { duration, curve })
+}
+
+fn semantic_background(value: Option<&str>) -> gpui::Hsla {
+    match value {
+        Some("surface_variant") => rgb(COLOR_SURFACE_VARIANT).into(),
+        Some("success") => rgb(COLOR_SUCCESS).into(),
+        Some("warning") => rgb(COLOR_WARNING).into(),
+        Some("error") => rgb(COLOR_ERROR).into(),
+        Some("transparent") => gpui::transparent_black(),
+        _ => rgb(COLOR_SURFACE).into(),
+    }
+}
+
+fn image_format(path: &str, bytes: &[u8]) -> Option<ImageFormat> {
+    if let Some(extension) = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        let format = match extension.to_ascii_lowercase().as_str() {
+            "png" => ImageFormat::Png,
+            "jpg" | "jpeg" => ImageFormat::Jpeg,
+            "webp" => ImageFormat::Webp,
+            "gif" => ImageFormat::Gif,
+            "svg" => ImageFormat::Svg,
+            "bmp" => ImageFormat::Bmp,
+            "tif" | "tiff" => ImageFormat::Tiff,
+            "ico" => ImageFormat::Ico,
+            "pbm" | "pgm" | "ppm" | "pnm" => ImageFormat::Pnm,
+            _ => return image_format_from_bytes(bytes),
+        };
+        return Some(format);
+    }
+    image_format_from_bytes(bytes)
+}
+
+fn image_format_from_bytes(bytes: &[u8]) -> Option<ImageFormat> {
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(ImageFormat::Png)
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some(ImageFormat::Jpeg)
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(ImageFormat::Gif)
+    } else if bytes.starts_with(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some(ImageFormat::Webp)
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        Some(ImageFormat::Tiff)
+    } else if bytes.starts_with(b"\0\0\x01\0") || bytes.starts_with(b"\0\0\x02\0") {
+        Some(ImageFormat::Ico)
+    } else if is_svg_bytes(bytes) {
+        Some(ImageFormat::Svg)
+    } else if matches!(
+        bytes.get(0..2),
+        Some(b"P1" | b"P2" | b"P3" | b"P4" | b"P5" | b"P6")
+    ) {
+        Some(ImageFormat::Pnm)
+    } else {
+        None
+    }
+}
+
+fn is_svg_bytes(bytes: &[u8]) -> bool {
+    let text = match std::str::from_utf8(&bytes[..bytes.len().min(256)]) {
+        Ok(text) => text.trim_start(),
+        Err(_) => return false,
+    };
+    text.starts_with("<svg") || text.starts_with("<?xml")
+}
 
 /// Native behaviors demonstrated by the foundation gallery.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -206,10 +402,15 @@ pub struct FoundationGallery {
     model: FoundationGalleryModel,
     root_focus: FocusHandle,
     controls: [FocusHandle; 3],
-    component_input: Entity<InputState>,
-    component_secret_input: Entity<InputState>,
-    component_select: Entity<SelectState<Vec<SharedString>>>,
-    component_slider: Entity<SliderState>,
+    plugin_inputs: BTreeMap<String, Entity<InputState>>,
+    plugin_selects: BTreeMap<String, Entity<SelectState<Vec<SharedString>>>>,
+    plugin_sliders: BTreeMap<String, Entity<SliderState>>,
+    plugin_otps: BTreeMap<String, Entity<OtpState>>,
+    plugin_state_subscriptions: BTreeMap<String, Vec<Subscription>>,
+    visited_input_ids: BTreeSet<String>,
+    overlay_depth: usize,
+    dismissed_overlays: BTreeSet<String>,
+    overlay_focus: BTreeMap<String, FocusHandle>,
     component_date_picker: Entity<DatePickerState>,
     component_color_picker: Entity<ColorPickerState>,
     _component_subscriptions: Vec<Subscription>,
@@ -221,81 +422,8 @@ impl FoundationGallery {
     /// Creates the gallery and its ordered focus stops.
     #[must_use]
     pub fn new(reduced_motion: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let component_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search services, price or duration")
-        });
-        let component_secret_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Enter payment PIN")
-                .masked(true)
-        });
-        let component_select = cx.new(|cx| {
-            SelectState::new(
-                vec![
-                    SharedString::from("All categories"),
-                    SharedString::from("Hair"),
-                    SharedString::from("Beard"),
-                ],
-                Some(IndexPath::default()),
-                window,
-                cx,
-            )
-        });
-        let component_slider = cx.new(|_| {
-            SliderState::new()
-                .min(0.0)
-                .max(0.5)
-                .step(0.05)
-                .default_value(0.0)
-        });
         let component_date_picker = cx.new(|cx| DatePickerState::new(window, cx));
         let component_color_picker = cx.new(|cx| ColorPickerState::new(window, cx));
-
-        let mut component_subscriptions = Vec::new();
-        component_subscriptions.push(cx.subscribe_in(&component_input, window, {
-            let component_input = component_input.clone();
-            move |this, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let value = component_input.read(cx).value().to_string();
-                    if let Some(surface) = this.plugin_surface.as_mut() {
-                        let _ = surface.process_input("search", InputAction::TextChanged { value });
-                    }
-                    cx.notify();
-                }
-            }
-        }));
-        component_subscriptions.push(cx.subscribe_in(&component_select, window, {
-            move |this, _, event: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let SelectEvent::Confirm(Some(value)) = event else {
-                    return;
-                };
-                if let Some(surface) = this.plugin_surface.as_mut() {
-                    let _ = surface.process_input(
-                        "category",
-                        InputAction::SelectionChanged {
-                            value: value.to_string(),
-                        },
-                    );
-                }
-                cx.notify();
-            }
-        }));
-        component_subscriptions.push(cx.subscribe_in(&component_slider, window, {
-            move |this, _, event: &SliderEvent, _, cx| {
-                let SliderEvent::Change(value) = event else {
-                    return;
-                };
-                if let Some(surface) = this.plugin_surface.as_mut() {
-                    let _ = surface.process_input(
-                        "discount",
-                        InputAction::SliderDrag {
-                            value: f64::from(value.end()),
-                        },
-                    );
-                }
-                cx.notify();
-            }
-        }));
 
         Self {
             model: FoundationGalleryModel::new(reduced_motion),
@@ -305,13 +433,18 @@ impl FoundationGallery {
                 cx.focus_handle().tab_index(2).tab_stop(true),
                 cx.focus_handle().tab_index(3).tab_stop(true),
             ],
-            component_input,
-            component_secret_input,
-            component_select,
-            component_slider,
+            plugin_inputs: BTreeMap::new(),
+            plugin_selects: BTreeMap::new(),
+            plugin_sliders: BTreeMap::new(),
+            plugin_otps: BTreeMap::new(),
+            plugin_state_subscriptions: BTreeMap::new(),
+            visited_input_ids: BTreeSet::new(),
+            overlay_depth: 0,
+            dismissed_overlays: BTreeSet::new(),
+            overlay_focus: BTreeMap::new(),
             component_date_picker,
             component_color_picker,
-            _component_subscriptions: component_subscriptions,
+            _component_subscriptions: Vec::new(),
             plugin_surface: None,
             checkout_shell: None,
         }
@@ -366,6 +499,376 @@ impl FoundationGallery {
     /// Mutable access to the host-owned checkout shell for trusted flows.
     pub fn checkout_shell_mut(&mut self) -> Option<&mut NativeCheckoutShell> {
         self.checkout_shell.as_mut()
+    }
+
+    fn dispatch_input(&mut self, node_id: &str, action: InputAction, cx: &mut Context<Self>) {
+        if let Some(surface) = self.plugin_surface.as_mut() {
+            let _ = surface.process_input(node_id, action);
+        }
+        cx.notify();
+    }
+
+    /// Retain (or create) one stable-ID text input state for a plugin node.
+    fn plugin_input(
+        &mut self,
+        node_id: &str,
+        placeholder: &str,
+        initial_value: &str,
+        binding: InputBinding,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_inputs.get(node_id) {
+            return state.clone();
+        }
+        let placeholder = placeholder.to_owned();
+        let initial_value = initial_value.to_owned();
+        let state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder(placeholder);
+            match binding {
+                // Secret inputs are masked at the native layer and their buffers are never
+                // mirrored into host state or events.
+                InputBinding::Secret => state = state.masked(true),
+                InputBinding::Multiline => state = state.multi_line(true),
+                InputBinding::Text | InputBinding::Number => {}
+            }
+            if !initial_value.is_empty() && binding != InputBinding::Secret {
+                state.set_value(initial_value, window, cx);
+            }
+            state
+        });
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            let state = state.clone();
+            move |this, _, event: &InputEvent, _, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let raw = state.read(cx).value().to_string();
+                let action = match binding {
+                    // Secret input values must never enter the protocol event path; only the
+                    // separate HostSecretInput ready flow crosses the boundary.
+                    InputBinding::Secret => None,
+                    InputBinding::Number => parse_number_input(&raw)
+                        .map(|value| InputAction::SliderDrag { value }),
+                    InputBinding::Text | InputBinding::Multiline => {
+                        Some(InputAction::TextChanged { value: raw })
+                    }
+                };
+                if let Some(action) = action {
+                    this.dispatch_input(&node_id, action, cx);
+                }
+            }
+        });
+        self.plugin_inputs
+            .insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID select state for a plugin node.
+    fn plugin_select(
+        &mut self,
+        node_id: &str,
+        options: Vec<SharedString>,
+        selected: Option<IndexPath>,
+        searchable: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<Vec<SharedString>>> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_selects.get(node_id) {
+            return state.clone();
+        }
+        let state = cx.new(|cx| {
+            SelectState::new(options, selected, window, cx).searchable(searchable)
+        });
+        let confirm_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            move |this, _, event: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let SelectEvent::Confirm(Some(value)) = event else {
+                    return;
+                };
+                this.dispatch_input(
+                    &node_id,
+                    InputAction::SelectionChanged {
+                        value: value.to_string(),
+                    },
+                    cx,
+                );
+            }
+        });
+        self.plugin_selects
+            .insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(confirm_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID slider state for a plugin node. A single-value slider
+    /// passes `value_range: None` and its protocol `value` via `single`.
+    #[allow(clippy::too_many_arguments, reason = "closed schema mirrors every slider property")]
+    fn plugin_slider(
+        &mut self,
+        node_id: &str,
+        min: f32,
+        max: f32,
+        step: f32,
+        single: f32,
+        value_range: Option<(f32, f32)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SliderState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_sliders.get(node_id) {
+            return state.clone();
+        }
+        let state = cx.new(|_| {
+            let mut state = SliderState::new().min(min).max(max);
+            state = if step > 0.0 {
+                state.step(step)
+            } else {
+                state
+            };
+            match value_range {
+                Some((start, end)) => state.default_value((start, end)),
+                None => state.default_value(single),
+            }
+        });
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            move |this, _, event: &SliderEvent, _, cx| {
+                let SliderEvent::Change(value) = event else {
+                    return;
+                };
+                this.dispatch_input(
+                    &node_id,
+                    InputAction::SliderDrag {
+                        value: f64::from(value.end()),
+                    },
+                    cx,
+                );
+            }
+        });
+        self.plugin_sliders
+            .insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID OTP state for a plugin node.
+    fn plugin_otp(
+        &mut self,
+        node_id: &str,
+        length: usize,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<OtpState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        if let Some(state) = self.plugin_otps.get(node_id) {
+            return state.clone();
+        }
+        let value = value.to_owned();
+        let state = cx.new(|cx| OtpState::new(length, window, cx).default_value(value));
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            let state = state.clone();
+            move |this, _, event: &InputEvent, _, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                this.dispatch_input(
+                    &node_id,
+                    InputAction::TextChanged {
+                        value: state.read(cx).value().to_string(),
+                    },
+                    cx,
+                );
+            }
+        });
+        self.plugin_otps.insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    fn prune_retired_widget_states(&mut self) {
+        let live = std::mem::take(&mut self.visited_input_ids);
+        self.plugin_inputs.retain(|id, _| live.contains(id));
+        self.plugin_selects.retain(|id, _| live.contains(id));
+        self.plugin_sliders.retain(|id, _| live.contains(id));
+        self.plugin_otps.retain(|id, _| live.contains(id));
+        self.plugin_state_subscriptions
+            .retain(|id, _| live.contains(id));
+    }
+
+    /// Host-owned overlay gating: returns the stacking depth for a visible overlay, or `None`
+    /// when the overlay is closed or host-dismissed. Dismissal state resets whenever the
+    /// protocol reports the overlay closed so reopening works without remounts.
+    fn overlay_gate(
+        &mut self,
+        node_id: &str,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        if !open {
+            self.dismissed_overlays.remove(node_id);
+            return None;
+        }
+        if self.dismissed_overlays.contains(node_id) {
+            return None;
+        }
+        let depth = self.overlay_depth;
+        self.overlay_depth += 1;
+        self.overlay_focus
+            .entry(node_id.to_owned())
+            .or_insert_with(|| cx.focus_handle());
+        Some(depth)
+    }
+
+    fn dismiss_overlay(&mut self, node_id: &str, cx: &mut Context<Self>) {
+        self.dismissed_overlays.insert(node_id.to_owned());
+        cx.notify();
+    }
+
+    /// Shared empty-state placeholder used by data-display kinds when a declared collection
+    /// (items/columns/children) is absent. Loading/error states are not expressible under the
+    /// closed schema, so only empty and populated states exist.
+    fn empty_state_element(&self, label: &str) -> AnyElement {
+        div()
+            .id(format!("empty:{label}"))
+            .w_full()
+            .p_4()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(COLOR_BORDER_SUBTLE))
+            .bg(rgb(COLOR_SURFACE_VARIANT))
+            .flex()
+            .flex_col()
+            .items_center()
+            .text_sm()
+            .text_color(rgb(COLOR_MUTED))
+            .child(label.to_owned())
+            .into_any_element()
+    }
+
+    /// Full-screen overlay root with host-owned Escape dismissal. This gpui build has no
+    /// z-index; stacking follows tree paint order, so the gate depth only disambiguates IDs.
+    fn overlay_root(
+        &self,
+        node_id: &str,
+        depth: usize,
+        dimmed: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let dismiss_id = node_id.to_owned();
+        div()
+            .id(format!("{node_id}:overlay:{depth}"))
+            .absolute()
+            .inset_0()
+            .when(dimmed, |element| {
+                element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            })
+            .flex()
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key.as_str() == "escape" {
+                    // Host-owned dismissal: Escape hides the overlay locally; the dismissal
+                    // resets when the protocol reports `open=false` for the same node.
+                    this.dismiss_overlay(&dismiss_id, cx);
+                }
+            }))
+    }
+
+    fn overlay_panel(
+        title: String,
+        message: Option<String>,
+        width: f32,
+        children: Vec<AnyElement>,
+    ) -> gpui::Div {
+        div()
+            .w(px(width))
+            .max_w(px(560.0))
+            .p_6()
+            .rounded_xl()
+            .bg(rgb(COLOR_SURFACE))
+            .border_1()
+            .border_color(rgb(COLOR_BORDER))
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xl()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .when_some(message, |element, message| {
+                element.child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(message))
+            })
+            .children(children)
+    }
+
+    /// Render a Select or Combobox node from its closed schema (label/value/options/enabled).
+    fn select_like_element(
+        &mut self,
+        node: &PluginRenderNode,
+        opacity: f32,
+        accessibility_label: Option<String>,
+        searchable: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = prop_str(node, "label").unwrap_or("Select").to_owned();
+        let value = prop_str(node, "value").unwrap_or_default().to_owned();
+        let enabled = prop_bool(node, "enabled", true);
+        let options = node
+            .props
+            .get("options")
+            .and_then(serde_json::Value::as_array)
+            .map(|options| {
+                options
+                    .iter()
+                    .filter_map(|option| option.as_str())
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let selected = options
+            .iter()
+            .position(|option| option.as_str() == value.as_str())
+            .map(IndexPath::new);
+        let state =
+            self.plugin_select(&node.id, options, selected, searchable, window, cx);
+        div()
+            .id(node.id.clone())
+            .opacity(opacity)
+            .when_some(accessibility_label, |element, aria| {
+                element.aria_label(aria)
+            })
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
+            .child(
+                Select::new(&state)
+                    .placeholder(value)
+                    .disabled(!enabled),
+            )
+            .into_any_element()
     }
 
     fn animation_indicator(&self) -> AnyElement {
@@ -489,6 +992,10 @@ impl FoundationGallery {
         {
             return div().id(node.id).hidden().into_any_element();
         }
+        let opacity = node_opacity(&node);
+        let accessibility_label = node_accessibility_label(&node);
+        let transition = node_transition(&node, self.model.reduced_motion());
+        let transition_id = format!("{}:transition", node.id);
         let gap = node
             .props
             .get("gap")
@@ -504,9 +1011,19 @@ impl FoundationGallery {
             .into_iter()
             .map(|child| self.plugin_node(child, window, cx))
             .collect::<Vec<_>>();
-        match node.kind {
-            NodeKind::Column => div()
+        let rendered = match node.kind {
+            NodeKind::Column => {
+                let alignment = node
+                    .props
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("stretch");
+                div()
                 .id(node.id)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, label| {
+                    element.aria_label(label)
+                })
                 .w_full()
                 .min_h_0()
                 .flex_grow(flex)
@@ -515,13 +1032,27 @@ impl FoundationGallery {
                 })
                 .flex()
                 .flex_col()
+                .when(alignment == "start", gpui::Styled::items_start)
+                .when(alignment == "center", gpui::Styled::items_center)
+                .when(alignment == "end", gpui::Styled::items_end)
+                .when(alignment == "stretch", gpui::Styled::items_stretch)
+                .when(alignment == "space_between", gpui::Styled::justify_between)
                 .gap(px(gap))
                 .children(children)
-                .into_any_element(),
+                .into_any_element()
+            }
             NodeKind::Row => {
                 let is_main_row = node.id == "main-row";
+                let alignment = node
+                    .props
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str);
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .w_full()
                     .when(is_root, gpui::Styled::h_full)
                     .when(is_root, |element| element.min_h_0().flex_grow_1())
@@ -529,30 +1060,62 @@ impl FoundationGallery {
                     .when(is_product_meta, gpui::Styled::justify_between)
                     .when(is_summary_row, gpui::Styled::justify_between)
                     .flex()
-                    .when(!is_root && !is_main_row, gpui::Styled::items_center)
+                    .when(
+                        alignment.is_none() && !is_root && !is_main_row,
+                        gpui::Styled::items_center,
+                    )
+                    .when(alignment == Some("start"), gpui::Styled::items_start)
+                    .when(alignment == Some("center"), gpui::Styled::items_center)
+                    .when(alignment == Some("end"), gpui::Styled::items_end)
+                    .when(alignment == Some("stretch"), gpui::Styled::items_stretch)
+                    .when(
+                        alignment == Some("space_between"),
+                        gpui::Styled::justify_between,
+                    )
                     .gap(px(gap))
                     .children(children)
                     .into_any_element()
             }
-            NodeKind::ListView => div()
-                .id(node.id)
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .flex_grow_1()
-                .flex_shrink_1()
-                .gap(px(gap))
-                .overflow_y_scroll()
-                .children(children)
-                .into_any_element(),
-            NodeKind::ScrollView => div()
-                .id(node.id)
-                .w_full()
-                .min_h_0()
-                .flex_grow_1()
-                .overflow_y_scroll()
-                .children(children)
-                .into_any_element(),
+            NodeKind::ListView => {
+                let horizontal = node.props.get("axis").and_then(serde_json::Value::as_str)
+                    == Some("horizontal");
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .flex()
+                    .when(horizontal, gpui::Styled::flex_row)
+                    .when(!horizontal, gpui::Styled::flex_col)
+                    .min_h_0()
+                    .min_w_0()
+                    .flex_grow_1()
+                    .flex_shrink_1()
+                    .gap(px(gap))
+                    .when(horizontal, gpui::Styled::overflow_x_scroll)
+                    .when(!horizontal, gpui::Styled::overflow_y_scroll)
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::ScrollView => {
+                let horizontal = node.props.get("axis").and_then(serde_json::Value::as_str)
+                    == Some("horizontal");
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex_grow_1()
+                    .when(horizontal, gpui::Styled::overflow_x_scroll)
+                    .when(!horizontal, gpui::Styled::overflow_y_scroll)
+                    .children(children)
+                    .into_any_element()
+            }
             NodeKind::Grid => {
                 let columns = node
                     .props
@@ -562,11 +1125,44 @@ impl FoundationGallery {
                     .unwrap_or(2);
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .w_full()
                     .min_w_0()
                     .grid()
                     .grid_cols(columns)
                     .gap(px(gap))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Stack => {
+                let alignment = node
+                    .props
+                    .get("alignment")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("stretch");
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .relative()
+                    .min_w_0()
+                    .flex()
+                    .when(alignment == "start", |element| {
+                        element.items_start().justify_start()
+                    })
+                    .when(alignment == "center", |element| {
+                        element.items_center().justify_center()
+                    })
+                    .when(alignment == "end", |element| {
+                        element.items_end().justify_end()
+                    })
+                    .when(alignment == "stretch", gpui::Styled::items_stretch)
+                    .when(alignment == "space_between", gpui::Styled::justify_between)
                     .children(children)
                     .into_any_element()
             }
@@ -578,6 +1174,10 @@ impl FoundationGallery {
                     .unwrap_or(12.0) as f32;
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .min_w(px(150.0))
                     .min_h(px(238.0))
                     .flex()
@@ -604,11 +1204,14 @@ impl FoundationGallery {
                     .get("background")
                     .and_then(serde_json::Value::as_str)
                 {
-                    Some("surface_variant") => rgb(COLOR_SURFACE_VARIANT),
-                    _ => rgb(COLOR_SURFACE),
+                    value => semantic_background(value),
                 };
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .min_w_0()
                     .when(is_order_pane, |element| {
                         element.w(px(390.0)).h_full().flex_shrink_0()
@@ -633,6 +1236,65 @@ impl FoundationGallery {
                     .children(children)
                     .into_any_element()
             }
+            NodeKind::Spacer => {
+                let size = node
+                    .props
+                    .get("size")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(8.0) as f32;
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w(px(size))
+                    .h(px(size))
+                    .flex_shrink_0()
+                    .into_any_element()
+            }
+            NodeKind::Divider => {
+                let thickness = node
+                    .props
+                    .get("thickness")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1.0) as f32;
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .h(px(thickness))
+                    .bg(rgb(COLOR_BORDER))
+                    .into_any_element()
+            }
+            NodeKind::Icon => {
+                let name = node
+                    .props
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                div()
+                    .id(node.id)
+                    .role(Role::Image)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .size(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .text_color(rgb(COLOR_MUTED))
+                    .text_xs()
+                    .child(name)
+                    .into_any_element()
+            }
             NodeKind::Tag => {
                 let label = node
                     .props
@@ -644,12 +1306,20 @@ impl FoundationGallery {
                     .get("variant")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("default");
-                match variant {
+                let tag = match variant {
                     "success" => Tag::success().child(label.to_owned()).into_any_element(),
                     "warning" => Tag::warning().child(label.to_owned()).into_any_element(),
                     "destructive" => Tag::danger().child(label.to_owned()).into_any_element(),
                     _ => Tag::secondary().child(label.to_owned()).into_any_element(),
-                }
+                };
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(tag)
+                    .into_any_element()
             }
             NodeKind::Badge => {
                 let label = node
@@ -659,7 +1329,7 @@ impl FoundationGallery {
                     .unwrap_or_default()
                     .to_owned();
                 // Numeric labels keep count badge semantics, text labels render as pill
-                if let Ok(count) = label.parse::<usize>() {
+                let badge = if let Ok(count) = label.parse::<usize>() {
                     Badge::new().count(count).into_any_element()
                 } else if label.is_empty() {
                     Badge::new().count(0).into_any_element()
@@ -676,11 +1346,56 @@ impl FoundationGallery {
                         .text_color(rgb(COLOR_TEXT))
                         .child(label)
                         .into_any_element()
-                }
+                };
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(badge)
+                    .into_any_element()
             }
-            NodeKind::Skeleton => Skeleton::new().into_any_element(),
-            NodeKind::Spinner => Spinner::new().into_any_element(),
-            NodeKind::Separator => Separator::horizontal().into_any_element(),
+            NodeKind::Skeleton => {
+                let width = node
+                    .props
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let height = node
+                    .props
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(
+                        Skeleton::new()
+                            .when_some(width, |element, width| element.w(px(width)))
+                            .when_some(height, |element, height| element.h(px(height))),
+                    )
+                    .into_any_element()
+            }
+            NodeKind::Spinner => div()
+                .id(node.id)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, label| {
+                    element.aria_label(label)
+                })
+                .child(Spinner::new())
+                .into_any_element(),
+            NodeKind::Separator => div()
+                .id(node.id)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, label| {
+                    element.aria_label(label)
+                })
+                .child(Separator::horizontal())
+                .into_any_element(),
             NodeKind::Image => {
                 let path = node
                     .props
@@ -691,12 +1406,28 @@ impl FoundationGallery {
                     .plugin_surface
                     .as_ref()
                     .and_then(|surface| surface.asset(path))
-                    .map(|bytes| Arc::new(Image::from_bytes(ImageFormat::Webp, bytes.to_vec())));
+                    .and_then(|bytes| {
+                        image_format(path, bytes)
+                            .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
+                    });
                 match source {
                     Some(source) => img(source)
                         .id(node.id)
+                        .role(Role::Image)
+                        .opacity(opacity)
+                        .when_some(
+                            accessibility_label.clone().or_else(|| {
+                                node.props
+                                    .get("alt")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(ToOwned::to_owned)
+                            }),
+                            |element, label| element.aria_label(label),
+                        )
                         .w_full()
-                        .when(is_product_image, |element| element.h(px(128.0)))
+                        .when(is_product_image || !is_cart_image, |element| {
+                            element.h(px(128.0))
+                        })
                         .when(is_cart_image, |element| {
                             element.w(px(72.0)).h(px(72.0)).flex_shrink_0()
                         })
@@ -705,6 +1436,17 @@ impl FoundationGallery {
                         .into_any_element(),
                     None => div()
                         .id(node.id)
+                        .role(Role::Image)
+                        .opacity(opacity)
+                        .when_some(
+                            accessibility_label.clone().or_else(|| {
+                                node.props
+                                    .get("alt")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(ToOwned::to_owned)
+                            }),
+                            |element, label| element.aria_label(label),
+                        )
                         .w_full()
                         .h(px(128.0))
                         .rounded_md()
@@ -726,7 +1468,15 @@ impl FoundationGallery {
                     .unwrap_or(0.0);
                 // gpui Rating expects usize 0..5, map f64 0-5 to 0-5
                 let int_value = (value.clamp(0.0, 5.0).round() as usize).min(5);
-                Rating::new(node.id).value(int_value).into_any_element()
+                let rating_id = format!("{}:rating", node.id);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(Rating::new(rating_id).value(int_value))
+                    .into_any_element()
             }
             NodeKind::ProgressIndicator => {
                 let value = node
@@ -734,8 +1484,14 @@ impl FoundationGallery {
                     .get("value")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
-                Progress::new(node.id)
-                    .value(value * 100.0)
+                let progress_id = format!("{}:progress", node.id);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(Progress::new(progress_id).value(value * 100.0))
                     .into_any_element()
             }
             NodeKind::ProgressCircle => {
@@ -744,25 +1500,127 @@ impl FoundationGallery {
                     .get("value")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
-                ProgressCircle::new(node.id)
-                    .value(value * 100.0)
+                let progress_id = format!("{}:progress-circle", node.id);
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .child(ProgressCircle::new(progress_id).value(value * 100.0))
                     .into_any_element()
             }
             NodeKind::Popover => {
-                let open = node
-                    .props
-                    .get("open")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
+                let requested_open = prop_bool(&node, "open", false);
+                // Host-owned gating keeps Escape-dismissal consistent with other overlays;
+                // the native popover still handles trigger-anchored presentation.
+                let open = self.overlay_gate(&node.id, requested_open, cx).is_some();
+                let popover_id = node.id.clone();
                 Popover::new(node.id)
                     .default_open(open)
                     .trigger(Button::new("popover-trigger").secondary().label("Open"))
-                    .content(|_, _, _| div().p_3().child("Popover content"))
+                    .content(move |_, _, _| {
+                        div().p_3().min_w(px(180.0)).children(children.clone())
+                    })
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
                     .into_any_element()
             }
-            NodeKind::Avatar
-            | NodeKind::Empty
-            | NodeKind::Kbd
+            NodeKind::Avatar => {
+                let fallback = node
+                    .props
+                    .get("fallback")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let asset = node
+                    .props
+                    .get("asset")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let source = self
+                    .plugin_surface
+                    .as_ref()
+                    .and_then(|surface| surface.asset(asset))
+                    .and_then(|bytes| {
+                        image_format(asset, bytes)
+                            .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
+                    });
+                let alt = accessibility_label.clone().or_else(|| {
+                    node.props
+                        .get("alt")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                });
+                let content = match source {
+                    Some(source) => img(source)
+                        .size(px(40.0))
+                        .object_fit(gpui::ObjectFit::Cover)
+                        .rounded_full()
+                        .into_any_element(),
+                    None => div()
+                        .size(px(40.0))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(rgb(COLOR_SURFACE_VARIANT))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(fallback)
+                        .into_any_element(),
+                };
+                div()
+                    .id(node.id)
+                    .role(Role::Image)
+                    .opacity(opacity)
+                    .when_some(alt, |element, label| element.aria_label(label))
+                    .child(content)
+                    .into_any_element()
+            }
+            NodeKind::Empty => {
+                let title = node
+                    .props
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Empty")
+                    .to_owned();
+                let description = node
+                    .props
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER_SUBTLE))
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                    .when(!description.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(COLOR_MUTED))
+                                .child(description),
+                        )
+                    })
+                    .into_any_element()
+            }
+            NodeKind::Kbd
             | NodeKind::Alert
             | NodeKind::Attachment
             | NodeKind::Command
@@ -793,6 +1651,11 @@ impl FoundationGallery {
             }
             NodeKind::Sidebar => div()
                 .id(node.id)
+                .role(Role::Navigation)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w(px(220.0))
                 .h_full()
                 .min_h_0()
@@ -822,6 +1685,11 @@ impl FoundationGallery {
                 .into_any_element(),
             NodeKind::AppBar => div()
                 .id(node.id)
+                .role(Role::Banner)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
                 .h(px(56.0))
                 .flex_shrink_0()
@@ -837,6 +1705,11 @@ impl FoundationGallery {
                 .into_any_element(),
             NodeKind::Scaffold => div()
                 .id(node.id)
+                .role(Role::GenericContainer)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .size_full()
                 .flex()
                 .flex_col()
@@ -844,22 +1717,51 @@ impl FoundationGallery {
                 .bg(rgb(COLOR_BACKGROUND))
                 .children(children)
                 .into_any_element(),
-            NodeKind::Tabs => div()
-                .id(node.id)
-                .w_full()
-                .flex()
-                .flex_row()
-                .gap_2()
-                .items_center()
-                .p_1()
-                .rounded_lg()
-                .bg(rgb(COLOR_SURFACE_VARIANT))
-                .children(children)
-                .into_any_element(),
+            NodeKind::Tabs => {
+                let items = prop_strings(&node, "items");
+                div()
+                    .id(node.id)
+                    .role(Role::TabList)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap_2()
+                            .items_center()
+                            .p_1()
+                            .rounded_lg()
+                            .bg(rgb(COLOR_SURFACE_VARIANT))
+                            // Tab selection is carried per-child via `selected`; this header
+                            // renders only the declared item labels without inventing state.
+                            .children(items.iter().map(|item| {
+                                div().id(format!("{}:tab:{item}", node.id)).role(Role::Tab).text_sm().child(item.clone())
+                            })),
+                    )
+                    .children(children)
+                    .into_any_element()
+            }
             NodeKind::Breadcrumb => div()
                 .id(node.id)
+                .role(Role::Navigation)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
+                .min_w_0()
+                .overflow_hidden()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .text_sm()
@@ -868,6 +1770,11 @@ impl FoundationGallery {
                 .into_any_element(),
             NodeKind::StatusBar => div()
                 .id(node.id)
+                .role(Role::Footer)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
                 .h(px(24.0))
                 .flex_shrink_0()
@@ -882,14 +1789,210 @@ impl FoundationGallery {
                 .border_color(rgb(COLOR_BORDER_SUBTLE))
                 .children(children)
                 .into_any_element(),
-            NodeKind::NavigationBar | NodeKind::NavigationRail => div()
+            NodeKind::NavigationBar | NodeKind::NavigationRail => {
+                let vertical = node.kind == NodeKind::NavigationRail;
+                div()
+                    .id(node.id)
+                    .role(Role::Navigation)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .flex_shrink_0()
+                    .flex()
+                    .when(vertical, gpui::Styled::flex_col)
+                    .when(!vertical, gpui::Styled::flex_row)
+                    .when(vertical, |element| element.h_full())
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .rounded_lg()
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Stepper => {
+                let items = prop_strings(&node, "items");
+                let step = prop_u64(&node, "step", 0) as usize;
+                div()
+                    .id(node.id)
+                    .role(Role::List)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .when(items.is_empty() && children.is_empty(), |element| {
+                        element.child(self.empty_state_element("No steps"))
+                    })
+                    .children(items.iter().enumerate().map(|(index, label)| {
+                        let current = index == step;
+                        div()
+                            .id(format!("{}:step:{index}", node.id))
+                            .role(Role::ListItem)
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_sm()
+                            .text_color(if current || index < step {
+                                rgb(COLOR_TEXT)
+                            } else {
+                                rgb(COLOR_MUTED)
+                            })
+                            .child(format!("{}. {label}", index + 1))
+                    }))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Pagination => {
+                let page = prop_u64(&node, "page", 1).max(1);
+                let pages = prop_u64(&node, "pages", 1).max(1);
+                div()
+                    .id(node.id)
+                    .role(Role::Navigation)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER_SUBTLE))
+                    .bg(rgb(COLOR_SURFACE))
+                    .text_sm()
+                    .child("‹")
+                    .child(div().child(format!("Page {page} of {pages}")))
+                    .child("›")
+                    .into_any_element()
+            }
+            NodeKind::ListTile => div()
                 .id(node.id)
+                .role(Role::ListItem)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
+                .justify_between()
+                .gap_3()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(COLOR_BORDER_SUBTLE))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(prop_str(&node, "label").unwrap_or_default().to_owned()),
+                )
+                .children(children)
+                .into_any_element(),
+            NodeKind::SearchableList | NodeKind::VirtualList => div()
+                .id(node.id)
+                .role(Role::List)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
+                .max_h(px(320.0))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(children.is_empty(), |element| {
+                    element.child(self.empty_state_element("No entries"))
+                })
+                .children(children)
+                .into_any_element(),
+            NodeKind::DataTable => {
+                let columns = prop_strings(&node, "columns");
+                let populated = !columns.is_empty() || !children.is_empty();
+                div()
+                    .id(node.id)
+                    .role(Role::Table)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w_full()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(!populated, |element| {
+                        element.child(self.empty_state_element("No rows"))
+                    })
+                    .when(!columns.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .role(Role::Row)
+                                .flex()
+                                .gap_4()
+                                .pb_1()
+                                .border_b_1()
+                                .border_color(rgb(COLOR_BORDER))
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(rgb(COLOR_MUTED))
+                                .children(columns.iter().map(|column| {
+                                    div().id(format!("{}:col:{column}", node.id)).child(column.clone())
+                                })),
+                        )
+                    })
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Tree => div()
+                .id(node.id)
+                .role(Role::Tree)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pl_3()
+                .border_l_1()
+                .border_color(rgb(COLOR_BORDER_SUBTLE))
+                .when(children.is_empty(), |element| {
+                    element.child(self.empty_state_element("No nodes"))
+                })
+                .children(children)
+                .into_any_element(),
+            NodeKind::DescriptionList => div()
+                .id(node.id)
+                .role(Role::DescriptionList)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
+                .w_full()
+                .min_w_0()
+                .grid()
+                .grid_cols(2)
                 .gap_2()
-                .p_2()
-                .rounded_lg()
-                .bg(rgb(COLOR_SURFACE_VARIANT))
+                .when(children.is_empty(), |element| {
+                    element.child(self.empty_state_element("No details"))
+                })
                 .children(children)
                 .into_any_element(),
             NodeKind::Accordion
@@ -911,14 +2014,6 @@ impl FoundationGallery {
             | NodeKind::Item
             | NodeKind::MessageScroller
             | NodeKind::ToggleGroup
-            | NodeKind::Stepper
-            | NodeKind::Pagination
-            | NodeKind::ListTile
-            | NodeKind::SearchableList
-            | NodeKind::VirtualList
-            | NodeKind::DataTable
-            | NodeKind::Tree
-            | NodeKind::DescriptionList
             | NodeKind::TimePicker => div()
                 .id(node.id)
                 .w_full()
@@ -934,86 +2029,325 @@ impl FoundationGallery {
                 .children(children)
                 .into_any_element(),
             NodeKind::Dialog => {
-                let open = node
-                    .props
-                    .get("open")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                if !open {
+                let open = prop_bool(&node, "open", false);
+                let title = prop_str(&node, "title").unwrap_or("Dialog").to_owned();
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
-                }
-                let title = node
-                    .props
-                    .get("title")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Dialog")
-                    .to_owned();
-                div()
-                    .id(node.id)
-                    .absolute()
-                    .inset_0()
-                    .flex()
+                };
+                let panel = Self::overlay_panel(title, None, 480.0, children)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .id(format!("{}:panel", node.id))
+                    .role(Role::Dialog);
+                // UNVERIFIED: focus is tracked host-side (overlay_focus handles + tab order);
+                // full Tab cycling inside the overlay must be confirmed by the runner pass.
+                let root = self
+                    .overlay_root(&node.id, depth, true, cx)
                     .items_center()
                     .justify_center()
-                    .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+                    .child(panel);
+                if self.model.reduced_motion() {
+                    root.into_any_element()
+                } else {
+                    root.with_animation(
+                        format!("{}:fade", node.id),
+                        Animation::new(Duration::from_millis(150)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+                }
+            }
+            NodeKind::AlertDialog => {
+                let open = prop_bool(&node, "open", false);
+                let title = prop_str(&node, "title")
+                    .unwrap_or("Confirm")
+                    .to_owned();
+                let message = prop_str(&node, "message").map(ToOwned::to_owned);
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let panel = Self::overlay_panel(title, message, 420.0, children)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .id(format!("{}:panel", node.id))
+                    .role(Role::AlertDialog);
+                let root = self
+                    .overlay_root(&node.id, depth, true, cx)
+                    .items_center()
+                    .justify_center()
+                    .child(panel);
+                if self.model.reduced_motion() {
+                    root.into_any_element()
+                } else {
+                    root.with_animation(
+                        format!("{}:fade", node.id),
+                        Animation::new(Duration::from_millis(150)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+                }
+            }
+            NodeKind::Sheet | NodeKind::BottomSheet | NodeKind::Drawer => {
+                let open = prop_bool(&node, "open", false);
+                let title = prop_str(&node, "title").unwrap_or("").to_owned();
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let panel_id = format!("{}:panel", node.id);
+                let panel = div()
+                    .id(panel_id)
+                    .role(Role::Dialog)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .bg(rgb(COLOR_SURFACE))
+                    .border_color(rgb(COLOR_BORDER))
+                    .shadow_lg()
+                    .p_5()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(!title.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .text_lg()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(title),
+                        )
+                    })
+                    .children(children);
+                // Sheets anchor to their declared edge; drawers dock left like sheets.
+                let panel = match node.kind {
+                    NodeKind::BottomSheet => panel
+                        .w_full()
+                        .max_h(px(320.0))
+                        .rounded_t_xl()
+                        .border_t_1(),
+                    NodeKind::Drawer => panel.w(px(280.0)).h_full().rounded_r_xl().border_r_1(),
+                    _ => panel.w(px(360.0)).h_full().rounded_l_xl().border_l_1(),
+                };
+                let root = self.overlay_root(&node.id, depth, true, cx);
+                let root = if node.kind == NodeKind::BottomSheet {
+                    root.items_end().justify_center()
+                } else if node.kind == NodeKind::Drawer {
+                    root.items_stretch().justify_start()
+                } else {
+                    root.items_stretch().justify_end()
+                };
+                let root = root.child(panel);
+                if self.model.reduced_motion() {
+                    root.into_any_element()
+                } else {
+                    root.with_animation(
+                        format!("{}:fade", node.id),
+                        Animation::new(Duration::from_millis(150)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+                }
+            }
+            NodeKind::Toast => {
+                let message = prop_str(&node, "message");
+                if message.is_none() {
+                    // No open property exists for toasts; a missing message means closed and
+                    // clears any host-owned dismissal so the next message shows again.
+                    self.dismissed_overlays.remove(&node.id);
+                    return div().id(node.id).hidden().into_any_element();
+                }
+                let Some(depth) = self.overlay_gate(&node.id, true, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let dismiss_id = node.id.clone();
+                self.overlay_root(&node.id, depth, false, cx)
+                    .items_start()
+                    .justify_center()
+                    .pt_4()
                     .child(
                         div()
-                            .w(px(480.0))
-                            .max_w(px(520.0))
-                            .p_6()
-                            .rounded_xl()
-                            .bg(rgb(COLOR_SURFACE))
-                            .border_1()
-                            .border_color(rgb(COLOR_BORDER))
+                            .id(format!("{}:toast", node.id))
+                            .role(Role::Alert)
+                            .when_some(accessibility_label.clone(), |element, aria| {
+                                element.aria_label(aria)
+                            })
+                            .px_4()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(COLOR_TEXT))
+                            .text_color(rgb(COLOR_SURFACE))
+                            .text_sm()
                             .shadow_lg()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .mb_4()
-                                    .child(title),
-                            )
-                            .children(children),
+                            .child(message.unwrap_or_default())
+                            // Host-owned dismissal: clicking a toast dismisses it locally.
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dismiss_overlay(&dismiss_id, cx);
+                            })),
                     )
                     .into_any_element()
             }
-            NodeKind::AlertDialog
-            | NodeKind::Sheet
-            | NodeKind::BottomSheet
-            | NodeKind::Drawer
-            | NodeKind::Toast
-            | NodeKind::Notification
-            | NodeKind::Banner
-            | NodeKind::ContextMenu
-            | NodeKind::CommandPalette
-            | NodeKind::Tooltip => div()
+            NodeKind::Notification => {
+                let message = prop_str(&node, "message");
+                if message.is_none() {
+                    self.dismissed_overlays.remove(&node.id);
+                    return div().id(node.id).hidden().into_any_element();
+                }
+                let Some(depth) = self.overlay_gate(&node.id, true, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let dismiss_id = node.id.clone();
+                self.overlay_root(&node.id, depth, false, cx)
+                    .items_start()
+                    .justify_end()
+                    .p_4()
+                    .child(
+                        div()
+                            .id(format!("{}:notification", node.id))
+                            .role(Role::Alert)
+                            .when_some(accessibility_label.clone(), |element, aria| {
+                                element.aria_label(aria)
+                            })
+                            .w(px(320.0))
+                            .p_3()
+                            .rounded_md()
+                            .bg(rgb(COLOR_CARD))
+                            .border_1()
+                            .border_color(rgb(COLOR_BORDER))
+                            .shadow_lg()
+                            .text_sm()
+                            .child(message.unwrap_or_default())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dismiss_overlay(&dismiss_id, cx);
+                            })),
+                    )
+                    .into_any_element()
+            }
+            NodeKind::Banner => div()
                 .id(node.id)
+                .role(Role::Alert)
+                .opacity(opacity)
+                .when_some(accessibility_label.clone(), |element, aria| {
+                    element.aria_label(aria)
+                })
                 .w_full()
-                .p_3()
-                .rounded_lg()
+                .px_4()
+                .py_2()
+                .rounded_md()
+                .bg(rgb(COLOR_SURFACE_VARIANT))
                 .border_1()
                 .border_color(rgb(COLOR_BORDER))
-                .bg(rgb(COLOR_CARD))
+                .text_sm()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(prop_str(&node, "message").unwrap_or_default().to_owned())
                 .children(children)
                 .into_any_element(),
-            NodeKind::ButtonGroup
-            | NodeKind::RangeSlider
-            | NodeKind::Combobox
-            | NodeKind::NumberInput
-            | NodeKind::TextArea
-            | NodeKind::Field
-            | NodeKind::InputGroup
-            | NodeKind::OtpInput => div()
-                .id(node.id)
-                .w_full()
-                .min_w_0()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(COLOR_BORDER_SUBTLE))
-                .bg(rgb(COLOR_SURFACE_VARIANT))
-                .children(children)
-                .into_any_element(),
+            NodeKind::ContextMenu => {
+                let open = prop_bool(&node, "open", false);
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                // No position property exists in the closed schema, so the menu surfaces
+                // centered until the protocol grows placement semantics.
+                let menu = div()
+                    .id(format!("{}:menu", node.id))
+                    .role(Role::Menu)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w(px(200.0))
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(COLOR_CARD))
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when_some(prop_str(&node, "message"), |element, header| {
+                        element.child(
+                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
+                                header.to_owned(),
+                            ),
+                        )
+                    })
+                    .children(children);
+                self.overlay_root(&node.id, depth, false, cx)
+                    .items_center()
+                    .justify_center()
+                    .child(menu)
+                    .into_any_element()
+            }
+            NodeKind::CommandPalette => {
+                let open = prop_bool(&node, "open", false);
+                let placeholder =
+                    prop_str(&node, "placeholder").unwrap_or("Type a command").to_owned();
+                let commands = prop_strings(&node, "commands");
+                let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
+                    return div().id(node.id).hidden().into_any_element();
+                };
+                let palette = div()
+                    .id(format!("{}:palette", node.id))
+                    .role(Role::Dialog)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .w(px(520.0))
+                    .max_h(px(400.0))
+                    .overflow_y_scroll()
+                    .p_2()
+                    .rounded_lg()
+                    .bg(rgb(COLOR_CARD))
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().px_2().py_1().text_sm().text_color(rgb(COLOR_MUTED)).child(placeholder))
+                    .when(commands.is_empty(), |element| {
+                        element.child(self.empty_state_element("No commands"))
+                    })
+                    .children(commands.iter().map(|command| {
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .text_sm()
+                            .hover(|style| style.bg(rgb(COLOR_SURFACE_VARIANT)))
+                            .child(command.clone())
+                    }))
+                    .children(children);
+                self.overlay_root(&node.id, depth, true, cx)
+                    .items_start()
+                    .justify_center()
+                    .pt_16()
+                    .child(palette)
+                    .into_any_element()
+            }
+            NodeKind::Tooltip => {
+                let tip = prop_str(&node, "message").unwrap_or_default().to_owned();
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
+                    .inline_flex()
+                    .children(children)
+                    .when(!tip.is_empty(), |element| {
+                        element.tooltip(move |window, cx| {
+                            use gpui_component::tooltip;
+                            tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                        })
+                    })
+                    .into_any_element()
+            }
             NodeKind::Text => {
                 let role = node
                     .props
@@ -1034,6 +2368,10 @@ impl FoundationGallery {
                 };
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .min_w_0()
                     .overflow_hidden()
                     .when(role == "caption", |element| {
@@ -1057,26 +2395,20 @@ impl FoundationGallery {
             NodeKind::Button if node.control == Some(RuntimeControl::Button) => {
                 let node_id = node.id;
                 let click_id = node_id.clone();
-                let label = node
-                    .props
-                    .get("label")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Button")
-                    .to_owned();
-                let variant = node
-                    .props
-                    .get("variant")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("primary");
-                let enabled = node
-                    .props
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true);
+                let label = prop_str(&node, "label").unwrap_or("Button").to_owned();
+                let variant = prop_str(&node, "variant").unwrap_or("primary");
+                let enabled = prop_bool(&node, "enabled", true);
+                // UNVERIFIED: the closed protocol declares a "selected" button variant but
+                // gpui-component's Button has no selected style; it renders as primary until the
+                // runner/fixer pass confirms host styling policy.
                 let is_card_action = node_id.starts_with("add-");
                 let button = Button::new(node_id)
                     .label(label)
                     .disabled(!enabled)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
                     .when(is_card_action, gpui::Styled::w_full);
                 let button = match variant {
                     "secondary" => button.secondary(),
@@ -1084,104 +2416,356 @@ impl FoundationGallery {
                 };
                 button
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(surface) = this.plugin_surface.as_mut() {
-                            let _ = surface.process_input(&click_id, InputAction::PointerClick);
-                        }
-                        cx.notify();
+                        this.dispatch_input(&click_id, InputAction::PointerClick, cx);
                     }))
                     .into_any_element()
             }
-            NodeKind::TextInput if node.control == Some(RuntimeControl::Input) => div()
-                .id(node.id)
-                .flex_grow_1()
-                .child(Input::new(&self.component_input))
-                .into_any_element(),
-            NodeKind::SecretInput if node.control == Some(RuntimeControl::Input) => {
-                let label = node
-                    .props
-                    .get("label")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Trusted input")
-                    .to_owned();
+            NodeKind::IconButton if node.control == Some(RuntimeControl::Button) => {
+                let icon = prop_str(&node, "icon").unwrap_or("").to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let click_id = node.id.clone();
+                let key_id = click_id.clone();
                 div()
                     .id(node.id)
+                    .role(Role::Button)
+                    .aria_label(accessibility_label.unwrap_or_else(|| icon.clone()))
+                    .opacity(opacity)
+                    .size(px(36.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .bg(rgb(COLOR_SURFACE_VARIANT))
+                    .text_color(if enabled {
+                        rgb(COLOR_TEXT)
+                    } else {
+                        rgb(COLOR_MUTED)
+                    })
+                    .text_xs()
+                    .when(!enabled, |element| element.opacity(0.5 * opacity))
+                    .child(icon)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch_input(&click_id, InputAction::PointerClick, cx);
+                    }))
+                    // UNVERIFIED: keyboard activation relies on GPUI focusable div key handling;
+                    // touch is covered by pointer synthesis in the Wayland input path.
+                    .focusable()
+                    .tab_stop(true)
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.dispatch_input(&key_id, InputAction::KeyboardActivate, cx);
+                        }
+                    }))
+                    .into_any_element()
+            }
+            NodeKind::Checkbox | NodeKind::Radio | NodeKind::Switch | NodeKind::Toggle => {
+                let label = prop_str(&node, "label").unwrap_or_default().to_owned();
+                let checked = prop_bool(&node, "value", false);
+                let enabled = prop_bool(&node, "enabled", true);
+                let change_id = node.id.clone();
+                let on_change = cx.listener(move |this, checked: &bool, _, cx| {
+                    this.dispatch_input(
+                        &change_id,
+                        InputAction::SelectionChanged {
+                            value: checked.to_string(),
+                        },
+                        cx,
+                    );
+                });
+                let inner: AnyElement = match node.kind {
+                    NodeKind::Radio => Radio::new(node.id.clone())
+                        .label(label)
+                        .checked(checked)
+                        .disabled(!enabled)
+                        .on_click(on_change)
+                        .into_any_element(),
+                    NodeKind::Switch | NodeKind::Toggle => Switch::new(node.id.clone())
+                        .label(label)
+                        .checked(checked)
+                        .disabled(!enabled)
+                        .on_click(on_change)
+                        .into_any_element(),
+                    _ => Checkbox::new(node.id.clone())
+                        .label(label)
+                        .checked(checked)
+                        .disabled(!enabled)
+                        .on_click(on_change)
+                        .into_any_element(),
+                };
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label, |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .max_w_full()
+                    .child(inner)
+                    .into_any_element()
+            }
+            NodeKind::ButtonGroup => {
+                let vertical =
+                    prop_str(&node, "orientation").unwrap_or("horizontal") == "vertical";
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .when(vertical, gpui::Styled::flex_col)
+                    .when(!vertical, gpui::Styled::flex_row)
+                    .gap(px(gap))
+                    .children(children)
+                    .into_any_element()
+            }
+            NodeKind::Slider if node.control == Some(RuntimeControl::Slider) => {
+                let label = prop_str(&node, "label").unwrap_or("Slider").to_owned();
+                let min = prop_f64(&node, "min", 0.0) as f32;
+                let max = prop_f64(&node, "max", 1.0) as f32;
+                let value = prop_f64(&node, "value", min.into()).clamp(min.into(), max.into());
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_slider(
+                    &node.id,
+                    min,
+                    max,
+                    0.0,
+                    value as f32,
+                    None,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
+                            "{label}: {value:.2}"
+                        )),
+                    )
+                    .child(Slider::new(&state).horizontal().disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::RangeSlider => {
+                let label = prop_str(&node, "label").unwrap_or("Range").to_owned();
+                let min = prop_f64(&node, "min", 0.0) as f32;
+                let max = prop_f64(&node, "max", 1.0) as f32;
+                let start = prop_f64(&node, "start", min.into()).clamp(min.into(), max.into());
+                let end = prop_f64(&node, "end", max.into()).clamp(start, max.into());
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_slider(
+                    &node.id,
+                    min,
+                    max,
+                    0.0,
+                    start,
+                    Some((start as f32, end as f32)),
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
+                            "{label}: {start:.2} – {end:.2}"
+                        )),
+                    )
+                    .child(Slider::new(&state).horizontal().disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::Select if node.control == Some(RuntimeControl::Select) => {
+                self.select_like_element(&node, opacity, accessibility_label, false, window, cx)
+            }
+            NodeKind::Combobox => {
+                // A combobox is rendered as the same closed select contract with native search;
+                // options/value/on_changed semantics stay exactly as declared.
+                self.select_like_element(&node, opacity, accessibility_label, true, window, cx)
+            }
+            NodeKind::TextInput if node.control == Some(RuntimeControl::Input) => {
+                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
+                let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    &placeholder,
+                    &initial_value,
+                    InputBinding::Text,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .flex_grow_1()
+                    .child(Input::new(&state).disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::TextArea => {
+                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
+                let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    &placeholder,
+                    &initial_value,
+                    InputBinding::Multiline,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w_full()
+                    .child(Input::new(&state).disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::NumberInput => {
+                let placeholder = prop_str(&node, "label").unwrap_or_default().to_owned();
+                let initial_value = format!("{}", prop_f64(&node, "value", 0.0));
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    &placeholder,
+                    &initial_value,
+                    InputBinding::Number,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .min_w_0()
+                    .w(px(160.0))
+                    .child(NumberInput::new(&state).disabled(!enabled))
+                    .into_any_element()
+            }
+            NodeKind::SecretInput if node.control == Some(RuntimeControl::Input) => {
+                let label = prop_str(&node, "label")
+                    .unwrap_or("Trusted input")
+                    .to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_input(
+                    &node.id,
+                    "",
+                    "",
+                    InputBinding::Secret,
+                    window,
+                    cx,
+                );
+                div()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
-                    .child(Input::new(&self.component_secret_input))
+                    .child(Input::new(&state).disabled(!enabled))
                     .into_any_element()
             }
-            NodeKind::Slider if node.control == Some(RuntimeControl::Slider) => {
-                let value = node
-                    .props
-                    .get("value")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0);
+            NodeKind::Field | NodeKind::InputGroup => {
+                let label = prop_str(&node, "label");
+                let description = prop_str(&node, "description");
+                let error = prop_str(&node, "error");
                 div()
                     .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
+                    .w_full()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .child(format!("Discount: {:.0}%", value * 100.0))
-                    .child(Slider::new(&self.component_slider).horizontal())
+                    .gap_1()
+                    .when_some(label, |element, label| {
+                        element.child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(label.to_owned()),
+                        )
+                    })
+                    .children(children)
+                    .when_some(description, |element, description| {
+                        element.child(
+                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
+                                description.to_owned(),
+                            ),
+                        )
+                    })
+                    .when_some(error, |element, error| {
+                        element.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(COLOR_ERROR))
+                                .role(Role::Alert)
+                                .child(error.to_owned()),
+                        )
+                    })
                     .into_any_element()
             }
-            NodeKind::Select if node.control == Some(RuntimeControl::Select) => {
-                let value = node
+            NodeKind::OtpInput => {
+                let label = prop_str(&node, "label").unwrap_or("Code").to_owned();
+                let length = node
                     .props
-                    .get("value")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Select")
-                    .to_owned();
+                    .get("length")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(6)
+                    .clamp(1, 12) as usize;
+                let value = prop_str(&node, "value").unwrap_or_default().to_owned();
+                let enabled = prop_bool(&node, "enabled", true);
+                let state = self.plugin_otp(&node.id, length, &value, window, cx);
                 div()
                     .id(node.id)
-                    .w(px(190.0))
-                    .child(Select::new(&self.component_select).placeholder(value))
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, aria| {
+                        element.aria_label(aria)
+                    })
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(!enabled, |element| element.opacity(0.5 * opacity))
+                    .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
+                    .child(OtpInput::new(&state))
                     .into_any_element()
             }
-            NodeKind::Checkbox => Checkbox::new(node.id)
-                .label(
-                    node.props
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .checked(
-                    node.props
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )
-                .into_any_element(),
-            NodeKind::Radio => Radio::new(node.id)
-                .label(
-                    node.props
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .checked(
-                    node.props
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )
-                .into_any_element(),
-            NodeKind::Switch | NodeKind::Toggle => Switch::new(node.id)
-                .label(
-                    node.props
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .checked(
-                    node.props
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )
-                .into_any_element(),
             NodeKind::DatePicker | NodeKind::Calendar => {
                 DatePicker::new(&self.component_date_picker).into_any_element()
             }
@@ -1189,6 +2773,24 @@ impl FoundationGallery {
                 ColorPicker::new(&self.component_color_picker).into_any_element()
             }
             _ => div().id(node.id).children(children).into_any_element(),
+        };
+        match transition {
+            Some(transition) if !transition.duration.is_zero() => {
+                // UNVERIFIED: the serialized runner must confirm the GPUI animation wrapper's
+                // retained identity and layout behavior across targeted property patches.
+                div()
+                    .id(transition_id.clone())
+                    .min_w_0()
+                    .child(rendered)
+                    .with_animation(
+                        transition_id,
+                        Animation::new(transition.duration)
+                            .with_easing(move |delta| transition.curve.sample(delta)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+            }
+            _ => rendered,
         }
     }
 }
@@ -1215,7 +2817,12 @@ impl Render for FoundationGallery {
                 .checkout_shell
                 .as_ref()
                 .map(|shell| shell.current_route().to_owned());
+            self.visited_input_ids.clear();
+            self.overlay_depth = 0;
             let plugin = self.plugin_node(root, window, cx);
+            // Retained form-widget states are keyed by stable node ID; states whose nodes left
+            // the render tree are pruned so removals do not leak native widgets or buffers.
+            self.prune_retired_widget_states();
             let route_bar = checkout_route.clone().map(|route| {
                 div()
                     .id("checkout-route")
@@ -1391,5 +2998,72 @@ impl Render for FoundationGallery {
                         .child("Host-owned popup surface"),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        image_format, parse_number_input, prop_strings, prop_u64, ImageFormat, PluginRenderNode,
+    };
+    use studio_protocol::NodeKind;
+
+    #[test]
+    fn detects_common_image_formats_from_extension_or_bytes() {
+        assert_eq!(
+            image_format("assets/photo.png", b"\x89PNG\r\n\x1a\nrest"),
+            Some(ImageFormat::Png)
+        );
+        assert_eq!(
+            image_format("assets/photo.jpeg", b"\xff\xd8\xffrest"),
+            Some(ImageFormat::Jpeg)
+        );
+        assert_eq!(
+            image_format("assets/photo", b"RIFFxxxxWEBPrest"),
+            Some(ImageFormat::Webp)
+        );
+        assert_eq!(
+            image_format("assets/icon.svg", br#"<svg viewBox="0 0 1 1"></svg>"#),
+            Some(ImageFormat::Svg)
+        );
+        assert_eq!(image_format("assets/file.bin", b"not an image"), None);
+    }
+
+    #[test]
+    fn parses_numeric_input_buffers_for_number_dispatch() {
+        assert_eq!(parse_number_input("42"), Some(42.0));
+        assert_eq!(parse_number_input(" 3.5 "), Some(3.5));
+        assert_eq!(parse_number_input("-0.25"), Some(-0.25));
+        // Non-numeric and non-finite buffers are dropped rather than dispatched.
+        assert_eq!(parse_number_input(""), None);
+        assert_eq!(parse_number_input("abc"), None);
+        assert_eq!(parse_number_input("NaN"), None);
+        assert_eq!(parse_number_input("inf"), None);
+    }
+
+    #[test]
+    fn reads_declared_string_list_properties_for_data_display() {
+        use std::collections::BTreeMap;
+        let props: BTreeMap<String, serde_json::Value> = BTreeMap::from([
+            (
+                "columns".to_owned(),
+                serde_json::json!(["Name", "Price"]),
+            ),
+            ("items".to_owned(), serde_json::json!([])),
+        ]);
+        let node = PluginRenderNode {
+            id: "table".to_owned(),
+            kind: NodeKind::DataTable,
+            control: None,
+            props,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            super::prop_strings(&node, "columns"),
+            vec!["Name".to_owned(), "Price".to_owned()]
+        );
+        assert!(super::prop_strings(&node, "items").is_empty());
+        assert!(super::prop_strings(&node, "missing").is_empty());
+        assert_eq!(super::prop_u64(&node, "pages", 1), 1);
     }
 }

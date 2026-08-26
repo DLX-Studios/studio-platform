@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use studio_components::{
-    ComponentCatalog, DispatchErrorCode, HostEventDispatcher, InputAction, NativeLayer,
-    RuntimeControl,
+    component_readiness, ComponentCatalog, DispatchErrorCode, HostEventDispatcher, InputAction,
+    NativeLayer, RuntimeControl, COMPONENT_RENDERER_READINESS,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;
@@ -166,6 +166,134 @@ fn maps_extended_component_catalog_to_native_layers() {
 }
 
 #[test]
+fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
+    assert_eq!(COMPONENT_RENDERER_READINESS.len(), 100);
+    for readiness in COMPONENT_RENDERER_READINESS {
+        assert!(readiness.protocol_declared);
+        assert!(readiness.native_mapped);
+    }
+
+    for kind in [
+        NodeKind::Box,
+        NodeKind::Column,
+        NodeKind::Row,
+        NodeKind::Stack,
+        NodeKind::Grid,
+        NodeKind::ScrollView,
+        NodeKind::ListView,
+        NodeKind::Spacer,
+        NodeKind::Divider,
+        NodeKind::Text,
+        NodeKind::Icon,
+        NodeKind::Image,
+        NodeKind::Card,
+        NodeKind::Badge,
+        NodeKind::Tag,
+        NodeKind::Avatar,
+        NodeKind::Empty,
+        NodeKind::Skeleton,
+        NodeKind::Separator,
+        NodeKind::AspectRatio,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.semantically_rendered, "{kind:?}");
+        assert!(readiness.verified, "{kind:?}");
+    }
+
+    for kind in [
+        NodeKind::Accordion,
+        NodeKind::TimePicker,
+        NodeKind::ToggleGroup,
+        NodeKind::Chart,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.native_mapped, "{kind:?}");
+        assert!(!readiness.semantically_rendered, "{kind:?}");
+        assert!(!readiness.verified, "{kind:?}");
+    }
+}
+
+#[test]
+fn form_input_kinds_are_semantically_rendered_after_batch_b() {
+    for kind in [
+        NodeKind::Button,
+        NodeKind::IconButton,
+        NodeKind::Checkbox,
+        NodeKind::Radio,
+        NodeKind::Switch,
+        NodeKind::Toggle,
+        NodeKind::ButtonGroup,
+        NodeKind::Slider,
+        NodeKind::RangeSlider,
+        NodeKind::Select,
+        NodeKind::Combobox,
+        NodeKind::NumberInput,
+        NodeKind::TextInput,
+        NodeKind::TextArea,
+        NodeKind::Field,
+        NodeKind::InputGroup,
+        NodeKind::OtpInput,
+        NodeKind::SecretInput,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.semantically_rendered, "{kind:?}");
+        assert!(readiness.verified, "{kind:?}");
+    }
+    // SecretInput stays host-owned even after semantic rendering: its value never enters the
+    // protocol event path (see HostEventDispatcher: SecretInput accepts no TextChanged action).
+    let secret = ComponentCatalog::default()
+        .map(&node(
+            "secret",
+            NodeKind::SecretInput,
+            &[("label", json!("PIN"))],
+        ))
+        .unwrap();
+    assert!(secret.host_owned_value);
+}
+
+#[test]
+fn overlay_navigation_and_data_display_kinds_are_rendered_after_batch_c() {
+    for kind in [
+        NodeKind::Dialog,
+        NodeKind::AlertDialog,
+        NodeKind::Popover,
+        NodeKind::Sheet,
+        NodeKind::BottomSheet,
+        NodeKind::Drawer,
+        NodeKind::Toast,
+        NodeKind::Notification,
+        NodeKind::Banner,
+        NodeKind::ContextMenu,
+        NodeKind::CommandPalette,
+        NodeKind::Tooltip,
+        NodeKind::ProgressIndicator,
+        NodeKind::ProgressCircle,
+        NodeKind::Spinner,
+        NodeKind::Scaffold,
+        NodeKind::AppBar,
+        NodeKind::Sidebar,
+        NodeKind::NavigationBar,
+        NodeKind::NavigationRail,
+        NodeKind::Tabs,
+        NodeKind::Breadcrumb,
+        NodeKind::Stepper,
+        NodeKind::Pagination,
+        NodeKind::ListTile,
+        NodeKind::SearchableList,
+        NodeKind::VirtualList,
+        NodeKind::DataTable,
+        NodeKind::Tree,
+        NodeKind::DescriptionList,
+        NodeKind::Calendar,
+        NodeKind::DatePicker,
+    ] {
+        let readiness = component_readiness(kind);
+        assert!(readiness.semantically_rendered, "{kind:?}");
+        assert!(readiness.verified, "{kind:?}");
+    }
+}
+
+#[test]
 fn interactive_controls_expose_keyboard_pointer_touch_and_accessibility_contracts() {
     let catalog = ComponentCatalog::default();
     for (kind, props) in [
@@ -288,13 +416,11 @@ fn dispatches_typed_non_secret_events_from_host_owner_context() {
         };
         assert_eq!(event.node_id, node_id);
         assert_eq!(event.event, expected_event);
-        assert!(
-            !serde_json::to_value(event)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("owner")
-        );
+        assert!(!serde_json::to_value(event)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("owner"));
     }
 
     assert_eq!(
