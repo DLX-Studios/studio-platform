@@ -1,6 +1,7 @@
 //! Plugin principals, capabilities, opaque secrets, and diagnostic redaction.
 
 mod capability;
+mod environment;
 mod principal;
 mod protected;
 mod redaction;
@@ -8,6 +9,12 @@ mod registry;
 mod secret;
 
 pub use capability::{ActionGate, CapabilityId, SecurityError, SecurityErrorCode};
+pub use environment::{
+    apply_promotion, resolve_active_environment, ActiveEnvironment, EnvironmentDataKey,
+    EnvironmentDataScope, EnvironmentDataStore, EnvironmentError, EnvironmentErrorCode,
+    PromotionDirection, PromotionEntry, PromotionPlan, PromotionReceipt,
+    ProtectedConfiguration, SecretFreeMetadata,
+};
 pub use principal::{PluginPrincipal, TrustMode};
 pub use protected::{
     ApplicationEnvironment, ApplicationSecretStore, BrokerCredentialError, BrokerCredentialSink,
