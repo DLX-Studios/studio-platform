@@ -55,3 +55,25 @@ fn persistence_rejects_sensitive_values_instead_of_writing_redacted_ambiguity() 
     assert!(!format!("{filter:?}").contains(RAW_PIN));
     assert!(!format!("{filter:?}").contains(&token));
 }
+
+#[test]
+fn app_diagnostic_paths_scrub_unregistered_key_shapes_and_structured_fields() {
+    let filter = SensitiveValueFilter::new();
+    let provider_key = ["sk_live_", "51", &"abcdefghij".repeat(2)].concat();
+    let diagnostic = format!("provider failure api_key={provider_key}");
+
+    let guest = GuestDiagnostic::capture(&filter, &diagnostic);
+    let host = SafeDiagnostic::capture(&filter, "provider_error", &diagnostic);
+    for message in [guest.message(), host.message()] {
+        assert!(message.contains("[REDACTED]"));
+        assert!(!message.contains(&provider_key));
+    }
+
+    let structured = serde_json::json!({
+        "provider": {"clientSecret": "opaque unregistered value"},
+        "status": "failed"
+    });
+    let safe = filter.sanitize_json(&structured);
+    assert_eq!(safe["provider"]["clientSecret"], "[REDACTED]");
+    assert_eq!(safe["status"], "failed");
+}

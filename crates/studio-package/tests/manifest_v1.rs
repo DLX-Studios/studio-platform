@@ -15,7 +15,13 @@ fn valid_manifest() -> Value {
         "protocolVersion": 1,
         "capabilities": ["payment.simulate", "printer.simulate"],
         "limits": {"memoryMiB": 16, "eventFuel": 10_000_000},
-        "assets": ["assets/catalog.json"]
+        "assets": ["assets/catalog.json"],
+        "secrets": [
+            {
+                "name": "payments.restricted_key",
+                "purpose": "Authenticate bounded payment API requests"
+            }
+        ]
     })
 }
 
@@ -38,6 +44,45 @@ fn accepts_the_complete_closed_manifest_and_capability_catalog() {
         [Capability::PaymentSimulate, Capability::PrinterSimulate]
     );
     assert_eq!(manifest.assets, ["assets/catalog.json"]);
+    assert_eq!(manifest.secrets.len(), 1);
+    assert_eq!(manifest.secrets[0].name, "payments.restricted_key");
+    assert_eq!(
+        manifest.secrets[0].purpose,
+        "Authenticate bounded payment API requests"
+    );
+}
+
+#[test]
+fn secret_declarations_accept_only_unique_names_and_purposes_without_values() {
+    for secrets in [
+        json!([
+            {"name": "provider.key", "purpose": "Authenticate provider requests"},
+            {"name": "provider.key", "purpose": "Duplicate name"}
+        ]),
+        json!([{"name": "Provider.Key", "purpose": "Invalid identifier"}]),
+        json!([{"name": "provider.key", "purpose": ""}]),
+    ] {
+        let mut value = valid_manifest();
+        value["secrets"] = secrets;
+        assert_eq!(
+            decode(&value).unwrap_err().code(),
+            ManifestErrorCode::ManifestInvalid
+        );
+    }
+
+    let mut raw_value = valid_manifest();
+    raw_value["secrets"][0]["value"] = json!("must-never-enter-a-package");
+    assert_eq!(
+        decode(&raw_value).unwrap_err().code(),
+        ManifestErrorCode::InvalidJson
+    );
+}
+
+#[test]
+fn manifests_without_secret_declarations_remain_valid() {
+    let mut value = valid_manifest();
+    value.as_object_mut().unwrap().remove("secrets");
+    assert!(decode(&value).unwrap().secrets.is_empty());
 }
 
 #[test]
@@ -53,6 +98,7 @@ fn rejects_missing_unknown_duplicate_and_noncanonical_input_fields() {
         ("", "unknown"),
         ("/publisher", "unknown"),
         ("/limits", "unknown"),
+        ("/secrets/0", "unknown"),
     ] {
         let mut value = valid_manifest();
         value
