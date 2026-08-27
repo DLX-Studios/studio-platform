@@ -1,9 +1,13 @@
 //! Shared connection state used by authentication, the project dashboard, and the project shell.
 //!
 //! The production identity service and grilling issue 09 remain explicit integration gates; this
-//! module intentionally supplies only injectable seams and deterministic local behavior.
+//! module intentionally supplies only injectable seams and deterministic local behavior. Sync
+//! transfers use lossless per-operation envelopes and receipts so a host persistence adapter can
+//! commit acknowledgements before retiring outbox entries.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -615,23 +619,177 @@ pub enum SyncWorkerErrorCode {
 /// Input and result seam for host-owned project synchronization.
 pub trait SyncWorker {
     /// Transfer one cached project's admitted local operations.
+    ///
+    /// The operation list is an ordered snapshot of the durable outbox. Workers must return one
+    /// receipt for every item, in the same order; a count-only acknowledgement is not valid.
     fn sync(
         &mut self,
         project: &CachedProject,
+        operations: &[SyncOutboxEnvelope],
     ) -> Result<SyncReceipt, SyncWorkerError>;
 }
 
-/// Safe worker receipt; operation bodies never cross the seam.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Lifecycle of one durable local outbox envelope.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncEnvelopeState {
+    /// The operation has not yet received a terminal server receipt.
+    Pending,
+    /// The operation was sent and is awaiting a receipt.
+    InFlight,
+    /// The server applied the operation.
+    Applied,
+    /// The server recognized an already-applied operation.
+    Replayed,
+    /// The server retained both intents for explicit recovery.
+    Conflict,
+    /// The server rejected the operation with a terminal reason.
+    Rejected,
+}
+
+/// Durable operation envelope sent to a synchronization worker.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncOutboxEnvelope {
+    /// Globally stable operation identity.
+    pub operation_id: String,
+    /// Canonical operation payload.
+    pub payload: Value,
+    /// SHA-256 of the serialized payload.
+    pub payload_hash: String,
+    /// Project revision observed when the operation was authored.
+    pub base_revision: u64,
+    /// Identity partition that authored the operation.
+    pub identity: String,
+    /// Durable lifecycle state.
+    pub state: SyncEnvelopeState,
+}
+
+impl SyncOutboxEnvelope {
+    /// Create a pending envelope and compute its payload hash.
+    pub fn new(
+        operation_id: impl Into<String>,
+        payload: Value,
+        base_revision: u64,
+        identity: impl Into<String>,
+    ) -> Result<Self, SyncError> {
+        let operation_id = operation_id.into();
+        let identity = identity.into();
+        if operation_id.is_empty()
+            || operation_id.len() > 256
+            || operation_id.chars().any(char::is_control)
+            || identity.is_empty()
+            || identity.len() > 256
+            || identity.chars().any(char::is_control)
+        {
+            return Err(SyncError::InvalidOperation("operation identity"));
+        }
+        let payload_bytes = serde_json::to_vec(&payload)
+            .map_err(|_| SyncError::InvalidOperation("operation payload"))?;
+        Ok(Self {
+            operation_id,
+            payload_hash: payload_digest(&payload_bytes),
+            payload,
+            base_revision,
+            identity,
+            state: SyncEnvelopeState::Pending,
+        })
+    }
+}
+
+/// Per-operation server outcome.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum SyncReceiptOutcome {
+    /// The operation changed the remote state.
+    Applied,
+    /// The operation had already been applied; no duplicate mutation occurred.
+    Replayed,
+    /// Both local and remote intents were retained for recovery.
+    Conflict { conflict_id: String },
+    /// The server rejected the operation without applying it.
+    Rejected { code: String, message: String },
+}
+
+/// Receipt for exactly one operation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncOperationReceipt {
+    /// Operation identity acknowledged by the server.
+    pub operation_id: String,
+    /// Hash echoed from the submitted envelope.
+    pub payload_hash: String,
+    /// Base revision echoed from the submitted envelope.
+    pub base_revision: u64,
+    /// Identity echoed from the submitted envelope.
+    pub identity: String,
+    /// Remote event revision associated with this outcome.
+    pub revision: u64,
+    /// Explicit terminal outcome.
+    pub outcome: SyncReceiptOutcome,
+}
+
+/// Safe worker receipt containing one acknowledgement per submitted operation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncReceipt {
-    /// Number of local operations accepted by the worker.
-    pub transferred_operations: u32,
-    /// New remote revision, when one was produced.
+    /// Ordered per-operation acknowledgements.
+    pub receipts: Vec<SyncOperationReceipt>,
+    /// Latest remote revision after applying the batch.
     pub remote_revision: u64,
 }
 
+impl SyncReceipt {
+    /// Borrow the ordered operation acknowledgements.
+    #[must_use]
+    pub fn operation_receipts(&self) -> &[SyncOperationReceipt] {
+        &self.receipts
+    }
+
+    /// Return the number of per-operation acknowledgements.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.receipts.len()
+    }
+
+    /// Whether the receipt contains no operation acknowledgements.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.receipts.is_empty()
+    }
+}
+
+/// A conflict retained after its receipt has been durably acknowledged.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncConflictRecord {
+    /// The original operation envelope, retained for recovery.
+    pub envelope: SyncOutboxEnvelope,
+    /// The conflict receipt that references the recovery record.
+    pub receipt: SyncOperationReceipt,
+    /// Safe optional server diagnostic.
+    pub diagnostic: Option<String>,
+}
+
+/// Alias used by callers that refer to operation envelopes as sync operations.
+pub type SyncOperation = SyncOutboxEnvelope;
+
+/// Serializable coordinator state for a host-owned durable cache store.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncDurableState {
+    /// Cached project metadata and revisions.
+    pub projects: Vec<CachedProject>,
+    /// Pending envelopes grouped by project.
+    pub outbox: BTreeMap<String, Vec<SyncOutboxEnvelope>>,
+    /// Terminal receipts written before their envelopes were removed.
+    pub acknowledgements: BTreeMap<String, SyncOperationReceipt>,
+    /// Conflicts retained for recovery.
+    pub conflicts: BTreeMap<String, SyncConflictRecord>,
+}
+
 /// Result of one coordinator transfer attempt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncOutcome {
     /// Sync was disabled and local pending operations were retained.
     Disabled,
@@ -649,10 +807,14 @@ pub enum SyncOutcome {
 pub struct SyncCoordinator<W> {
     worker: W,
     projects: BTreeMap<String, CachedProject>,
+    outbox: BTreeMap<String, Vec<SyncOutboxEnvelope>>,
+    acknowledgements: BTreeMap<String, SyncOperationReceipt>,
+    conflicts: BTreeMap<String, SyncConflictRecord>,
     enabled: bool,
     connected: bool,
     signed_in: bool,
     indicator: ConnectionIndicator,
+    next_operation: u64,
 }
 
 impl<W: SyncWorker> SyncCoordinator<W> {
@@ -662,10 +824,14 @@ impl<W: SyncWorker> SyncCoordinator<W> {
         Self {
             worker,
             projects: BTreeMap::new(),
+            outbox: BTreeMap::new(),
+            acknowledgements: BTreeMap::new(),
+            conflicts: BTreeMap::new(),
             enabled: true,
             connected: true,
             signed_in: true,
             indicator: ConnectionIndicator::from_state(ConnectionState::Synced),
+            next_operation: 0,
         }
     }
 
@@ -676,23 +842,212 @@ impl<W: SyncWorker> SyncCoordinator<W> {
         if self.projects.contains_key(&project.id) {
             return Err(SyncError::DuplicateProject);
         }
-        self.projects.insert(project.id.clone(), project);
+        let pending = project.pending_operations;
+        let identity = project_identity(&project.id);
+        let project_id = project.id.clone();
+        let mut envelopes = Vec::with_capacity(pending as usize);
+        for _ in 0..pending {
+            envelopes.push(self.new_envelope(
+                &project_id,
+                serde_json::json!({"legacy_pending": true}),
+                project.local_revision,
+                &identity,
+            )?);
+        }
+        self.projects.insert(project_id.clone(), project);
+        self.outbox.insert(project_id, envelopes);
         Ok(())
     }
 
     /// Return a deterministic copy of the cached catalog.
     #[must_use]
     pub fn projects(&self) -> Vec<CachedProject> {
-        self.projects.values().cloned().collect()
+        self.projects
+            .values()
+            .map(|project| {
+                let mut project = project.clone();
+                project.pending_operations = self
+                    .outbox
+                    .get(&project.id)
+                    .map_or(0, |operations| operations.len() as u32);
+                project
+            })
+            .collect()
     }
 
     /// Queue admitted local work while preserving local authority.
     pub fn queue_operations(&mut self, project_id: &str, count: u32) -> Result<(), SyncError> {
         let project = self
             .projects
-            .get_mut(project_id)
+            .get(project_id)
+            .cloned()
             .ok_or_else(|| SyncError::ProjectNotFound(project_id.to_owned()))?;
-        project.pending_operations = project.pending_operations.saturating_add(count);
+        let identity = project_identity(project_id);
+        for _ in 0..count {
+            let envelope = self.new_envelope(
+                project_id,
+                serde_json::json!({"legacy_pending": true}),
+                project.local_revision,
+                &identity,
+            )?;
+            self.queue_envelope(project_id, envelope)?;
+        }
+        Ok(())
+    }
+
+    /// Queue one payload in the durable outbox using a generated operation identity.
+    pub fn queue_operation(
+        &mut self,
+        project_id: &str,
+        payload: Value,
+    ) -> Result<SyncOutboxEnvelope, SyncError> {
+        let project = self
+            .projects
+            .get(project_id)
+            .cloned()
+            .ok_or_else(|| SyncError::ProjectNotFound(project_id.to_owned()))?;
+        let identity = project_identity(project_id);
+        let envelope = self.new_envelope(project_id, payload, project.local_revision, &identity)?;
+        self.queue_envelope(project_id, envelope.clone())?;
+        Ok(envelope)
+    }
+
+    /// Queue one payload with a caller-supplied globally stable operation identity.
+    pub fn queue_operation_with_id(
+        &mut self,
+        project_id: &str,
+        operation_id: impl Into<String>,
+        payload: Value,
+    ) -> Result<SyncOutboxEnvelope, SyncError> {
+        let project = self
+            .projects
+            .get(project_id)
+            .cloned()
+            .ok_or_else(|| SyncError::ProjectNotFound(project_id.to_owned()))?;
+        let envelope = SyncOutboxEnvelope::new(
+            operation_id,
+            payload,
+            project.local_revision,
+            project_identity(project_id),
+        )?;
+        self.queue_envelope(project_id, envelope.clone())?;
+        Ok(envelope)
+    }
+
+    /// Return the pending durable envelopes for one project in send order.
+    #[must_use]
+    pub fn outbox(&self, project_id: &str) -> &[SyncOutboxEnvelope] {
+        self.outbox.get(project_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Return all terminal receipts that have been persisted before outbox removal.
+    #[must_use]
+    pub fn acknowledgements(&self) -> Vec<SyncOperationReceipt> {
+        self.acknowledgements.values().cloned().collect()
+    }
+
+    /// Return retained conflict records for the recovery center.
+    #[must_use]
+    pub fn conflicts(&self) -> Vec<SyncConflictRecord> {
+        self.conflicts.values().cloned().collect()
+    }
+
+    /// Export the state that a host persistence adapter must commit atomically.
+    #[must_use]
+    pub fn durable_state(&self) -> SyncDurableState {
+        SyncDurableState {
+            projects: self.projects(),
+            outbox: self.outbox.clone(),
+            acknowledgements: self.acknowledgements.clone(),
+            conflicts: self.conflicts.clone(),
+        }
+    }
+
+    /// Restore a previously committed state without contacting the worker.
+    pub fn restore_durable_state(&mut self, state: SyncDurableState) -> Result<(), SyncError> {
+        let mut projects = BTreeMap::new();
+        for mut project in state.projects {
+            validate_cached_input(&project.id, "project id")?;
+            validate_cached_input(&project.name, "project name")?;
+            if projects.contains_key(&project.id) {
+                return Err(SyncError::DuplicateProject);
+            }
+            let pending = state.outbox.get(&project.id).map_or(0, Vec::len) as u32;
+            project.pending_operations = pending;
+            projects.insert(project.id.clone(), project);
+        }
+        for project_id in state.outbox.keys() {
+            if !projects.contains_key(project_id) {
+                return Err(SyncError::InvalidReceipt(
+                    "durable outbox references an unknown project".to_owned(),
+                ));
+            }
+        }
+        let mut operation_ids = std::collections::BTreeSet::new();
+        for (project_id, operations) in &state.outbox {
+            let project = projects
+                .get(project_id)
+                .expect("outbox project existence checked above");
+            for operation in operations {
+                validate_envelope(operation, project)?;
+                if !operation_ids.insert(operation.operation_id.clone())
+                    || state.acknowledgements.contains_key(&operation.operation_id)
+                {
+                    return Err(SyncError::InvalidOperation("duplicate operation identity"));
+                }
+            }
+        }
+        self.projects = projects;
+        self.outbox = state.outbox;
+        self.acknowledgements = state.acknowledgements;
+        self.conflicts = state.conflicts;
+        self.update_indicator();
+        Ok(())
+    }
+
+    fn new_envelope(
+        &mut self,
+        project_id: &str,
+        payload: Value,
+        base_revision: u64,
+        identity: &str,
+    ) -> Result<SyncOutboxEnvelope, SyncError> {
+        self.next_operation = self.next_operation.saturating_add(1);
+        SyncOutboxEnvelope::new(
+            format!("{project_id}:{}", self.next_operation),
+            payload,
+            base_revision,
+            identity,
+        )
+    }
+
+    fn queue_envelope(
+        &mut self,
+        project_id: &str,
+        envelope: SyncOutboxEnvelope,
+    ) -> Result<(), SyncError> {
+        if !self.projects.contains_key(project_id) {
+            return Err(SyncError::ProjectNotFound(project_id.to_owned()));
+        }
+        if self
+            .outbox
+            .get(project_id)
+            .into_iter()
+            .flatten()
+            .any(|existing| existing.operation_id == envelope.operation_id)
+            || self.acknowledgements.contains_key(&envelope.operation_id)
+        {
+            return Err(SyncError::InvalidOperation("duplicate operation identity"));
+        }
+        self.outbox
+            .entry(project_id.to_owned())
+            .or_default()
+            .push(envelope);
+        let project = self
+            .projects
+            .get_mut(project_id)
+            .expect("project existence checked before queueing");
+        project.pending_operations = project.pending_operations.saturating_add(1);
         if project.authority == ProjectAuthority::Local {
             project.sync_state = CachedProjectSyncState::Local;
         } else if self.connected {
@@ -808,55 +1163,112 @@ impl<W: SyncWorker> SyncCoordinator<W> {
             .get(project_id)
             .cloned()
             .ok_or_else(|| SyncError::ProjectNotFound(project_id.to_owned()))?;
-        if project.pending_operations == 0 {
+        let mut operations = self.outbox.get(project_id).cloned().ok_or_else(|| {
+            SyncError::InvalidReceipt("durable outbox is missing for project".to_owned())
+        })?;
+        if operations.is_empty() {
             return Ok(SyncOutcome::NoWork);
         }
         if project.authority == ProjectAuthority::Local {
             return Ok(SyncOutcome::NoWork);
         }
+        for operation in operations.iter_mut() {
+            operation.state = SyncEnvelopeState::InFlight;
+        }
+        if let Some(stored) = self.outbox.get_mut(project_id) {
+            for operation in stored {
+                operation.state = SyncEnvelopeState::InFlight;
+            }
+        }
         if let Some(project) = self.projects.get_mut(project_id) {
             project.sync_state = CachedProjectSyncState::Syncing;
         }
         self.indicator = ConnectionIndicator::from_state(ConnectionState::Connecting);
-        match self.worker.sync(&project) {
+        let result = self.worker.sync(&project, &operations);
+        match result {
             Ok(receipt) => {
+                if let Err(error) = validate_sync_receipt(&project, &operations, &receipt) {
+                    for operation in self.outbox.get_mut(project_id).into_iter().flatten() {
+                        operation.state = SyncEnvelopeState::Pending;
+                    }
+                    self.mark_sync_warning(project_id, error.to_string(), false);
+                    return Err(error);
+                }
+
+                // Record every terminal acknowledgement first. Only after this durable log is
+                // updated are the envelopes removed from the outbox.
+                for (operation, operation_receipt) in operations.iter_mut().zip(&receipt.receipts) {
+                    operation.state = envelope_state(&operation_receipt.outcome);
+                    self.acknowledgements.insert(
+                        operation.operation_id.clone(),
+                        operation_receipt.clone(),
+                    );
+                    if let SyncReceiptOutcome::Conflict { conflict_id } = &operation_receipt.outcome {
+                        self.conflicts.insert(
+                            conflict_id.clone(),
+                            SyncConflictRecord {
+                                envelope: operation.clone(),
+                                receipt: operation_receipt.clone(),
+                                diagnostic: None,
+                            },
+                        );
+                    }
+                }
+                if let Some(stored) = self.outbox.get_mut(project_id) {
+                    for (operation, acknowledged) in stored.iter_mut().zip(&receipt.receipts) {
+                        operation.state = envelope_state(&acknowledged.outcome);
+                    }
+                }
+                self.outbox.remove(project_id);
                 if let Some(project) = self.projects.get_mut(project_id) {
-                    project.pending_operations = project
-                        .pending_operations
-                        .saturating_sub(receipt.transferred_operations);
-                    project.local_revision = project.local_revision.max(receipt.remote_revision);
-                    project.sync_state = if project.pending_operations == 0 {
-                        CachedProjectSyncState::Synced
-                    } else {
-                        CachedProjectSyncState::Syncing
-                    };
+                    project.pending_operations = 0;
+                    project.local_revision = receipt.remote_revision;
+                    project.sync_state = CachedProjectSyncState::Synced;
                 }
                 self.indicator = ConnectionIndicator::from_state(ConnectionState::Synced);
                 Ok(SyncOutcome::Transferred(receipt))
             }
             Err(error) => {
-                if let Some(project) = self.projects.get_mut(project_id) {
-                    project.sync_state = if error.code == SyncWorkerErrorCode::Offline {
-                        CachedProjectSyncState::Offline
-                    } else {
-                        CachedProjectSyncState::Warning
-                    };
+                for operation in self.outbox.get_mut(project_id).into_iter().flatten() {
+                    operation.state = SyncEnvelopeState::Pending;
                 }
-                let state = if error.code == SyncWorkerErrorCode::Offline {
-                    ConnectionState::Offline
-                } else if error.retryable {
-                    ConnectionState::Warning
-                } else {
-                    ConnectionState::Error
-                };
-                self.indicator = ConnectionIndicator::with_detail(
-                    state,
-                    error.message.clone(),
-                    error.retryable,
-                );
+                self.mark_sync_error(project_id, &error);
                 Err(SyncError::Worker(error))
             }
         }
+    }
+
+    fn mark_sync_error(&mut self, project_id: &str, error: &SyncWorkerError) {
+        if let Some(project) = self.projects.get_mut(project_id) {
+            project.sync_state = if error.code == SyncWorkerErrorCode::Offline {
+                CachedProjectSyncState::Offline
+            } else {
+                CachedProjectSyncState::Warning
+            };
+        }
+        let state = if error.code == SyncWorkerErrorCode::Offline {
+            ConnectionState::Offline
+        } else if error.retryable {
+            ConnectionState::Warning
+        } else {
+            ConnectionState::Error
+        };
+        self.indicator = ConnectionIndicator::with_detail(
+            state,
+            error.message.clone(),
+            error.retryable,
+        );
+    }
+
+    fn mark_sync_warning(&mut self, project_id: &str, detail: String, retryable: bool) {
+        if let Some(project) = self.projects.get_mut(project_id) {
+            project.sync_state = CachedProjectSyncState::Warning;
+        }
+        self.indicator = ConnectionIndicator::with_detail(
+            ConnectionState::Warning,
+            detail,
+            retryable,
+        );
     }
 
     /// Short alias for [`Self::sync_project`] used by a project-shell sync action.
@@ -894,9 +1306,152 @@ pub enum SyncError {
     /// The local cache cannot open this project offline.
     #[error("cached project is unavailable offline: {0}")]
     CacheUnavailable(String),
+    /// A local operation could not be represented as a durable envelope.
+    #[error("invalid sync operation: {0}")]
+    InvalidOperation(&'static str),
+    /// The worker returned an incomplete, reordered, or mismatched receipt.
+    #[error("invalid sync receipt: {0}")]
+    InvalidReceipt(String),
     /// The injected worker rejected the transfer.
     #[error(transparent)]
     Worker(#[from] SyncWorkerError),
+}
+
+fn project_identity(project_id: &str) -> String {
+    format!("project:{project_id}")
+}
+
+fn payload_digest(payload: &[u8]) -> String {
+    let digest = Sha256::digest(payload);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn envelope_state(outcome: &SyncReceiptOutcome) -> SyncEnvelopeState {
+    match outcome {
+        SyncReceiptOutcome::Applied => SyncEnvelopeState::Applied,
+        SyncReceiptOutcome::Replayed => SyncEnvelopeState::Replayed,
+        SyncReceiptOutcome::Conflict { .. } => SyncEnvelopeState::Conflict,
+        SyncReceiptOutcome::Rejected { .. } => SyncEnvelopeState::Rejected,
+    }
+}
+
+fn validate_sync_receipt(
+    project: &CachedProject,
+    operations: &[SyncOutboxEnvelope],
+    receipt: &SyncReceipt,
+) -> Result<(), SyncError> {
+    if receipt.receipts.len() != operations.len() {
+        return Err(SyncError::InvalidReceipt(format!(
+            "expected {} operation receipts, received {}",
+            operations.len(),
+            receipt.receipts.len()
+        )));
+    }
+    let mut revision = project.local_revision;
+    for (index, (operation, acknowledged)) in operations.iter().zip(&receipt.receipts).enumerate() {
+        validate_envelope(operation, project)?;
+        if acknowledged.operation_id != operation.operation_id {
+            return Err(SyncError::InvalidReceipt(format!(
+                "receipt {index} acknowledges an unexpected operation"
+            )));
+        }
+        if acknowledged.payload_hash != operation.payload_hash {
+            return Err(SyncError::InvalidReceipt(format!(
+                "receipt {index} payload hash does not match operation"
+            )));
+        }
+        if acknowledged.base_revision != operation.base_revision {
+            return Err(SyncError::InvalidReceipt(format!(
+                "receipt {index} base revision does not match operation"
+            )));
+        }
+        if acknowledged.identity != operation.identity {
+            return Err(SyncError::InvalidReceipt(format!(
+                "receipt {index} identity does not match operation"
+            )));
+        }
+        match &acknowledged.outcome {
+            SyncReceiptOutcome::Applied => {
+                revision = revision.checked_add(1).ok_or_else(|| {
+                    SyncError::InvalidReceipt("revision overflow".to_owned())
+                })?;
+                if acknowledged.revision != revision {
+                    return Err(SyncError::InvalidReceipt(format!(
+                        "receipt {index} breaks revision continuity"
+                    )));
+                }
+            }
+            SyncReceiptOutcome::Conflict { conflict_id } => {
+                if conflict_id.is_empty()
+                    || conflict_id.len() > 256
+                    || conflict_id.chars().any(char::is_control)
+                {
+                    return Err(SyncError::InvalidReceipt(format!(
+                        "receipt {index} has an invalid conflict identity"
+                    )));
+                }
+                revision = revision.checked_add(1).ok_or_else(|| {
+                    SyncError::InvalidReceipt("revision overflow".to_owned())
+                })?;
+                if acknowledged.revision != revision {
+                    return Err(SyncError::InvalidReceipt(format!(
+                        "receipt {index} breaks revision continuity"
+                    )));
+                }
+            }
+            SyncReceiptOutcome::Replayed => {
+                if acknowledged.revision < revision || acknowledged.revision > receipt.remote_revision {
+                    return Err(SyncError::InvalidReceipt(format!(
+                        "receipt {index} has an invalid replay revision"
+                    )));
+                }
+                revision = acknowledged.revision;
+            }
+            SyncReceiptOutcome::Rejected { code, message } => {
+                if code.is_empty()
+                    || code.len() > 128
+                    || code.chars().any(char::is_control)
+                    || message.is_empty()
+                    || message.len() > 512
+                    || message.chars().any(char::is_control)
+                {
+                    return Err(SyncError::InvalidReceipt(format!(
+                        "receipt {index} has an invalid rejection diagnostic"
+                    )));
+                }
+                if acknowledged.revision != revision {
+                    return Err(SyncError::InvalidReceipt(format!(
+                        "receipt {index} changes revision despite rejection"
+                    )));
+                }
+            }
+        }
+    }
+    if receipt.remote_revision != revision {
+        return Err(SyncError::InvalidReceipt(
+            "remote revision is not continuous with operation receipts".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_envelope(
+    operation: &SyncOutboxEnvelope,
+    project: &CachedProject,
+) -> Result<(), SyncError> {
+    if operation.identity != project_identity(&project.id) {
+        return Err(SyncError::InvalidReceipt(
+            "operation identity is not scoped to the project".to_owned(),
+        ));
+    }
+    let payload = serde_json::to_vec(&operation.payload)
+        .map_err(|_| SyncError::InvalidReceipt("operation payload is not serializable".to_owned()))?;
+    if operation.payload_hash != payload_digest(&payload) {
+        return Err(SyncError::InvalidReceipt(
+            "operation payload hash is invalid".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_cached_input(value: &str, field: &'static str) -> Result<(), SyncError> {
@@ -1004,6 +1559,7 @@ mod tests {
         fn sync(
             &mut self,
             project: &CachedProject,
+            operations: &[SyncOutboxEnvelope],
         ) -> Result<SyncReceipt, SyncWorkerError> {
             self.calls.push(project.id.clone());
             if self.fail_once {
@@ -1014,9 +1570,21 @@ mod tests {
                     retryable: true,
                 });
             }
+            let receipts = operations
+                .iter()
+                .enumerate()
+                .map(|(index, operation)| SyncOperationReceipt {
+                    operation_id: operation.operation_id.clone(),
+                    payload_hash: operation.payload_hash.clone(),
+                    base_revision: operation.base_revision,
+                    identity: operation.identity.clone(),
+                    revision: project.local_revision + index as u64 + 1,
+                    outcome: SyncReceiptOutcome::Applied,
+                })
+                .collect();
             Ok(SyncReceipt {
-                transferred_operations: project.pending_operations,
-                remote_revision: project.local_revision + project.pending_operations as u64,
+                receipts,
+                remote_revision: project.local_revision + operations.len() as u64,
             })
         }
     }
@@ -1075,13 +1643,12 @@ mod tests {
         assert_eq!(coordinator.projects()[0].pending_operations, 3);
 
         coordinator.enable_sync();
-        assert_eq!(
-            coordinator.sync_project("northstar").unwrap(),
-            SyncOutcome::Transferred(SyncReceipt {
-                transferred_operations: 3,
-                remote_revision: 13,
-            })
-        );
+        let outcome = coordinator.sync_project("northstar").unwrap();
+        let SyncOutcome::Transferred(receipt) = outcome else {
+            panic!("expected transferred outcome");
+        };
+        assert_eq!(receipt.remote_revision, 13);
+        assert_eq!(receipt.receipts.len(), 3);
         assert_eq!(coordinator.projects()[0].pending_operations, 0);
     }
 
@@ -1122,5 +1689,85 @@ mod tests {
         assert_eq!(coordinator.indicator().state, ConnectionState::Warning);
         coordinator.sync_project("project").unwrap();
         assert_eq!(coordinator.projects()[0].pending_operations, 0);
+    }
+
+    struct MissingReceiptWorker;
+
+    impl SyncWorker for MissingReceiptWorker {
+        fn sync(
+            &mut self,
+            _: &CachedProject,
+            _: &[SyncOutboxEnvelope],
+        ) -> Result<SyncReceipt, SyncWorkerError> {
+            Ok(SyncReceipt {
+                receipts: Vec::new(),
+                remote_revision: 99,
+            })
+        }
+    }
+
+    #[test]
+    fn malformed_receipts_leave_the_durable_outbox_and_revision_untouched() {
+        let mut coordinator = SyncCoordinator::new(MissingReceiptWorker);
+        coordinator.add_cached_project(CachedProject::cloud("project", "Project", 7)).unwrap();
+        coordinator.queue_operation("project", serde_json::json!({"title": "draft"})).unwrap();
+
+        assert!(matches!(
+            coordinator.sync_project("project"),
+            Err(SyncError::InvalidReceipt(_))
+        ));
+        assert_eq!(coordinator.outbox("project").len(), 1);
+        assert_eq!(coordinator.projects()[0].local_revision, 7);
+        assert!(coordinator.acknowledgements().is_empty());
+    }
+
+    struct OutcomeWorker {
+        outcome: SyncReceiptOutcome,
+    }
+
+    impl SyncWorker for OutcomeWorker {
+        fn sync(
+            &mut self,
+            project: &CachedProject,
+            operations: &[SyncOutboxEnvelope],
+        ) -> Result<SyncReceipt, SyncWorkerError> {
+            let operation = operations.first().expect("test operation");
+            let revision = if matches!(
+                &self.outcome,
+                SyncReceiptOutcome::Applied | SyncReceiptOutcome::Conflict { .. }
+            ) {
+                    project.local_revision + 1
+            } else {
+                project.local_revision
+            };
+            Ok(SyncReceipt {
+                receipts: vec![SyncOperationReceipt {
+                    operation_id: operation.operation_id.clone(),
+                    payload_hash: operation.payload_hash.clone(),
+                    base_revision: operation.base_revision,
+                    identity: operation.identity.clone(),
+                    revision,
+                    outcome: self.outcome.clone(),
+                }],
+                remote_revision: revision,
+            })
+        }
+    }
+
+    #[test]
+    fn conflict_receipts_are_acknowledged_but_retained_for_recovery() {
+        let mut coordinator = SyncCoordinator::new(OutcomeWorker {
+            outcome: SyncReceiptOutcome::Conflict {
+                conflict_id: "conflict-1".into(),
+            },
+        });
+        coordinator.add_cached_project(CachedProject::cloud("project", "Project", 7)).unwrap();
+        coordinator.queue_operation("project", serde_json::json!({"title": "draft"})).unwrap();
+
+        coordinator.sync_project("project").unwrap();
+        assert!(coordinator.outbox("project").is_empty());
+        assert_eq!(coordinator.acknowledgements().len(), 1);
+        assert_eq!(coordinator.conflicts().len(), 1);
+        assert_eq!(coordinator.conflicts()[0].receipt.operation_id, coordinator.acknowledgements()[0].operation_id);
     }
 }
