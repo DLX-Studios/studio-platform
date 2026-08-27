@@ -7,6 +7,7 @@
 //! transports, and Runtime UI trees.
 
 pub mod command;
+mod engine;
 pub mod model;
 pub mod persistence;
 pub mod session;
@@ -14,6 +15,7 @@ pub mod session;
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
+pub use engine::DefaultDesignerSession;
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
@@ -26,8 +28,8 @@ pub use model::{
     TokenId, TokenKind, TokenValue, TombstoneReference, UndoGroupId, ValueKind,
 };
 pub use persistence::{
-    DesignerPersistence, DesignerTransaction, DurableDesignerState, PersistenceError,
-    PersistenceErrorCode, SessionFuture,
+    DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
+    PersistenceError, PersistenceErrorCode, SessionFuture,
 };
 pub use session::{
     BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,

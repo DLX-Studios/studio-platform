@@ -59,7 +59,7 @@ pub enum CommandPrecondition {
 pub enum Command {
     InsertNode {
         parent: ParentPlacement,
-        node: DesignNode,
+        node: Box<DesignNode>,
     },
     MoveNode {
         node_id: NodeId,
@@ -78,7 +78,7 @@ pub enum Command {
         node_id: NodeId,
     },
     RestoreNode {
-        tombstone: DeletionTombstone,
+        tombstone: Box<DeletionTombstone>,
     },
     SetProperty {
         node_id: NodeId,

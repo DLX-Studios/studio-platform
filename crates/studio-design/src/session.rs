@@ -1,4 +1,4 @@
-//! Public DesignerSession query and command seam.
+//! Public `DesignerSession` query and command seam.
 #![allow(
     missing_docs,
     reason = "closed query/result record fields mirror their documented domain type"
@@ -24,13 +24,13 @@ pub trait DesignerSession: Send {
     fn query(&self, query: DesignerQuery) -> DesignerQueryResult;
 
     /// Validate, durably commit, and publish one atomic command batch.
-    fn submit<'a>(&'a mut self, batch: CommandBatch) -> SessionFuture<'a, CommandOutcome>;
+    fn submit(&mut self, batch: CommandBatch) -> SessionFuture<'_, CommandOutcome>;
 
     /// Apply the current named undo group's validated inverses as a new revision.
-    fn undo<'a>(&'a mut self, operation: HistoryOperation) -> SessionFuture<'a, CommandOutcome>;
+    fn undo(&mut self, operation: HistoryOperation) -> SessionFuture<'_, CommandOutcome>;
 
     /// Reapply the next named undo group's original commands as a new revision.
-    fn redo<'a>(&'a mut self, operation: HistoryOperation) -> SessionFuture<'a, CommandOutcome>;
+    fn redo(&mut self, operation: HistoryOperation) -> SessionFuture<'_, CommandOutcome>;
 
     /// Update ephemeral selection and presentation context owned by the session.
     fn update_context(&mut self, update: SessionContextUpdate) -> SessionStateSnapshot;

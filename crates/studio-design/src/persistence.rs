@@ -4,7 +4,12 @@
     reason = "closed persistence records mirror their documented domain type"
 )]
 
-use std::{future::Future, pin::Pin};
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -24,6 +29,7 @@ pub type SessionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub struct DurableDesignerState {
     pub schema_version: u16,
     pub current: StudioDesignSnapshot,
+    pub revisions: Vec<StudioDesignSnapshot>,
     pub receipts: Vec<CommandReceipt>,
     pub history: Vec<HistoryEntry>,
     pub history_cursor: usize,
@@ -76,4 +82,66 @@ pub trait DesignerPersistence: Send + Sync {
         &'a self,
         transaction: &'a DesignerTransaction,
     ) -> SessionFuture<'a, Result<(), PersistenceError>>;
+}
+
+/// Deterministic process-local persistence used by pure domain tests and previews.
+#[derive(Clone, Default)]
+pub struct InMemoryDesignerPersistence {
+    states: Arc<Mutex<BTreeMap<ProjectId, DesignerTransaction>>>,
+}
+
+impl InMemoryDesignerPersistence {
+    /// Return the last committed transaction for inspection by adapter tests.
+    #[must_use]
+    pub fn transaction(&self, project_id: &ProjectId) -> Option<DesignerTransaction> {
+        self.states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(project_id)
+            .cloned()
+    }
+}
+
+impl DesignerPersistence for InMemoryDesignerPersistence {
+    fn load<'a>(
+        &'a self,
+        project_id: &'a ProjectId,
+    ) -> SessionFuture<'a, Result<Option<DurableDesignerState>, PersistenceError>> {
+        Box::pin(async move {
+            Ok(self
+                .states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(project_id)
+                .map(|transaction| transaction.state.clone()))
+        })
+    }
+
+    fn commit<'a>(
+        &'a self,
+        transaction: &'a DesignerTransaction,
+    ) -> SessionFuture<'a, Result<(), PersistenceError>> {
+        Box::pin(async move {
+            let mut states = self
+                .states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(current) = states.get(&transaction.project_id) {
+                if current.sequence > transaction.sequence {
+                    return Err(PersistenceError {
+                        code: PersistenceErrorCode::Rejected,
+                        message: "the durable store already contains a newer revision".to_owned(),
+                    });
+                }
+                if current.sequence == transaction.sequence && current != transaction {
+                    return Err(PersistenceError {
+                        code: PersistenceErrorCode::Rejected,
+                        message: "the durable revision identity has different content".to_owned(),
+                    });
+                }
+            }
+            states.insert(transaction.project_id.clone(), transaction.clone());
+            Ok(())
+        })
+    }
 }
