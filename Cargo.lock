@@ -8152,6 +8152,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-language-server"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-script",
+]
+
+[[package]]
 name = "studio-navigation"
 version = "0.1.0"
 
