@@ -8,6 +8,8 @@
 pub mod application_data;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
+/// Adapter from the host `LocalStore` to Studio Design persistence records.
+pub mod designer_persistence;
 
 pub use application_data::{
     APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
@@ -15,6 +17,7 @@ pub use application_data::{
     CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
     ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
 };
+pub use designer_persistence::LocalStoreDesignerPersistence;
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
     LocalStoreError, StoreBatch, StoreBatchEntry, StoreExecutor, StoreMetadata, StoreTask,

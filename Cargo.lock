@@ -8098,6 +8098,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-design"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-protocol",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "studio-host"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-design",
+ "surrealdb",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "studio-navigation"
 version = "0.1.0"
 
