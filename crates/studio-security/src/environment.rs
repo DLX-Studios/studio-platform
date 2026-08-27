@@ -449,7 +449,11 @@ impl PromotionPlan {
     ) -> Result<Self, EnvironmentError> {
         let entries: Vec<PromotionEntry> = statuses
             .into_iter()
+<<<<<<< HEAD
             .map(|status| status.describe())
+=======
+            .map(|status| SecretFreeMetadata::describe(&status))
+>>>>>>> origin/tt/16-bounded-surreal-query
             .collect();
         match direction {
             PromotionDirection::DevelopmentToStaging

@@ -6,6 +6,7 @@
 //! SurrealQL.
 
 use std::{
+    collections::BTreeMap,
     future::Future,
     path::{Path, PathBuf},
     time::Duration,
@@ -100,6 +101,8 @@ pub enum LocalStoreDiagnosticCode {
     BatchInvalid,
     /// A storage operation did not complete.
     OperationFailed,
+    /// A bounded query exceeded its host execution deadline.
+    QueryTimedOut,
     /// The background executor could not start.
     ExecutorUnavailable,
 }
@@ -141,6 +144,9 @@ impl LocalStoreDiagnostic {
             LocalStoreDiagnosticCode::BatchInvalid => "The requested storage batch is invalid.",
             LocalStoreDiagnosticCode::OperationFailed => {
                 "The local store operation did not complete. No partial batch was accepted."
+            }
+            LocalStoreDiagnosticCode::QueryTimedOut => {
+                "The application data query exceeded its host time limit."
             }
             LocalStoreDiagnosticCode::ExecutorUnavailable => {
                 "The storage worker could not start. Restart the host process."
@@ -450,6 +456,21 @@ pub trait LocalStore: Send + Sync {
         Self: Sized;
 }
 
+/// Host-only execution seam for the opt-in bounded application query capability.
+///
+/// Implementations keep the engine private and accept parameters separately from the query
+/// source. The application-data layer performs authorization, namespace rewriting, and policy
+/// checks before calling this trait.
+pub trait SurrealQueryStore: LocalStore {
+    /// Execute one already-authorized query with host-owned variable binding.
+    fn execute_surreal_query(
+        &self,
+        query: &str,
+        parameters: BTreeMap<String, Value>,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Value, LocalStoreError>> + Send;
+}
+
 /// RocksDB-backed SurrealDB implementation of [`LocalStore`].
 ///
 /// The embedded client is never exposed. The chosen directory and durability
@@ -637,6 +658,27 @@ impl LocalStore for EmbeddedLocalStore {
             // releasing the handle lets the engine stop its background workers.
             drop(self.database);
             Ok(())
+        }
+    }
+}
+
+impl SurrealQueryStore for EmbeddedLocalStore {
+    fn execute_surreal_query(
+        &self,
+        query: &str,
+        parameters: BTreeMap<String, Value>,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Value, LocalStoreError>> + Send {
+        async move {
+            let query = self.database.query(query).bind(parameters);
+            let mut response = tokio_time::timeout(timeout, query)
+                .await
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::QueryTimedOut))?
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
+            response
+                .take::<surrealdb::types::Value>(0)
+                .map(|value| value.into_json_value())
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))
         }
     }
 }

@@ -22,8 +22,12 @@ pub mod topology;
 pub use application_data::{
     APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
     ApplicationDataGuestApi, ApplicationDataHandle, ApplicationDataHost, ApplicationDataNamespace,
+    ApplicationDataQueryGuestApi,
     CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
-    ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
+    ForbiddenDataOperation, GuestDataRequest, PatchOperation, QueryDeclaration, QueryLimits,
+    QueryRequest, QueryResponse, QuerySource, RecordId, RecordSchema, StoredRecord,
+    SurrealQueryDeclaration, SurrealQueryError, SurrealQueryErrorCode, SurrealQueryLimits,
+    SurrealQueryRequest, SurrealQueryResponse,
 };
 pub use audit_log::{
     AUDIT_LOG_FORMAT_VERSION, AuditEvent, AuditEventKind, AuditEventType, AuditLog,
@@ -45,7 +49,7 @@ pub use identity::{
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
     LocalStoreError, StoreBatch, StoreBatchEntry, StoreExecutor, StoreMetadata, StoreTask,
-    StoreTaskError,
+    StoreTaskError, SurrealQueryStore,
 };
 pub use topology::{
     ApplyResult, CenterConflict, CenterId, CenterServer, CenterSnapshot, CenterTopology,

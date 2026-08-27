@@ -5,6 +5,7 @@ use std::{
     error::Error,
     fmt::{self, Write as _},
     future::Future,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,9 @@ use sha2::{Digest, Sha256};
 use studio_security::PluginPrincipal;
 use tokio::sync::Mutex;
 
-use crate::{LocalStore, StoreBatch, StoreBatchEntry};
+use crate::{
+    LocalStore, LocalStoreDiagnosticCode, StoreBatch, StoreBatchEntry, SurrealQueryStore,
+};
 
 /// Current derivation version for application data namespaces.
 pub const APPLICATION_DATA_NAMESPACE_VERSION: u16 = 1;
@@ -25,6 +28,9 @@ const MAX_RECORD_BYTES: usize = 256 * 1024;
 const MAX_ARRAY_ITEMS: usize = 4096;
 const MAX_SCHEMA_DEPTH: usize = 16;
 const MAX_PATCH_OPERATIONS: usize = 256;
+const HOST_MAX_QUERY_BYTES: usize = 64 * 1024;
+const HOST_MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
+const HOST_MAX_QUERY_DURATION: Duration = Duration::from_secs(10);
 
 /// Opaque host-derived partition for one verified publisher/application pair.
 ///
@@ -371,6 +377,230 @@ pub enum CollectionResponse {
     Deleted(bool),
 }
 
+/// Host ceilings for one opt-in SurrealQL declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurrealQueryLimits {
+    /// Maximum UTF-8 bytes in one query source.
+    pub max_query_bytes: usize,
+    /// Maximum JSON-encoded bytes in the returned value.
+    pub max_result_bytes: usize,
+    /// Maximum wall-clock time spent executing one query.
+    pub max_duration: Duration,
+}
+
+impl SurrealQueryLimits {
+    /// Construct limits, rejecting zero values and durations longer than the host ceiling.
+    pub fn new(
+        max_query_bytes: usize,
+        max_result_bytes: usize,
+        max_duration: Duration,
+    ) -> Result<Self, SurrealQueryError> {
+        if max_query_bytes == 0
+            || max_result_bytes == 0
+            || max_duration.is_zero()
+            || max_query_bytes > HOST_MAX_QUERY_BYTES
+            || max_result_bytes > HOST_MAX_RESULT_BYTES
+            || max_duration > HOST_MAX_QUERY_DURATION
+        {
+            return Err(SurrealQueryError::new(
+                SurrealQueryErrorCode::DeclarationInvalid,
+                QuerySource::unknown(),
+            ));
+        }
+        Ok(Self {
+            max_query_bytes,
+            max_result_bytes,
+            max_duration,
+        })
+    }
+
+    const fn is_valid(self) -> bool {
+        self.max_query_bytes > 0
+            && self.max_result_bytes > 0
+            && !self.max_duration.is_zero()
+            && self.max_query_bytes <= HOST_MAX_QUERY_BYTES
+            && self.max_result_bytes <= HOST_MAX_RESULT_BYTES
+            && self.max_duration <= HOST_MAX_QUERY_DURATION
+    }
+}
+
+impl Default for SurrealQueryLimits {
+    fn default() -> Self {
+        Self {
+            max_query_bytes: 16 * 1024,
+            max_result_bytes: 1024 * 1024,
+            max_duration: Duration::from_secs(1),
+        }
+    }
+}
+
+/// Signed-manifest declaration for the `data.surreal.query` capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurrealQueryDeclaration {
+    limits: SurrealQueryLimits,
+}
+
+impl SurrealQueryDeclaration {
+    /// Declare bounded SurrealQL with explicit per-application limits.
+    #[must_use]
+    pub const fn new(limits: SurrealQueryLimits) -> Self {
+        Self { limits }
+    }
+
+    /// Limits admitted for this declaration.
+    #[must_use]
+    pub const fn limits(self) -> SurrealQueryLimits {
+        self.limits
+    }
+}
+
+/// Source location carried with a query so a rejection can be linked safely by the host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuerySource {
+    /// One-based source line.
+    pub line: u32,
+    /// One-based source column.
+    pub column: u32,
+}
+
+impl QuerySource {
+    /// A stable fallback when an adapter has no source location.
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self { line: 1, column: 1 }
+    }
+}
+
+/// A query request with values kept structurally separate from query text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurrealQueryRequest {
+    query: String,
+    parameters: BTreeMap<String, Value>,
+    source: QuerySource,
+}
+
+impl SurrealQueryRequest {
+    /// Construct a request. Parameters are bound by the host and are never interpolated.
+    #[must_use]
+    pub fn new(query: impl Into<String>, parameters: BTreeMap<String, Value>) -> Self {
+        Self {
+            query: query.into(),
+            parameters,
+            source: QuerySource::unknown(),
+        }
+    }
+
+    /// Attach a source location for diagnostics.
+    #[must_use]
+    pub const fn with_source(mut self, source: QuerySource) -> Self {
+        self.source = QuerySource {
+            line: source.line.max(1),
+            column: source.column.max(1),
+        };
+        self
+    }
+
+    /// Query text supplied to the host validator.
+    #[must_use]
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Host-bound parameters, kept separate from query text.
+    #[must_use]
+    pub const fn parameters(&self) -> &BTreeMap<String, Value> {
+        &self.parameters
+    }
+
+    /// Source location used by the resulting diagnostic.
+    #[must_use]
+    pub const fn source(&self) -> QuerySource {
+        self.source
+    }
+}
+
+/// JSON result returned by an authorized bounded query.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurrealQueryResponse {
+    /// First statement's JSON result.
+    pub value: Value,
+}
+
+/// Compatibility alias for adapters that call the capability simply `QueryLimits`.
+pub type QueryLimits = SurrealQueryLimits;
+/// Compatibility alias for adapters that call the capability simply `QueryDeclaration`.
+pub type QueryDeclaration = SurrealQueryDeclaration;
+/// Compatibility alias for adapters that call the request simply `QueryRequest`.
+pub type QueryRequest = SurrealQueryRequest;
+/// Compatibility alias for adapters that call the response simply `QueryResponse`.
+pub type QueryResponse = SurrealQueryResponse;
+
+/// Safe query rejection family. No SurrealDB parser or storage details cross this boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurrealQueryErrorCode {
+    /// The signed declaration did not admit this capability.
+    CapabilityDenied,
+    /// The declaration or request shape is invalid.
+    DeclarationInvalid,
+    /// Query source exceeded the admitted byte limit.
+    QueryTooLarge,
+    /// Query syntax or statement count is outside the bounded subset.
+    QueryInvalid,
+    /// Namespace/database/system access or an unsafe function was requested.
+    Forbidden,
+    /// A referenced collection was not declared by this application.
+    CollectionUndeclared,
+    /// A returned value exceeded the admitted byte limit.
+    ResultTooLarge,
+    /// Query execution exceeded the admitted wall-clock limit.
+    TimedOut,
+    /// The host storage operation failed.
+    ExecutionFailed,
+}
+
+/// Source-linked, safe query diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurrealQueryError {
+    code: SurrealQueryErrorCode,
+    source: QuerySource,
+}
+
+impl SurrealQueryError {
+    const fn new(code: SurrealQueryErrorCode, source: QuerySource) -> Self {
+        Self { code, source }
+    }
+
+    /// Stable machine-readable rejection code.
+    #[must_use]
+    pub const fn code(self) -> SurrealQueryErrorCode {
+        self.code
+    }
+
+    /// Source location supplied by the guest adapter.
+    #[must_use]
+    pub const fn source(self) -> QuerySource {
+        self.source
+    }
+}
+
+impl fmt::Display for SurrealQueryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.code {
+            SurrealQueryErrorCode::CapabilityDenied => "surreal query capability denied",
+            SurrealQueryErrorCode::DeclarationInvalid => "surreal query declaration invalid",
+            SurrealQueryErrorCode::QueryTooLarge => "surreal query exceeds its host limit",
+            SurrealQueryErrorCode::QueryInvalid => "surreal query is invalid",
+            SurrealQueryErrorCode::Forbidden => "surreal query operation denied",
+            SurrealQueryErrorCode::CollectionUndeclared => "query collection not declared",
+            SurrealQueryErrorCode::ResultTooLarge => "surreal query result exceeds its host limit",
+            SurrealQueryErrorCode::TimedOut => "surreal query timed out",
+            SurrealQueryErrorCode::ExecutionFailed => "surreal query failed",
+        })
+    }
+}
+
+impl Error for SurrealQueryError {}
+
 /// Stable, context-free application data failure family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ApplicationDataErrorCode {
@@ -501,7 +731,44 @@ impl<S: LocalStore> ApplicationDataHost<S> {
             host: self,
             namespace: ApplicationDataNamespace::derive(principal),
             collections,
+            query: None,
         })
+    }
+
+    /// Bind a guest interface with the signed `data.surreal.query` declaration.
+    ///
+    /// This opt-in path requires a host query-capable store. Existing [`Self::bind`] callers
+    /// remain collection-helper-only and cannot acquire a query handle accidentally.
+    pub fn bind_with_query<'a>(
+        &'a self,
+        principal: &PluginPrincipal,
+        declarations: impl IntoIterator<Item = CollectionDeclaration>,
+        query: SurrealQueryDeclaration,
+    ) -> Result<ApplicationDataHandle<'a, S>, ApplicationDataError>
+    where
+        S: SurrealQueryStore,
+    {
+        if !query.limits.is_valid() {
+            return Err(ApplicationDataError::new(
+                ApplicationDataErrorCode::RequestInvalid,
+            ));
+        }
+        let mut handle = self.bind(principal, declarations)?;
+        handle.query = Some(query.limits);
+        Ok(handle)
+    }
+
+    /// Alias for [`Self::bind_with_query`] with the capability name made explicit.
+    pub fn bind_with_surreal_query<'a>(
+        &'a self,
+        principal: &PluginPrincipal,
+        declarations: impl IntoIterator<Item = CollectionDeclaration>,
+        query: SurrealQueryDeclaration,
+    ) -> Result<ApplicationDataHandle<'a, S>, ApplicationDataError>
+    where
+        S: SurrealQueryStore,
+    {
+        self.bind_with_query(principal, declarations, query)
     }
 }
 
@@ -510,6 +777,7 @@ pub struct ApplicationDataHandle<'a, S> {
     host: &'a ApplicationDataHost<S>,
     namespace: ApplicationDataNamespace,
     collections: BTreeMap<String, RecordSchema>,
+    query: Option<SurrealQueryLimits>,
 }
 
 impl<S> ApplicationDataHandle<'_, S> {
@@ -794,6 +1062,78 @@ impl<S: LocalStore> ApplicationDataHandle<'_, S> {
     }
 }
 
+impl<S: SurrealQueryStore> ApplicationDataHandle<'_, S> {
+    /// Execute one bounded, host-scoped SurrealQL request.
+    ///
+    /// The query declaration is the only way to obtain this method. Query variables are passed
+    /// to SurrealDB through its native binding API; values are never formatted into query text.
+    /// Every table target is checked against the package declaration and rewritten to an opaque
+    /// namespace-local table name before reaching the private engine.
+    pub async fn query(
+        &self,
+        request: SurrealQueryRequest,
+    ) -> Result<SurrealQueryResponse, SurrealQueryError> {
+        let source = request.source;
+        let Some(limits) = self.query else {
+            return Err(SurrealQueryError::new(
+                SurrealQueryErrorCode::CapabilityDenied,
+                source,
+            ));
+        };
+        if request.query.is_empty() || request.query.len() > limits.max_query_bytes {
+            return Err(SurrealQueryError::new(
+                SurrealQueryErrorCode::QueryTooLarge,
+                source,
+            ));
+        }
+        validate_parameters(&request.parameters, source)?;
+        let scoped = scope_query(&request.query, self.namespace, &self.collections, &request.parameters)
+            .map_err(|code| SurrealQueryError::new(code, source))?;
+        let value = self
+            .host
+            .store
+            .execute_surreal_query(&scoped, request.parameters, limits.max_duration)
+            .await
+            .map_err(|error| {
+                let code = if error.diagnostic().code() == LocalStoreDiagnosticCode::QueryTimedOut
+                {
+                    SurrealQueryErrorCode::TimedOut
+                } else {
+                    SurrealQueryErrorCode::ExecutionFailed
+                };
+                SurrealQueryError::new(code, source)
+            })?;
+        let bytes = serde_json::to_vec(&value).map_err(|_| {
+            SurrealQueryError::new(SurrealQueryErrorCode::ExecutionFailed, source)
+        })?;
+        if bytes.len() > limits.max_result_bytes {
+            return Err(SurrealQueryError::new(
+                SurrealQueryErrorCode::ResultTooLarge,
+                source,
+            ));
+        }
+        Ok(SurrealQueryResponse { value })
+    }
+}
+
+/// Guest-facing query interface implemented only by a query-capable application binding.
+pub trait ApplicationDataQueryGuestApi: Send + Sync {
+    /// Execute one host-validated, namespace-scoped query.
+    fn query(
+        &self,
+        request: SurrealQueryRequest,
+    ) -> impl Future<Output = Result<SurrealQueryResponse, SurrealQueryError>> + Send;
+}
+
+impl<S: SurrealQueryStore> ApplicationDataQueryGuestApi for ApplicationDataHandle<'_, S> {
+    fn query(
+        &self,
+        request: SurrealQueryRequest,
+    ) -> impl Future<Output = Result<SurrealQueryResponse, SurrealQueryError>> + Send {
+        ApplicationDataHandle::query(self, request)
+    }
+}
+
 impl CollectionRequest {
     fn collection_name(&self) -> &str {
         match self {
@@ -1045,4 +1385,218 @@ fn valid_identifier(value: &str, max_len: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+#[derive(Clone, Copy)]
+struct QueryToken<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+    quoted: bool,
+}
+
+fn validate_parameters(
+    parameters: &BTreeMap<String, Value>,
+    source: QuerySource,
+) -> Result<(), SurrealQueryError> {
+    if parameters.len() > 256 {
+        return Err(SurrealQueryError::new(
+            SurrealQueryErrorCode::QueryInvalid,
+            source,
+        ));
+    }
+    let encoded = serde_json::to_vec(parameters).map_err(|_| {
+        SurrealQueryError::new(SurrealQueryErrorCode::QueryInvalid, source)
+    })?;
+    if encoded.len() > HOST_MAX_RESULT_BYTES {
+        return Err(SurrealQueryError::new(
+            SurrealQueryErrorCode::QueryInvalid,
+            source,
+        ));
+    }
+    if parameters
+        .keys()
+        .any(|name| !valid_identifier(name, 64))
+    {
+        return Err(SurrealQueryError::new(
+            SurrealQueryErrorCode::QueryInvalid,
+            source,
+        ));
+    }
+    Ok(())
+}
+
+fn scope_query(
+    query: &str,
+    namespace: ApplicationDataNamespace,
+    collections: &BTreeMap<String, RecordSchema>,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<String, SurrealQueryErrorCode> {
+    let tokens = lex_query(query).ok_or(SurrealQueryErrorCode::QueryInvalid)?;
+    if tokens.is_empty() || tokens.iter().any(|token| token.text == ";") {
+        return Err(SurrealQueryErrorCode::QueryInvalid);
+    }
+    let first = tokens[0].text.to_ascii_lowercase();
+    if !matches!(first.as_str(), "select" | "create" | "update" | "upsert" | "delete") {
+        return Err(SurrealQueryErrorCode::Forbidden);
+    }
+    if first == "delete" && !tokens.iter().any(|token| token.text.eq_ignore_ascii_case("from")) {
+        return Err(SurrealQueryErrorCode::QueryInvalid);
+    }
+    let forbidden = [
+        "use", "info", "define", "remove", "option", "live", "kill", "sleep", "system",
+        "information_schema", "meta", "auth", "session", "file", "http", "https", "script",
+        "javascript", "js", "function", "fn", "os", "process", "filesystem",
+    ];
+    for (index, token) in tokens.iter().enumerate() {
+        let lower = token.text.to_ascii_lowercase();
+        if token.text == ":"
+            && tokens
+                .get(index + 1)
+                .is_some_and(|next| next.text == ":")
+        {
+            return Err(SurrealQueryErrorCode::Forbidden);
+        }
+        if !token.quoted && forbidden.contains(&lower.as_str()) {
+            return Err(SurrealQueryErrorCode::Forbidden);
+        }
+        if !token.quoted && token.text.starts_with('$') {
+            let name = &token.text[1..];
+            if name.is_empty() || !parameters.contains_key(name) {
+                return Err(SurrealQueryErrorCode::QueryInvalid);
+            }
+        }
+    }
+
+    let mut replacements = Vec::new();
+    let mut expect_table = false;
+    let mut table_list = false;
+    for token in &tokens {
+        let lower = token.text.to_ascii_lowercase();
+        if expect_table {
+            if token.quoted || !collections.contains_key(token.text) {
+                return Err(SurrealQueryErrorCode::CollectionUndeclared);
+            }
+            replacements.push((token.start, token.end, scoped_table_name(namespace, token.text)));
+            expect_table = false;
+            table_list = true;
+        } else if table_list && token.text == "," {
+            expect_table = true;
+        } else if table_list
+            && matches!(
+                lower.as_str(),
+                "where"
+                    | "split"
+                    | "group"
+                    | "order"
+                    | "limit"
+                    | "start"
+                    | "fetch"
+                    | "set"
+                    | "content"
+                    | "return"
+                    | "timeout"
+            )
+        {
+            table_list = false;
+        }
+        if matches!(
+            lower.as_str(),
+            "from" | "into" | "update" | "create" | "upsert" | "join"
+        ) {
+            expect_table = true;
+        }
+    }
+    if expect_table {
+        return Err(SurrealQueryErrorCode::QueryInvalid);
+    }
+    let mut scoped = query.to_owned();
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        scoped.replace_range(start..end, &replacement);
+    }
+    Ok(scoped)
+}
+
+fn scoped_table_name(namespace: ApplicationDataNamespace, collection: &str) -> String {
+    format!("appdata_v{}_{}_{}", namespace.version, hex_digest(namespace.digest), collection)
+}
+
+fn hex_digest(digest: [u8; 32]) -> String {
+    let mut value = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(value, "{byte:02x}");
+    }
+    value
+}
+
+fn lex_query(query: &str) -> Option<Vec<QueryToken<'_>>> {
+    let bytes = query.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            index += 2;
+            let start = index;
+            while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+                index += 1;
+            }
+            if index + 1 >= bytes.len() {
+                return None;
+            }
+            index += 2;
+            if start == index {
+                return None;
+            }
+            continue;
+        }
+        let start = index;
+        let quoted = matches!(bytes[index], b'\'' | b'"' | b'`');
+        if quoted {
+            let quote = bytes[index];
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'\\' {
+                    index = index.saturating_add(2);
+                } else if bytes[index] == quote {
+                    index += 1;
+                    break;
+                } else {
+                    index += 1;
+                }
+            }
+            if index > bytes.len() || bytes.get(index.saturating_sub(1)) != Some(&quote) {
+                return None;
+            }
+        } else if bytes[index].is_ascii_alphanumeric()
+            || matches!(bytes[index], b'_' | b'$' | b'.' | b'-')
+        {
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric()
+                    || matches!(bytes[index], b'_' | b'$' | b'.' | b'-'))
+            {
+                index += 1;
+            }
+        } else {
+            index += 1;
+        }
+        tokens.push(QueryToken {
+            text: &query[start..index],
+            start,
+            end: index,
+            quoted,
+        });
+    }
+    Some(tokens)
 }

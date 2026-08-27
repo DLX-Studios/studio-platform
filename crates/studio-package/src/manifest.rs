@@ -115,6 +115,9 @@ pub enum Capability {
     /// Host-owned receipt preview simulator.
     #[serde(rename = "printer.simulate")]
     PrinterSimulate,
+    /// Bounded, host-mediated SurrealQL over application data.
+    #[serde(rename = "data.surreal.query")]
+    DataSurrealQuery,
 }
 
 /// Guest-requested limits that cannot exceed host ceilings.
@@ -157,7 +160,10 @@ fn preflight_capabilities(value: &Value) -> Result<(), ManifestError> {
         let Some(capability) = capability.as_str() else {
             continue;
         };
-        if !matches!(capability, "payment.simulate" | "printer.simulate")
+        if !matches!(
+            capability,
+            "payment.simulate" | "printer.simulate" | "data.surreal.query"
+        )
             || !seen.insert(capability)
         {
             return Err(ManifestError::CapabilityInvalid);
