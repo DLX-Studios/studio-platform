@@ -173,6 +173,8 @@ fn pump(
     let mut attempt: u32 = 0;
     let mut backoff = policy.base_delay;
     let mut last_event_id: Option<String> = None;
+    let mut total_bytes: usize = 0;
+    let mut events: u64 = 0;
     let mut opened = false;
     loop {
         if channel_exhausted(&channel, &token, started, limits.stream_max_duration) {
@@ -207,6 +209,8 @@ fn pump(
                     &token,
                     chunk_schema,
                     &mut last_event_id,
+                    &mut total_bytes,
+                    &mut events,
                     started,
                     &limits,
                     &filter,
@@ -295,12 +299,12 @@ fn read_connection(
     token: &CancellationToken,
     chunk_schema: &JsonSchema,
     last_event_id: &mut Option<String>,
+    total_bytes: &mut usize,
+    events: &mut u64,
     started: Instant,
     limits: &EffectiveLimits,
     filter: &Arc<Mutex<SensitiveValueFilter>>,
 ) -> ConnectionEnd {
-    let mut total_bytes: usize = 0;
-    let mut events: u64 = 0;
     let mut parser = SseParser::new(MAX_FRAME_BYTES);
     loop {
         if token.is_cancelled() {
@@ -320,8 +324,8 @@ fn read_connection(
                 return ConnectionEnd::Completed;
             }
             Ok(Some(bytes)) => {
-                total_bytes = total_bytes.saturating_add(bytes.len());
-                if total_bytes > limits.max_stream_bytes {
+                *total_bytes = (*total_bytes).saturating_add(bytes.len());
+                if *total_bytes > limits.max_stream_bytes {
                     channel.push(StreamEvent::Failed(BrokerError::with_detail(
                         BrokerErrorCode::StreamExceeded,
                         "stream byte budget exhausted".to_owned(),
@@ -355,8 +359,12 @@ fn read_connection(
                     if parsed.data.is_empty() {
                         continue;
                     }
-                    events += 1;
-                    if events > limits.max_stream_events {
+                    if parsed.data == "[DONE]" {
+                        channel.push(StreamEvent::Completed);
+                        return ConnectionEnd::Completed;
+                    }
+                    *events += 1;
+                    if *events > limits.max_stream_events {
                         channel.push(StreamEvent::Failed(BrokerError::with_detail(
                             BrokerErrorCode::StreamExceeded,
                             "chunk event budget exhausted".to_owned(),

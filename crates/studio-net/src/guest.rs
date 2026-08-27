@@ -188,7 +188,8 @@ impl<'store> GuestRestApi<'store> {
         self.broker.execute(request)
     }
 
-    /// Open one declared server-sent-event stream with host-owned reconnect policy.
+    /// Open one declared server-sent-event stream with host-owned reconnect policy. POST streams
+    /// may carry a request body that has passed the signed bounded schema.
     ///
     /// # Errors
     ///

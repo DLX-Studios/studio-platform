@@ -252,3 +252,115 @@ fn non_streaming_route_rejects_open_stream_and_streaming_route_rejects_execute()
         .expect_err("streaming route");
     assert_eq!(code_of(&error), BrokerErrorCode::RouteIsStreaming);
 }
+
+#[test]
+fn post_stream_preserves_bounded_canonical_body_for_reconnects() {
+    let mut group = sse_group();
+    group.methods = vec![HttpMethod::Post];
+    group.allowed_headers = vec!["content-type".to_owned()];
+    group.request_schema = Some(serde_json::json!({
+        "type": "object",
+        "required": ["model", "messages", "stream"],
+        "properties": {
+            "model": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "messages": { "type": "array", "minItems": 1, "maxItems": 4, "items": {
+                "type": "object",
+                "required": ["role", "content"],
+                "properties": {
+                    "role": { "type": "string", "maxLength": 32 },
+                    "content": { "type": "string", "maxLength": 1024 }
+                },
+                "additionalProperties": false
+            }},
+            "stream": { "type": "boolean" },
+            "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+            "stream_options": { "type": "object", "properties": { "include_usage": { "type": "boolean" } }, "additionalProperties": false }
+        },
+        "additionalProperties": false
+    }));
+    let fixture = broker(&[group]);
+    fixture
+        .transport
+        .plan_stream(vec![
+            ReadStep::Bytes(b"data: {\"text\":\"ok\"}\n\n".to_vec()),
+            ReadStep::Fail(studio_net::transport::TransportError::ConnectionFailure),
+        ]);
+    fixture.transport.plan_stream(vec![ReadStep::End]);
+    let body = serde_json::json!({
+        "model": "proof-model",
+        "messages": [
+            { "role": "system", "content": "be concise" },
+            { "role": "user", "content": "hello" }
+        ],
+        "stream": true,
+        "temperature": 0.25,
+        "stream_options": { "include_usage": true }
+    });
+    let request = BrokerRequest::new(ORIGIN, HttpMethod::Post, PATH)
+        .with_header("content-type", "application/json")
+        .with_body(body.clone());
+    let _events = drain_stream(&fixture.broker.open_stream(request).expect("post stream"));
+    let requests = fixture.transport.recorded_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, HttpMethod::Post);
+    assert_eq!(requests[0].body, Some(serde_json::to_vec(&body).expect("json body")));
+    assert_eq!(requests[1].body, requests[0].body);
+}
+
+#[test]
+fn invalid_post_stream_body_is_rejected_before_dispatch() {
+    let mut group = sse_group();
+    group.methods = vec![HttpMethod::Post];
+    group.request_schema = Some(serde_json::json!({
+        "type": "object",
+        "required": ["model"],
+        "properties": { "model": { "type": "string", "minLength": 1, "maxLength": 64 } },
+        "additionalProperties": false
+    }));
+    let fixture = broker(&[group]);
+    let error = fixture
+        .broker
+        .open_stream(
+            BrokerRequest::new(ORIGIN, HttpMethod::Post, PATH)
+                .with_body(serde_json::json!({ "model": "" })),
+        )
+        .expect_err("invalid body");
+    assert_eq!(code_of(&error), BrokerErrorCode::RequestSchemaInvalid);
+    assert!(fixture.transport.recorded_requests().is_empty());
+}
+
+#[test]
+fn terminal_usage_and_error_frames_keep_order_before_done() {
+    let mut group = sse_group();
+    group.chunk_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "choices": { "type": "array" },
+            "usage": { "type": "object", "additionalProperties": true },
+            "error": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+    });
+    let fixture = broker(&[group]);
+    fixture.transport.plan_stream(vec![ReadStep::Bytes(
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\ndata: {\"error\":{\"message\":\"provider unavailable\"}}\n\ndata: [DONE]\n\n".to_vec(),
+    )]);
+    let events = drain_stream(
+        &fixture
+            .broker
+            .open_stream(stream_request())
+            .expect("stream"),
+    );
+    let chunks: Vec<&serde_json::Value> = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::Chunk(value) => Some(value),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(chunks.len(), 3);
+    assert!(chunks[0].get("choices").is_some());
+    assert!(chunks[1].get("usage").is_some());
+    assert!(chunks[2].get("error").is_some());
+    assert!(matches!(events.last(), Some(StreamEvent::Completed)));
+}

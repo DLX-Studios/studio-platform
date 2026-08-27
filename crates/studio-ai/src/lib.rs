@@ -38,20 +38,52 @@ pub struct ChatRequest {
     /// Request incremental chunks when the provider supports them.
     pub stream: bool,
     /// Optional deterministic sampling temperature.
+    #[serde(default)]
     pub temperature: Option<f64>,
+    /// Provider stream controls, such as requesting a terminal usage event.
+    #[serde(default)]
+    pub stream_options: Option<StreamOptions>,
+}
+
+/// Bounded OpenAI-compatible stream controls.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamOptions {
+    /// Ask the provider to emit a final usage-only SSE event.
+    pub include_usage: bool,
 }
 
 impl ChatRequest {
     /// Create a non-streaming request.
     #[must_use]
     pub fn new(model: impl Into<String>, messages: Vec<ChatMessage>) -> Self {
-        Self { model: model.into(), messages, stream: false, temperature: None }
+        Self {
+            model: model.into(),
+            messages,
+            stream: false,
+            temperature: None,
+            stream_options: None,
+        }
     }
 
     /// Mark the request as streaming.
     #[must_use]
     pub const fn streaming(mut self) -> Self {
         self.stream = true;
+        self
+    }
+
+    /// Set the provider sampling temperature; the broker enforces the declared `0..=2` bound.
+    #[must_use]
+    pub const fn with_temperature(mut self, temperature: f64) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    /// Attach bounded provider stream controls.
+    #[must_use]
+    pub fn with_stream_options(mut self, options: StreamOptions) -> Self {
+        self.stream_options = Some(options);
         self
     }
 }
@@ -65,6 +97,35 @@ pub struct ChatDelta {
     pub text: Option<String>,
     /// Provider finish reason, when complete.
     pub finish_reason: Option<String>,
+}
+
+/// Token accounting emitted by a provider's terminal usage event.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatUsage {
+    /// Tokens consumed by the prompt.
+    pub prompt_tokens: u64,
+    /// Tokens produced by the completion.
+    pub completion_tokens: u64,
+    /// Total prompt and completion tokens.
+    pub total_tokens: u64,
+}
+
+/// Provider error carried in a terminal SSE event.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatError {
+    /// Provider-safe human-readable message.
+    pub message: String,
+    /// Optional provider error family.
+    #[serde(default, rename = "type")]
+    pub error_type: Option<String>,
+    /// Optional provider parameter name.
+    #[serde(default)]
+    pub param: Option<String>,
+    /// Optional provider error code.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 /// Safe failure family for AI operations.
@@ -117,11 +178,11 @@ impl AiEndpoint {
         }, RouteGroupDeclaration {
             id: "ai.chat.completions.stream".to_owned(),
             origins: vec![self.origin.clone()],
-            methods: vec![HttpMethod::Get],
+            methods: vec![HttpMethod::Post],
             paths: vec!["/v1/chat/completions/stream".to_owned()],
-            allowed_headers: vec!["accept".to_owned()],
+            allowed_headers: vec!["content-type".to_owned(), "accept".to_owned()],
             credential,
-            request_schema: None,
+            request_schema: Some(chat_request_schema()),
             response_schema: None,
             streaming: Some(StreamingDeclaration {
                 chunk_schema: chat_chunk_schema(),
@@ -148,7 +209,8 @@ impl<'api> AiClient<'api> {
 
     /// Send one non-streaming OpenAI-compatible completion.
     pub fn complete(&self, request: &ChatRequest) -> Result<TypedResponse, AiError> {
-        let body = serde_json::to_value(request).map_err(|_| AiError::PayloadInvalid)?;
+        let body = serde_json::to_value(ChatRequest { stream: false, ..request.clone() })
+            .map_err(|_| AiError::PayloadInvalid)?;
         let response = self.api.execute(
             BrokerRequest::new(&self.endpoint.origin, HttpMethod::Post, CHAT_COMPLETIONS_PATH)
                 .with_header("content-type", "application/json")
@@ -158,17 +220,13 @@ impl<'api> AiClient<'api> {
         Ok(response)
     }
 
-    /// Open the provider adapter's declared SSE route.
-    ///
-    /// The current broker's streaming contract is GET-only. The adapter endpoint is intentionally
-    /// separate so a host can translate the canonical [`ChatRequest`] to its provider's streaming
-    /// request without adding a socket or credential path to the guest.
+    /// Open the provider adapter's declared SSE route with the canonical request body.
     pub fn stream(&self, request: &ChatRequest) -> Result<AiStream, AiError> {
-        let query = format!("model={}&stream=true", percent_encode(&request.model));
+        let body = serde_json::to_value(request.clone().streaming())
+            .map_err(|_| AiError::PayloadInvalid)?;
         let handle = self.api.open_stream(
-            BrokerRequest::new(&self.endpoint.origin, HttpMethod::Get, "/v1/chat/completions/stream")
-                .with_header("accept", "text/event-stream")
-                .with_query(query),
+            BrokerRequest::new(&self.endpoint.origin, HttpMethod::Post, "/v1/chat/completions/stream")
+                .with_body(body),
         )?;
         Ok(AiStream { handle })
     }
@@ -195,7 +253,7 @@ impl AiStream {
     pub fn next(&self) -> Option<Result<AiStreamEvent, AiError>> {
         match self.handle.next_event()? {
             StreamEvent::Opened => Some(Ok(AiStreamEvent::Opened)),
-            StreamEvent::Chunk(value) => Some(parse_chunk(&value).map(AiStreamEvent::Delta)),
+            StreamEvent::Chunk(value) => Some(parse_stream_event(&value)),
             StreamEvent::RetryScheduled { attempt, delay_ms } => Some(Ok(AiStreamEvent::RetryScheduled { attempt, delay_ms })),
             StreamEvent::Completed => Some(Ok(AiStreamEvent::Completed)),
             StreamEvent::Failed(error) => Some(Err(AiError::Broker(error))),
@@ -216,6 +274,10 @@ pub enum AiStreamEvent {
     Opened,
     /// One normalized assistant delta.
     Delta(ChatDelta),
+    /// Terminal provider token accounting.
+    Usage(ChatUsage),
+    /// Terminal provider error event.
+    Error(ChatError),
     /// The host scheduled a reconnect.
     RetryScheduled {
         /// One-based attempt.
@@ -236,16 +298,57 @@ fn chat_request_schema() -> Value {
             "type": "object", "required": ["role", "content"], "properties": {
                 "role": { "type": "string", "maxLength": 32 }, "content": { "type": "string", "maxLength": 128000 }
             }, "additionalProperties": false
-        }}, "stream": { "type": "boolean" }, "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+        }}, "stream": { "type": "boolean" }, "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "stream_options": { "type": "object", "required": ["include_usage"], "properties": { "include_usage": { "type": "boolean" } }, "additionalProperties": false }
     }, "additionalProperties": false })
 }
 
 fn chat_chunk_schema() -> Value {
     json!({ "type": "object", "properties": {
         "choices": { "type": "array", "maxItems": 32, "items": { "type": "object", "properties": {
-            "index": { "type": "integer" }, "delta": { "type": "object", "properties": { "content": { "type": "string" } }, "additionalProperties": true }, "finish_reason": {}
-        }, "additionalProperties": true }}
+            "index": { "type": "integer" }, "delta": { "type": "object", "properties": { "content": { "maxLength": 128000 } }, "additionalProperties": true }, "finish_reason": {}
+        }, "additionalProperties": true }},
+        "usage": { "required": ["prompt_tokens", "completion_tokens", "total_tokens"], "properties": {
+            "prompt_tokens": { "type": "integer" }, "completion_tokens": { "type": "integer" }, "total_tokens": { "type": "integer" }
+        }, "additionalProperties": true },
+        "error": { "type": "object", "required": ["message"], "properties": {
+            "message": { "type": "string", "minLength": 1, "maxLength": 8192 }, "type": { "maxLength": 128 }, "param": { "maxLength": 256 }, "code": {}
+        }, "additionalProperties": true }
     }, "additionalProperties": true })
+}
+
+fn parse_stream_event(value: &Value) -> Result<AiStreamEvent, AiError> {
+    if value.get("error").is_some() {
+        return parse_error(value).map(AiStreamEvent::Error);
+    }
+    if value
+        .get("choices")
+        .and_then(Value::as_array)
+        .is_none_or(|choices| choices.is_empty())
+        && value.get("usage").is_some()
+    {
+        return parse_usage(value).map(AiStreamEvent::Usage);
+    }
+    parse_chunk(value).map(AiStreamEvent::Delta)
+}
+
+fn parse_usage(value: &Value) -> Result<ChatUsage, AiError> {
+    let usage = value.get("usage").ok_or(AiError::PayloadInvalid)?;
+    Ok(ChatUsage {
+        prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_u64).ok_or(AiError::PayloadInvalid)?,
+        completion_tokens: usage.get("completion_tokens").and_then(Value::as_u64).ok_or(AiError::PayloadInvalid)?,
+        total_tokens: usage.get("total_tokens").and_then(Value::as_u64).ok_or(AiError::PayloadInvalid)?,
+    })
+}
+
+fn parse_error(value: &Value) -> Result<ChatError, AiError> {
+    let error = value.get("error").and_then(Value::as_object).ok_or(AiError::PayloadInvalid)?;
+    Ok(ChatError {
+        message: error.get("message").and_then(Value::as_str).filter(|message| !message.is_empty()).ok_or(AiError::PayloadInvalid)?.to_owned(),
+        error_type: error.get("type").and_then(Value::as_str).map(ToOwned::to_owned),
+        param: error.get("param").and_then(Value::as_str).map(ToOwned::to_owned),
+        code: error.get("code").and_then(Value::as_str).map(ToOwned::to_owned),
+    })
 }
 
 fn parse_chunk(value: &Value) -> Result<ChatDelta, AiError> {
@@ -257,17 +360,6 @@ fn parse_chunk(value: &Value) -> Result<ChatDelta, AiError> {
     })
 }
 
-fn percent_encode(value: &str) -> String {
-    value.bytes().fold(String::new(), |mut result, byte| {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            result.push(char::from(byte));
-        } else {
-            result.push_str(&format!("%{byte:02X}"));
-        }
-        result
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,17 +367,50 @@ mod tests {
 
     #[test]
     fn request_shape_and_endpoint_routes_are_deterministic() {
-        let request = ChatRequest::new("proof-model", vec![ChatMessage { role: "user".to_owned(), content: "hello".to_owned() }]).streaming();
+        let request = ChatRequest {
+            stream_options: Some(StreamOptions { include_usage: true }),
+            temperature: Some(0.25),
+            ..ChatRequest::new(
+                "proof-model",
+                vec![ChatMessage { role: "user".to_owned(), content: "hello".to_owned() }],
+            )
+            .streaming()
+        };
         let json = AiClient::request_json(&request).expect("request is serializable");
         assert_eq!(json["model"], "proof-model");
         assert_eq!(json["stream"], true);
+        assert_eq!(json["messages"][0]["content"], "hello");
+        assert_eq!(json["temperature"], 0.25);
+        assert_eq!(json["stream_options"]["include_usage"], true);
         let endpoint = AiEndpoint::new("https://ai.example.test", "ai.api_key");
         assert!(endpoint.route_groups().iter().all(|route| route.compile(&BrokerLimits::default()).is_ok()));
+        assert_eq!(endpoint.route_groups()[1].methods(), &[HttpMethod::Post]);
+        assert!(endpoint.route_groups()[1].request_schema().is_some());
     }
 
     #[test]
     fn chunk_projection_normalizes_openai_delta() {
         let chunk = json!({ "choices": [{ "index": 1, "delta": { "content": "hi" }, "finish_reason": null }] });
         assert_eq!(parse_chunk(&chunk).expect("valid chunk"), ChatDelta { choice_index: 1, text: Some("hi".to_owned()), finish_reason: None });
+    }
+
+    #[test]
+    fn terminal_usage_and_provider_error_events_are_typed() {
+        let usage = json!({ "choices": [], "usage": { "prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10 } });
+        assert_eq!(
+            parse_stream_event(&usage).expect("usage event"),
+            AiStreamEvent::Usage(ChatUsage { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 })
+        );
+
+        let error = json!({ "error": { "message": "rate limited", "type": "rate_limit_error", "code": "rate_limit" } });
+        assert_eq!(
+            parse_stream_event(&error).expect("provider error event"),
+            AiStreamEvent::Error(ChatError {
+                message: "rate limited".to_owned(),
+                error_type: Some("rate_limit_error".to_owned()),
+                param: None,
+                code: Some("rate_limit".to_owned()),
+            })
+        );
     }
 }

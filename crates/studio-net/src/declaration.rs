@@ -300,7 +300,8 @@ pub struct RouteGroupDeclaration {
     /// Bounded response-body schema enforced before guest visibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<Value>,
-    /// Declared server-sent-event streaming mode; conflicts with `responseSchema`.
+    /// Declared server-sent-event streaming mode; conflicts with `responseSchema`. Streaming
+    /// groups may also declare a bounded request schema for POST-based provider APIs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streaming: Option<StreamingDeclaration>,
     /// Explicit narrower bounds; absent fields inherit generous host defaults.
@@ -564,8 +565,11 @@ impl RouteGroupDeclaration {
         };
         let (chunk_schema, retry_policy) = match &self.streaming {
             Some(streaming) => {
-                if methods != [HttpMethod::Get] {
-                    return Err(invalid("streaming routes must declare GET only"));
+                if methods
+                    .iter()
+                    .any(|method| !matches!(*method, HttpMethod::Get | HttpMethod::Post))
+                {
+                    return Err(invalid("streaming routes must declare GET or POST only"));
                 }
                 (
                     Some(

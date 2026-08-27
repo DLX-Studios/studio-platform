@@ -16,8 +16,9 @@ sign-in request, authenticated repository list, and repository detail. Browser h
 capture, token storage, and send-time credential injection remain host responsibilities.
 
 `crates/studio-ai` and `sdk/ai` establish the provider-neutral OpenAI-compatible request and
-validated SSE chunk shape. The current broker's streaming contract is GET-only, so the AI route is
-an explicit adapter endpoint; applications do not gain a raw socket or an API-key path.
+validated SSE chunk shape. Streaming uses a declared, bounded POST adapter route carrying the
+same ordered messages, temperature, and `stream_options` body as a non-streaming request;
+applications do not gain a raw socket or an API-key path.
 
 ## Build and launch
 
