@@ -32,15 +32,11 @@ use gpui_component::{
     switch::Switch,
     tag::Tag,
 };
-use studio_actions::{Checkout, Money};
-use studio_components::{InputAction, PropertyTransition, RuntimeControl};
+use studio_components::{InputAction, PropertyTransition, RuntimeControl, component_readiness};
 use studio_navigation::MotionPreference;
 use studio_protocol::NodeKind;
 
-use crate::{
-    NativeCheckoutShell,
-    plugin_surface::{PluginRenderNode, PluginSurface},
-};
+use crate::plugin_surface::{PluginRenderNode, PluginSurface};
 
 const ACCESSIBILITY_LABELS: [&str; 3] = ["Increment counter", "Operator note", "Open details"];
 
@@ -422,7 +418,6 @@ pub struct FoundationGallery {
     component_color_picker: Entity<ColorPickerState>,
     _component_subscriptions: Vec<Subscription>,
     plugin_surface: Option<PluginSurface>,
-    checkout_shell: Option<NativeCheckoutShell>,
 }
 
 impl FoundationGallery {
@@ -453,15 +448,11 @@ impl FoundationGallery {
             component_color_picker,
             _component_subscriptions: Vec::new(),
             plugin_surface: None,
-            checkout_shell: None,
         }
     }
 
     /// Creates the native shell while retaining a fully prepared plugin surface for its lifetime.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal money value is invalid (hard-coded valid amount).
     #[must_use]
     pub fn with_plugin_surface(
         reduced_motion: bool,
@@ -470,42 +461,8 @@ impl FoundationGallery {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut gallery = Self::new(reduced_motion, window, cx);
-        let reduced = gallery.model.reduced_motion();
-        let owner_id = plugin_surface.owner_id().as_str().to_owned();
         gallery.plugin_surface = Some(plugin_surface);
-        let checkout = Checkout::new(
-            format!("{owner_id}-sale"),
-            "Studio Barber",
-            "Verified POS",
-            Money::new("USD", 5_724).unwrap(),
-        )
-        .ok();
-        if let Some(checkout) = checkout
-            && let Some(surface) = gallery.plugin_surface.as_ref()
-            && let Ok(shell) = surface.checkout_shell(checkout, reduced)
-        {
-            gallery.checkout_shell = Some(shell);
-        }
         gallery
-    }
-
-    /// Current host-owned route (visible navigation state).
-    #[must_use]
-    pub fn checkout_route(&self) -> Option<&str> {
-        self.checkout_shell
-            .as_ref()
-            .map(NativeCheckoutShell::current_route)
-    }
-
-    /// Whether a host-owned checkout shell is active.
-    #[must_use]
-    pub fn has_checkout_shell(&self) -> bool {
-        self.checkout_shell.is_some()
-    }
-
-    /// Mutable access to the host-owned checkout shell for trusted flows.
-    pub fn checkout_shell_mut(&mut self) -> Option<&mut NativeCheckoutShell> {
-        self.checkout_shell.as_mut()
     }
 
     fn dispatch_input(&mut self, node_id: &str, action: InputAction, cx: &mut Context<Self>) {
@@ -964,6 +921,46 @@ impl FoundationGallery {
             .into_any_element()
     }
 
+    /// Render an unsupported catalog kind only for an explicitly selected development launch.
+    /// Production launches hide the node instead of silently presenting a generic surface. A
+    /// kind marked semantically rendered/verified is reported as a contract violation so release
+    /// certification cannot be bypassed by falling through this path.
+    fn development_fallback(
+        &self,
+        node_id: String,
+        kind: NodeKind,
+        children: Vec<AnyElement>,
+    ) -> AnyElement {
+        let readiness = component_readiness(kind);
+        let message = if readiness.verified {
+            format!("Renderer contract violation for {kind:?}")
+        } else {
+            format!("Development renderer fallback for {kind:?}")
+        };
+        let development = self
+            .plugin_surface
+            .as_ref()
+            .is_some_and(|surface| surface.mode() == crate::cli::LaunchMode::Development);
+        if !development {
+            return div().id(node_id).hidden().into_any_element();
+        }
+        div()
+            .id(node_id)
+            .role(Role::Alert)
+            .aria_label(message.clone())
+            .w_full()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(COLOR_WARNING))
+            .bg(rgb(COLOR_SURFACE_VARIANT))
+            .text_sm()
+            .text_color(rgb(COLOR_WARNING))
+            .child(message)
+            .children(children)
+            .into_any_element()
+    }
+
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -977,18 +974,6 @@ impl FoundationGallery {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let is_root = node.id == "root";
-        let is_order_pane = node.id == "order-pane";
-        let is_order_content = node.id == "order-content";
-        let is_order_summary = node.id == "order-summary";
-        let is_catalog_pane = node.id == "catalog-pane";
-        let is_product_image = node.id.ends_with("-img");
-        let is_cart_image = node.id.ends_with("-cart-img");
-        let is_product_meta = node.id.ends_with("-meta");
-        let is_summary_row = matches!(
-            node.id.as_str(),
-            "order-head" | "subtotal-row" | "taxes-row" | "discount-row" | "total-row"
-        );
         if node
             .props
             .get("visible")
@@ -1033,9 +1018,6 @@ impl FoundationGallery {
                     .w_full()
                     .min_h_0()
                     .flex_grow(flex)
-                    .when(is_order_content, |element| {
-                        element.h_full().min_h_0().justify_between()
-                    })
                     .flex()
                     .flex_col()
                     .when(alignment == "start", gpui::Styled::items_start)
@@ -1048,7 +1030,6 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Row => {
-                let is_main_row = node.id == "main-row";
                 let alignment = node
                     .props
                     .get("alignment")
@@ -1060,16 +1041,10 @@ impl FoundationGallery {
                         element.aria_label(label)
                     })
                     .w_full()
-                    .when(is_root, gpui::Styled::h_full)
-                    .when(is_root, |element| element.min_h_0().flex_grow_1())
-                    .when(is_main_row, |el| el.h_full().min_h_0().items_stretch())
-                    .when(is_product_meta, gpui::Styled::justify_between)
-                    .when(is_summary_row, gpui::Styled::justify_between)
+                    .min_h_0()
+                    .flex_grow(flex)
                     .flex()
-                    .when(
-                        alignment.is_none() && !is_root && !is_main_row,
-                        gpui::Styled::items_center,
-                    )
+                    .when(alignment.is_none(), gpui::Styled::items_center)
                     .when(alignment == Some("start"), gpui::Styled::items_start)
                     .when(alignment == Some("center"), gpui::Styled::items_center)
                     .when(alignment == Some("end"), gpui::Styled::items_end)
@@ -1217,6 +1192,17 @@ impl FoundationGallery {
                     .get("padding")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
+                let width = node
+                    .props
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let height = node
+                    .props
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let shrink = prop_bool(&node.props, "shrink", false);
                 let background = semantic_background(
                     node.props
                         .get("background")
@@ -1229,26 +1215,14 @@ impl FoundationGallery {
                         element.aria_label(label)
                     })
                     .min_w_0()
-                    .when(is_order_pane, |element| {
-                        element.w(px(390.0)).h_full().flex_shrink_0()
-                    })
-                    .when(is_catalog_pane, |element| {
-                        element.h_full().min_w_0().flex_grow(1.0).flex_shrink(1.0)
-                    })
-                    .when(is_catalog_pane, |element| element.flex_grow(1.0))
-                    .when(is_order_pane, |element| element.flex_grow(0.0))
-                    .when(!is_catalog_pane && !is_order_pane, |el| el.flex_grow(flex))
+                    .when_some(width, |element, width| element.w(px(width)))
+                    .when_some(height, |element, height| element.h(px(height)))
+                    .flex_grow(flex)
                     .flex()
                     .flex_col()
-                    .when(is_order_summary, gpui::Styled::flex_shrink_0)
+                    .when(shrink, gpui::Styled::flex_shrink_0)
                     .p(px(padding))
                     .bg(background)
-                    .when(is_order_summary, |element| {
-                        element
-                            .rounded_xl()
-                            .border_1()
-                            .border_color(rgb(COLOR_BORDER_SUBTLE))
-                    })
                     .children(children)
                     .into_any_element()
             }
@@ -1426,6 +1400,16 @@ impl FoundationGallery {
                         image_format(path, bytes)
                             .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
                     });
+                let width = node
+                    .props
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let height = node
+                    .props
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
                 match source {
                     Some(source) => img(source)
                         .id(node.id)
@@ -1438,15 +1422,11 @@ impl FoundationGallery {
                                     .and_then(serde_json::Value::as_str)
                                     .map(ToOwned::to_owned)
                             }),
-                            gpui::StatefulInteractiveElement::aria_label,
+                            |element, label| element.aria_label(label),
                         )
-                        .w_full()
-                        .when(is_product_image || !is_cart_image, |element| {
-                            element.h(px(128.0))
-                        })
-                        .when(is_cart_image, |element| {
-                            element.w(px(72.0)).h(px(72.0)).flex_shrink_0()
-                        })
+                        .when(width.is_none(), gpui::Styled::w_full)
+                        .when_some(width, |element, width| element.w(px(width)))
+                        .when_some(height, |element, height| element.h(px(height)))
                         .object_fit(gpui::ObjectFit::Cover)
                         .rounded_md()
                         .into_any_element(),
@@ -1463,8 +1443,9 @@ impl FoundationGallery {
                             }),
                             gpui::StatefulInteractiveElement::aria_label,
                         )
-                        .w_full()
-                        .h(px(128.0))
+                        .when(width.is_none(), gpui::Styled::w_full)
+                        .when_some(width, |element, width| element.w(px(width)))
+                        .when_some(height, |element, height| element.h(px(height)))
                         .rounded_md()
                         .bg(rgb(COLOR_SURFACE_VARIANT))
                         .into_any_element(),
@@ -1639,29 +1620,7 @@ impl FoundationGallery {
             | NodeKind::Command
             | NodeKind::NativeSelect
             | NodeKind::Message
-            | NodeKind::Sonner => {
-                let label = node
-                    .props
-                    .get("label")
-                    .or_else(|| node.props.get("title"))
-                    .or_else(|| node.props.get("content"))
-                    .or_else(|| node.props.get("message"))
-                    .or_else(|| node.props.get("value"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                div()
-                    .id(node.id)
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(COLOR_BORDER_SUBTLE))
-                    .bg(rgb(COLOR_SURFACE_VARIANT))
-                    .when(!label.is_empty(), |element| element.child(label))
-                    .children(children)
-                    .into_any_element()
-            }
+            | NodeKind::Sonner => self.development_fallback(node.id, node.kind, children),
             NodeKind::Sidebar => div()
                 .id(node.id)
                 .role(Role::Navigation)
@@ -2038,20 +1997,7 @@ impl FoundationGallery {
             | NodeKind::Item
             | NodeKind::MessageScroller
             | NodeKind::ToggleGroup
-            | NodeKind::TimePicker => div()
-                .id(node.id)
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .p_2()
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(COLOR_BORDER_SUBTLE))
-                .bg(rgb(COLOR_SURFACE))
-                .children(children)
-                .into_any_element(),
+            | NodeKind::TimePicker => self.development_fallback(node.id, node.kind, children),
             NodeKind::Dialog => {
                 let open = prop_bool(&node.props, "open", false);
                 let title = prop_str(&node.props, "title")
@@ -2399,12 +2345,7 @@ impl FoundationGallery {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
-                // Host displays dot while wasm emits comma to stay under 10M fuel
-                let value = if raw.contains('$') {
-                    raw.replace(',', ".")
-                } else {
-                    raw
-                };
+                let value = raw;
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2439,17 +2380,15 @@ impl FoundationGallery {
                     .to_owned();
                 let variant = prop_str(&node.props, "variant").unwrap_or("primary");
                 let enabled = prop_bool(&node.props, "enabled", true);
-                // UNVERIFIED: the closed protocol declares a "selected" button variant but
-                // gpui-component's Button has no selected style; it renders as primary until the
-                // runner/fixer pass confirms host styling policy.
-                let is_card_action = node_id.starts_with("add-");
-                // gpui-component's Button exposes no aria_label; a declared custom
-                // accessibility label cannot attach here (semantic finding).
+                let full_width = prop_str(&node.props, "width") == Some("full");
                 let button = Button::new(node_id)
                     .label(label)
                     .disabled(!enabled)
                     .opacity(opacity)
-                    .when(is_card_action, gpui::Styled::w_full);
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .when(full_width, gpui::Styled::w_full);
                 let button = match variant {
                     "secondary" => button.secondary(),
                     _ => button.primary(),
@@ -2819,7 +2758,7 @@ impl FoundationGallery {
             NodeKind::ColorPicker => {
                 ColorPicker::new(&self.component_color_picker).into_any_element()
             }
-            _ => div().id(node.id).children(children).into_any_element(),
+            _ => self.development_fallback(node.id, node.kind, children),
         };
         match transition {
             Some(transition) if !transition.duration.is_zero() => {
@@ -2860,83 +2799,12 @@ impl Render for FoundationGallery {
                 .and_then(PluginSurface::warning)
                 .unwrap_or_default()
                 .to_owned();
-            let checkout_route = self
-                .checkout_shell
-                .as_ref()
-                .map(|shell| shell.current_route().to_owned());
             self.visited_input_ids.clear();
             self.overlay_depth = 0;
             let plugin = self.plugin_node(root, window, cx);
             // Retained form-widget states are keyed by stable node ID; states whose nodes left
             // the render tree are pruned so removals do not leak native widgets or buffers.
             self.prune_retired_widget_states();
-            let route_bar = checkout_route.clone().map(|route| {
-                div()
-                    .id("checkout-route")
-                    .role(Role::Navigation)
-                    .aria_label(format!("Current route {route}"))
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(rgb(COLOR_SURFACE_VARIANT))
-                    .border_1()
-                    .border_color(rgb(COLOR_BORDER_SUBTLE))
-                    .flex()
-                    .justify_between()
-                    .child(div().child(format!("Route: {route}")))
-                    .child(div().text_xs().text_color(rgb(COLOR_MUTED)).child(
-                        if route.starts_with("/receipts/") {
-                            "Receipt — host-owned immutable record"
-                        } else if route == "/checkout/payment" {
-                            "Checkout — trusted confirmation required"
-                        } else if route == "/cart" {
-                            "Cart — host-owned route state"
-                        } else {
-                            "Host-owned navigation"
-                        },
-                    ))
-                    .into_any_element()
-            });
-            let confirmation_overlay = checkout_route
-                .as_deref()
-                .filter(|route| *route == "/checkout/payment")
-                .map(|_| {
-                    div()
-                        .id("trusted-confirmation-overlay")
-                        .role(Role::Dialog)
-                        .aria_label("Trusted Studio confirmation")
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .bg(gpui::hsla(0.0, 0.0, 0.0, 0.35))
-                        .child(
-                            div()
-                                .w(px(420.0))
-                                .p_6()
-                                .rounded_xl()
-                                .bg(rgb(COLOR_SURFACE))
-                                .border_1()
-                                .border_color(rgb(COLOR_BORDER))
-                                .shadow_lg()
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child("Studio — trusted confirmation"),
-                                )
-                                .child(
-                                    div()
-                                        .mt_2()
-                                        .text_sm()
-                                        .text_color(rgb(COLOR_MUTED))
-                                        .child("Verified merchant, exact amount, and offline simulator status are host-owned."),
-                                ),
-                        )
-                        .into_any_element()
-                });
             return div()
                 .id("plugin-gallery")
                 .size_full()
@@ -2959,9 +2827,7 @@ impl Render for FoundationGallery {
                             .child(warning),
                     )
                 })
-                .children(route_bar)
-                .child(plugin)
-                .children(confirmation_overlay);
+                .child(plugin);
         }
         let snapshot = self.model.snapshot();
         let button = Self::increment_button(snapshot.button_activations, cx);

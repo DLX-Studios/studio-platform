@@ -203,6 +203,35 @@ pub const fn component_readiness(kind: NodeKind) -> ComponentReadiness {
     readiness(kind)
 }
 
+/// Return every approved kind that is not ready for release certification.
+///
+/// Certification is deliberately derived from the canonical readiness table instead of from
+/// renderer call sites. This keeps a newly admitted protocol kind from becoming releasable merely
+/// because it maps to a native layer or happens to hit a development fallback.
+#[must_use]
+pub fn uncertified_renderer_kinds() -> Vec<NodeKind> {
+    COMPONENT_RENDERER_READINESS
+        .iter()
+        .filter(|entry| !entry.semantically_rendered || !entry.verified)
+        .map(|entry| entry.kind)
+        .collect()
+}
+
+/// Enforce the release gate for the approved renderer catalog.
+///
+/// # Errors
+///
+/// Returns all kinds that still lack both semantic rendering and automated verification. A
+/// development fallback never satisfies this gate.
+pub fn certify_renderer_readiness() -> Result<(), Vec<NodeKind>> {
+    let missing = uncertified_renderer_kinds();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing)
+    }
+}
+
 /// Stable component-mapping rejection family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogErrorCode {
@@ -306,7 +335,6 @@ const fn batch_a_rendered(kind: NodeKind) -> bool {
             | NodeKind::Empty
             | NodeKind::Skeleton
             | NodeKind::Separator
-            | NodeKind::AspectRatio
     )
 }
 
