@@ -206,6 +206,17 @@ impl DesignNode {
             interaction_ids: Vec::new(),
         }
     }
+
+    /// Resolve this node's sparse layout override for a responsive variant.
+    #[must_use]
+    pub fn layout_for_variant(&self, variant_id: Option<&ResponsiveVariantId>) -> LayoutProperties {
+        variant_id
+            .and_then(|variant_id| self.responsive_overrides.get(variant_id))
+            .map_or_else(
+                || self.layout.clone(),
+                |override_value| self.layout.merged_with(&override_value.layout),
+            )
+    }
 }
 
 /// Whether a node is a catalog primitive or a project-owned composition instance.
@@ -362,15 +373,23 @@ pub enum Paint {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, default)]
 pub struct LayoutProperties {
     pub schema_version: u16,
     pub width: Option<Length>,
     pub height: Option<Length>,
+    pub min_width: Option<Length>,
+    pub max_width: Option<Length>,
+    pub min_height: Option<Length>,
+    pub max_height: Option<Length>,
     pub gap: Option<Length>,
+    pub row_gap: Option<Length>,
+    pub column_gap: Option<Length>,
     pub padding: Option<Length>,
     pub placement: Option<Placement>,
+    pub position: Option<LayoutPosition>,
     pub alignment: Option<Alignment>,
+    pub grid_columns: Option<u16>,
 }
 
 impl Default for LayoutProperties {
@@ -379,11 +398,134 @@ impl Default for LayoutProperties {
             schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
             width: None,
             height: None,
+            min_width: None,
+            max_width: None,
+            min_height: None,
+            max_height: None,
             gap: None,
+            row_gap: None,
+            column_gap: None,
             padding: None,
             placement: None,
+            position: None,
             alignment: None,
+            grid_columns: None,
         }
+    }
+}
+
+impl LayoutProperties {
+    /// Return a flow layout with no authored constraints.
+    #[must_use]
+    pub fn flow() -> Self {
+        Self::default()
+    }
+
+    /// Return an overlay layout suitable for a child of a Stack.
+    #[must_use]
+    pub fn overlay() -> Self {
+        Self {
+            placement: Some(Placement::Overlay),
+            ..Self::default()
+        }
+    }
+
+    /// Return an absolute layout suitable for a child of a Stack.
+    #[must_use]
+    pub fn absolute() -> Self {
+        Self {
+            placement: Some(Placement::Absolute),
+            ..Self::default()
+        }
+    }
+
+    /// Merge a breakpoint override over the base layout.
+    ///
+    /// Overrides are sparse: an omitted field keeps the base value. This is
+    /// what allows a profile to change only a minimum width or overlay inset
+    /// without silently resetting the rest of the authored layout.
+    #[must_use]
+    pub fn merged_with(&self, override_layout: &Self) -> Self {
+        let placement = override_layout.placement.or(self.placement);
+        let position = match override_layout.placement {
+            Some(Placement::Flow) => None,
+            Some(Placement::Overlay | Placement::Absolute) | None => override_layout
+                .position
+                .clone()
+                .or_else(|| self.position.clone()),
+        };
+        Self {
+            schema_version: self.schema_version,
+            width: override_layout.width.clone().or_else(|| self.width.clone()),
+            height: override_layout
+                .height
+                .clone()
+                .or_else(|| self.height.clone()),
+            min_width: override_layout
+                .min_width
+                .clone()
+                .or_else(|| self.min_width.clone()),
+            max_width: override_layout
+                .max_width
+                .clone()
+                .or_else(|| self.max_width.clone()),
+            min_height: override_layout
+                .min_height
+                .clone()
+                .or_else(|| self.min_height.clone()),
+            max_height: override_layout
+                .max_height
+                .clone()
+                .or_else(|| self.max_height.clone()),
+            gap: override_layout.gap.clone().or_else(|| self.gap.clone()),
+            row_gap: override_layout
+                .row_gap
+                .clone()
+                .or_else(|| self.row_gap.clone()),
+            column_gap: override_layout
+                .column_gap
+                .clone()
+                .or_else(|| self.column_gap.clone()),
+            padding: override_layout
+                .padding
+                .clone()
+                .or_else(|| self.padding.clone()),
+            placement,
+            position,
+            alignment: override_layout.alignment.or(self.alignment),
+            grid_columns: override_layout.grid_columns.or(self.grid_columns),
+        }
+    }
+}
+
+/// Explicit edge placement for an overlay or absolute child.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LayoutPosition {
+    pub schema_version: u16,
+    pub top: Option<Length>,
+    pub right: Option<Length>,
+    pub bottom: Option<Length>,
+    pub left: Option<Length>,
+}
+
+impl Default for LayoutPosition {
+    fn default() -> Self {
+        Self {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            top: None,
+            right: None,
+            bottom: None,
+            left: None,
+        }
+    }
+}
+
+impl LayoutPosition {
+    /// Return whether at least one edge was authored.
+    #[must_use]
+    pub fn has_edges(&self) -> bool {
+        self.top.is_some() || self.right.is_some() || self.bottom.is_some() || self.left.is_some()
     }
 }
 
@@ -495,6 +637,56 @@ pub struct ResponsiveNodeOverride {
     pub properties: BTreeMap<String, PropertyValue>,
     pub layout: LayoutProperties,
     pub style: StyleProperties,
+}
+
+impl StudioDesign {
+    /// Resolve a node's authored layout for a responsive variant identity.
+    ///
+    /// The returned value is derived from the immutable source model. It is
+    /// not written back to the node, so switching a preview profile cannot
+    /// mutate the base design or another profile's override.
+    #[must_use]
+    pub fn layout_for_variant(
+        &self,
+        node_id: &NodeId,
+        variant_id: Option<&ResponsiveVariantId>,
+    ) -> Option<LayoutProperties> {
+        self.nodes
+            .get(node_id)
+            .map(|node| node.layout_for_variant(variant_id))
+    }
+
+    /// Resolve a node's authored layout by the session-facing profile name.
+    ///
+    /// Both the stable variant ID and its display name are accepted. An
+    /// unknown profile deliberately falls back to the base layout because
+    /// device preview state is presentation context, not a source mutation.
+    #[must_use]
+    pub fn layout_for_profile(
+        &self,
+        node_id: &NodeId,
+        profile: Option<&str>,
+    ) -> Option<LayoutProperties> {
+        let variant_id = profile.and_then(|profile| {
+            self.responsive_variants
+                .values()
+                .find(|variant| variant.id.as_str() == profile || variant.name == profile)
+                .map(|variant| &variant.id)
+        });
+        self.layout_for_variant(node_id, variant_id)
+    }
+
+    /// Resolve a complete node for a session-facing profile name.
+    #[must_use]
+    pub fn node_for_profile(&self, node_id: &NodeId, profile: Option<&str>) -> Option<DesignNode> {
+        self.nodes.get(node_id).map(|node| {
+            let mut resolved = node.clone();
+            if let Some(layout) = self.layout_for_profile(node_id, profile) {
+                resolved.layout = layout;
+            }
+            resolved
+        })
+    }
 }
 
 /// One versioned project-owned design token.
