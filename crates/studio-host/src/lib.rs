@@ -14,6 +14,8 @@ pub mod designer_persistence;
 pub mod library_assets;
 /// Host-owned local identity and offline session authentication.
 pub mod identity;
+/// Host-owned application users, credentials, roles, and row-scoped authorization.
+pub mod rbac;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
 /// Host-owned center authority, station enrollment, offline replay, and conflicts.
@@ -48,6 +50,13 @@ pub use identity::{
     CreateIdentityRequest, IdentityError, IdentityErrorCode, IdentityKind, IdentityService,
     IdentitySession, IdentitySnapshot, IdentityState, IdentitySummary, SessionState,
     SessionSummary,
+};
+pub use rbac::{
+    ApplicationAuditEvent, ApplicationAuditEventKind, ApplicationAuditOutcome,
+    ApplicationAuditSink, ApplicationRbacHandle, ApplicationRbacSettings, ApplicationSession,
+    AuthorizationTarget, AuthorizedApplicationDataHandle, CollectionGrant, CredentialInput,
+    CredentialKind, DataOperation, RbacError, RbacErrorCode, RoleDefinition, RowScope,
+    ThrottlePolicy,
 };
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,

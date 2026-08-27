@@ -628,6 +628,8 @@ pub enum ApplicationDataErrorCode {
     StoredDataInvalid,
     /// Persisted collection schema differs from the declared package schema.
     SchemaVersionMismatch,
+    /// The authenticated application session lacks the requested role or row grant.
+    AuthorizationDenied,
 }
 
 /// Safe application data error with no record, namespace, or storage-engine context.
@@ -639,6 +641,10 @@ pub struct ApplicationDataError {
 impl ApplicationDataError {
     const fn new(code: ApplicationDataErrorCode) -> Self {
         Self { code }
+    }
+
+    pub(crate) const fn authorization_denied() -> Self {
+        Self::new(ApplicationDataErrorCode::AuthorizationDenied)
     }
 
     /// Stable guest-safe code.
@@ -665,6 +671,7 @@ impl fmt::Display for ApplicationDataError {
             ApplicationDataErrorCode::SchemaVersionMismatch => {
                 "application data schema migration required"
             }
+            ApplicationDataErrorCode::AuthorizationDenied => "application data authorization denied",
         })
     }
 }
@@ -809,6 +816,35 @@ impl<S> ApplicationDataHandle<'_, S> {
 }
 
 impl<S: LocalStore> ApplicationDataHandle<'_, S> {
+    /// Read one host-private batch in this application's namespace.
+    ///
+    /// This is restricted to sibling host services such as RBAC and audit persistence. It is
+    /// never exported through the guest API and still uses the same serialized store boundary.
+    pub(crate) async fn internal_batch_entries(
+        &self,
+        suffix: &str,
+    ) -> Result<Vec<StoreBatchEntry>, crate::LocalStoreError> {
+        let _guard = self.host.operation_lock.lock().await;
+        self.host
+            .store
+            .batch_entries(&format!("{}.{}", self.namespace.storage_prefix(), suffix))
+            .await
+    }
+
+    /// Atomically replace one host-private batch in this application's namespace.
+    pub(crate) async fn internal_write_batch(
+        &self,
+        suffix: &str,
+        entries: impl IntoIterator<Item = StoreBatchEntry>,
+    ) -> Result<(), crate::LocalStoreError> {
+        let batch = StoreBatch::new(
+            format!("{}.{}", self.namespace.storage_prefix(), suffix),
+            entries,
+        )?;
+        let _guard = self.host.operation_lock.lock().await;
+        self.host.store.write_batch(&batch).await
+    }
+
     /// Select one record through the typed helper.
     ///
     /// # Errors
