@@ -54,6 +54,26 @@ pub enum BrokerErrorCode {
     StreamExceeded,
     /// The guest cancelled an in-flight operation.
     Cancelled,
+    /// An inbound webhook declaration was malformed or exceeded a host ceiling.
+    WebhookDeclarationInvalid,
+    /// No inbound webhook declaration covers the requested endpoint.
+    WebhookEndpointNotDeclared,
+    /// The inbound webhook method is not declared for the endpoint.
+    WebhookMethodNotAllowed,
+    /// The inbound webhook source proof was missing or invalid.
+    WebhookSourceInvalid,
+    /// The inbound webhook payload exceeded its declared byte bound.
+    WebhookPayloadTooLarge,
+    /// The inbound webhook payload was not valid JSON.
+    WebhookPayloadMalformed,
+    /// The inbound webhook payload failed its declared schema.
+    WebhookSchemaMismatch,
+    /// The inbound webhook endpoint rate allowance was exhausted.
+    WebhookRateLimited,
+    /// The inbound webhook declaration is outside its active lifetime.
+    WebhookExpired,
+    /// The host listener failed without exposing provider details.
+    WebhookListenerFailure,
 }
 
 impl BrokerErrorCode {
@@ -83,6 +103,16 @@ impl BrokerErrorCode {
             Self::SensitiveContentRejected => "net.response.sensitive_rejected",
             Self::StreamExceeded => "net.stream.exceeded",
             Self::Cancelled => "net.operation.cancelled",
+            Self::WebhookDeclarationInvalid => "webhook.declaration.invalid",
+            Self::WebhookEndpointNotDeclared => "webhook.endpoint.not_declared",
+            Self::WebhookMethodNotAllowed => "webhook.endpoint.method_not_allowed",
+            Self::WebhookSourceInvalid => "webhook.source.invalid",
+            Self::WebhookPayloadTooLarge => "webhook.payload.too_large",
+            Self::WebhookPayloadMalformed => "webhook.payload.malformed",
+            Self::WebhookSchemaMismatch => "webhook.payload.schema_mismatch",
+            Self::WebhookRateLimited => "webhook.request.rate_limited",
+            Self::WebhookExpired => "webhook.declaration.expired",
+            Self::WebhookListenerFailure => "webhook.listener.failure",
         }
     }
 }

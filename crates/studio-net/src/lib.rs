@@ -33,6 +33,7 @@ pub mod limits;
 pub mod schema;
 pub mod streaming;
 pub mod transport;
+pub mod webhook;
 
 pub use error::{BrokerError, BrokerErrorCode};
 pub use guest::{GuestRestApi, StreamHandle, StreamEvent, TypedResponse};
