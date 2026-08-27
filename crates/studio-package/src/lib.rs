@@ -19,7 +19,7 @@ pub use integrity::{
     verify_bundle_signature, verify_document_signature,
 };
 pub use manifest::{
-    BundleLimits, Capability, ManifestPolicy, ManifestV1, Publisher, SecretDeclaration,
+    BundleLimits, Capability, IntegrationReference, ManifestPolicy, ManifestV1, Publisher, SecretDeclaration,
     parse_manifest,
 };
 pub use pack::{PackError, PackInput, PackMode, pack_bundle};

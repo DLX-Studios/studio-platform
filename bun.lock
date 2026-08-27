@@ -20,6 +20,13 @@
         "assemblyscript": "^0.28.20",
       },
     },
+    "examples/github-viewer": {
+      "name": "@studio/example-github-viewer",
+      "version": "0.1.0",
+      "devDependencies": {
+        "assemblyscript": "^0.28.20",
+      },
+    },
     "examples/starter": {
       "name": "@studio/example-starter",
       "version": "0.1.0",
@@ -27,12 +34,20 @@
         "assemblyscript": "^0.28.20",
       },
     },
+    "sdk/ai": {
+      "name": "@studio/ai",
+      "version": "0.1.0",
+    },
     "sdk/assemblyscript": {
       "name": "@studio/sdk",
       "version": "0.1.0",
       "devDependencies": {
         "assemblyscript": "^0.28.20",
       },
+    },
+    "sdk/github": {
+      "name": "@studio/github",
+      "version": "0.1.0",
     },
   },
   "overrides": {
