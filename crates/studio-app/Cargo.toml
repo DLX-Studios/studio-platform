@@ -13,6 +13,7 @@ gpui-component-assets = { path = "../../vendor/gpui-component-assets" }
 gpui_platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 studio-actions = { path = "../studio-actions" }
 studio-components = { path = "../studio-components" }
 studio-design = { path = "../studio-design" }
