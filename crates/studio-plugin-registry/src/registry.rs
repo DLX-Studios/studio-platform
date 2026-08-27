@@ -219,6 +219,13 @@ impl ExtensionRegistry {
         self.admitted.get(plugin_id)
     }
 
+    /// Return admitted extensions in stable plugin-id order for Designer browsing.
+    #[must_use]
+    pub fn admitted_extensions(&self) -> Vec<&AdmittedExtension> {
+        let mut extensions = self.admitted.values().collect::<Vec<_>>();
+        extensions.sort_by(|left, right| left.descriptor.id.cmp(&right.descriptor.id));
+        extensions
+    }
     /// Record one explicit consent grant for a declared capability.
     ///
     /// # Errors

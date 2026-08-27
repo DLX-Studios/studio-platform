@@ -8104,6 +8104,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "studio-plugin-registry",
  "studio-protocol",
  "studio-script",
  "thiserror 2.0.19",

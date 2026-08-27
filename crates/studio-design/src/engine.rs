@@ -723,6 +723,11 @@ fn apply_command(
 ) -> Result<Command, DesignerDiagnostic> {
     match command {
         Command::InsertNode { parent, node } => insert_node(snapshot, parent, node),
+        Command::InsertScreen { screen, index } => insert_screen(snapshot, screen, *index),
+        Command::RemoveScreen { screen_id } => remove_screen(snapshot, screen_id),
+        Command::SetToken { token_id, token } => set_token(snapshot, token_id, token.as_ref()),
+        Command::SetSetting { key, value } => set_setting(snapshot, key, value.as_ref()),
+        Command::SetPlugin { plugin_id, plugin } => set_plugin(snapshot, plugin_id, plugin.as_ref()),
         Command::MoveNode {
             node_id,
             destination,
@@ -873,6 +878,140 @@ fn apply_command(
         Command::UpsertForm { form } => upsert_form(snapshot, form),
         Command::RemoveForm { form_id } => remove_form(snapshot, form_id),
     }
+}
+
+fn insert_screen(
+    snapshot: &mut StudioDesignSnapshot,
+    screen: &crate::Screen,
+    index: usize,
+) -> Result<Command, DesignerDiagnostic> {
+    if screen.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+        || screen.id.as_str().is_empty()
+        || !screen.route.starts_with('/')
+        || snapshot.design.screens.contains_key(&screen.id)
+    {
+        return Err(diagnostic(
+            "DESIGN_SCREEN_INVALID",
+            "the inserted screen is malformed or already exists",
+            None,
+        ));
+    }
+    if index > snapshot.design.screen_order.len() {
+        return Err(diagnostic(
+            "DESIGN_SCREEN_INDEX_INVALID",
+            "the inserted screen index is outside screen order",
+            None,
+        ));
+    }
+    snapshot.design.screen_order.insert(index, screen.id.clone());
+    snapshot
+        .design
+        .screens
+        .insert(screen.id.clone(), screen.clone());
+    Ok(Command::RemoveScreen {
+        screen_id: screen.id.clone(),
+    })
+}
+
+fn remove_screen(
+    snapshot: &mut StudioDesignSnapshot,
+    screen_id: &crate::ScreenId,
+) -> Result<Command, DesignerDiagnostic> {
+    let screen = snapshot
+        .design
+        .screens
+        .get(screen_id)
+        .cloned()
+        .ok_or_else(|| diagnostic("DESIGN_SCREEN_MISSING", "the screen does not exist", None))?;
+    if snapshot.design.nodes.contains_key(&screen.root_node_id) {
+        return Err(diagnostic(
+            "DESIGN_SCREEN_ROOT_PRESENT",
+            "remove the screen root before removing its screen record",
+            Some(screen.root_node_id),
+        ));
+    }
+    let index = snapshot
+        .design
+        .screen_order
+        .iter()
+        .position(|id| id == screen_id)
+        .ok_or_else(|| diagnostic("DESIGN_SCREEN_ORDER_INVALID", "screen order is missing the screen", None))?;
+    snapshot.design.screen_order.remove(index);
+    snapshot.design.screens.remove(screen_id);
+    Ok(Command::InsertScreen {
+        screen: Box::new(screen),
+        index,
+    })
+}
+
+fn set_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token_id: &crate::TokenId,
+    token: Option<&crate::DesignToken>,
+) -> Result<Command, DesignerDiagnostic> {
+    if let Some(token) = token
+        && (token.id != *token_id || token.schema_version != STUDIO_DESIGN_SCHEMA_VERSION)
+    {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_INVALID",
+            "the token key and token record do not match",
+            None,
+        ));
+    }
+    let previous = match token {
+        Some(token) => snapshot.design.tokens.insert(token_id.clone(), token.clone()),
+        None => snapshot.design.tokens.remove(token_id),
+    };
+    Ok(Command::SetToken {
+        token_id: token_id.clone(),
+        token: previous,
+    })
+}
+
+fn set_setting(
+    snapshot: &mut StudioDesignSnapshot,
+    key: &crate::SettingKey,
+    value: Option<&crate::SettingValue>,
+) -> Result<Command, DesignerDiagnostic> {
+    if !valid_field_name(&key.group_id) || !valid_field_name(&key.field_id) {
+        return Err(diagnostic(
+            "DESIGN_SETTING_KEY_INVALID",
+            "a setting group and field identity must be bounded and non-empty",
+            None,
+        ));
+    }
+    let previous = match value {
+        Some(value) => snapshot.design.settings.insert(key.clone(), value.clone()),
+        None => snapshot.design.settings.remove(key),
+    };
+    Ok(Command::SetSetting {
+        key: key.clone(),
+        value: previous,
+    })
+}
+
+fn set_plugin(
+    snapshot: &mut StudioDesignSnapshot,
+    plugin_id: &crate::PluginId,
+    plugin: Option<&crate::InstalledPlugin>,
+) -> Result<Command, DesignerDiagnostic> {
+    if let Some(plugin) = plugin
+        && (plugin.id != *plugin_id || !valid_field_name(plugin.version.as_str()))
+    {
+        return Err(diagnostic(
+            "DESIGN_PLUGIN_INVALID",
+            "the plugin key and project plugin record do not match",
+            None,
+        ));
+    }
+    let previous = match plugin {
+        Some(plugin) => snapshot.design.plugins.insert(plugin_id.clone(), plugin.clone()),
+        None => snapshot.design.plugins.remove(plugin_id),
+    };
+    Ok(Command::SetPlugin {
+        plugin_id: plugin_id.clone(),
+        plugin: previous,
+    })
 }
 
 fn insert_node(
@@ -1622,7 +1761,9 @@ fn delete_node(
         .get(node_id)
         .cloned()
         .ok_or_else(|| missing_node(node_id))?;
-    require_nested_parent(node_id, &parent)?;
+    if matches!(parent, NodeParent::Composition { .. }) {
+        return Err(invalid_parent(node_id, "composition roots cannot be removed"));
+    }
     let detached_index = child_index(&snapshot.design, node_id)
         .ok_or_else(|| invalid_parent(node_id, "the parent index does not contain the node"))?;
     let ids = subtree_ids(&snapshot.design, node_id)?;
@@ -3397,25 +3538,46 @@ fn validate_content_collection(collection: &ContentCollection) -> Result<(), Des
     placement: &ParentPlacement,
     child: NodeId,
 ) -> Result<(), DesignerDiagnostic> {
-    let NodeParent::Node { node_id } = &placement.parent else {
-        return Err(invalid_parent(
+    match &placement.parent {
+        NodeParent::Node { node_id } => {
+            let parent = design
+                .nodes
+                .get_mut(node_id)
+                .ok_or_else(|| missing_node(node_id))?;
+            let index = if placement.index == usize::MAX {
+                parent.children.len()
+            } else {
+                placement.index
+            };
+            if index > parent.children.len() {
+                return Err(node_diagnostic(
+                    "DESIGN_CHILD_INDEX_INVALID",
+                    "the requested child index is outside the destination parent",
+                    &child,
+                ));
+            }
+            parent.children.insert(index, child);
+            Ok(())
+        }
+        NodeParent::Screen { screen_id } => {
+            let screen = design
+                .screens
+                .get(screen_id)
+                .ok_or_else(|| diagnostic("DESIGN_SCREEN_MISSING", "the destination screen does not exist", None))?;
+            if placement.index != 0 || screen.root_node_id != child {
+                return Err(node_diagnostic(
+                    "DESIGN_CHILD_INDEX_INVALID",
+                    "a screen placement must target its declared root at index zero",
+                    &child,
+                ));
+            }
+            Ok(())
+        }
+        NodeParent::Composition { .. } => Err(invalid_parent(
             &child,
-            "screen and composition roots cannot be replaced by structural commands",
-        ));
-    };
-    let parent = design
-        .nodes
-        .get_mut(node_id)
-        .ok_or_else(|| missing_node(node_id))?;
-    if placement.index > parent.children.len() {
-        return Err(node_diagnostic(
-            "DESIGN_CHILD_INDEX_INVALID",
-            "the requested child index is outside the destination parent",
-            &child,
-        ));
+            "composition roots are not replaced by structural commands",
+        )),
     }
-    parent.children.insert(placement.index, child);
-    Ok(())
 }
 
 fn remove_child(
@@ -3423,10 +3585,20 @@ fn remove_child(
     node_id: &NodeId,
     parent: &NodeParent,
 ) -> Result<(), DesignerDiagnostic> {
+    if let NodeParent::Screen { screen_id } = parent {
+        let screen = design
+            .screens
+            .get(screen_id)
+            .ok_or_else(|| diagnostic("DESIGN_SCREEN_MISSING", "the screen does not exist", None))?;
+        if screen.root_node_id == *node_id {
+            return Ok(());
+        }
+        return Err(invalid_parent(node_id, "the screen does not own this node"));
+    }
     let NodeParent::Node { node_id: parent_id } = parent else {
         return Err(invalid_parent(
             node_id,
-            "screen and composition roots cannot be removed",
+            "composition roots cannot be removed",
         ));
     };
     let parent_node = design
@@ -3564,7 +3736,6 @@ fn reclaimable_tombstone(snapshot: &StudioDesignSnapshot, node: &DesignNode) -> 
         .values()
         .find(|tombstone| {
             tombstone.root_node_id == node.id
-                && tombstone.nodes.len() == 1
                 && tombstone.nodes.get(&node.id) == Some(node)
         })
         .map(|tombstone| tombstone.root_node_id.clone())
@@ -3855,6 +4026,22 @@ fn validate_design_with_tombstones(
             diagnostics.push(node_diagnostic(
                 "DESIGN_NODE_SCHEMA_INVALID",
                 "a node identity or nested schema version is invalid",
+                node_id,
+            ));
+        }
+        if node.provenance.as_ref().is_some_and(|provenance| {
+            !valid_field_name(&provenance.source_id)
+                || provenance.source_label.is_empty()
+                || provenance.source_label.len() > 256
+                || provenance.source_label.chars().any(char::is_control)
+                || provenance
+                    .source_locator
+                    .as_ref()
+                    .is_some_and(|locator| locator.len() > 512 || locator.chars().any(char::is_control))
+        }) {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_PROVENANCE_INVALID",
+                "node provenance must contain bounded, non-control source metadata",
                 node_id,
             ));
         }

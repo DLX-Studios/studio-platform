@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 studio-protocol = { path = "../studio-protocol" }
 studio-script = { path = "../studio-script" }
+studio-plugin-registry = { path = "../studio-plugin-registry" }
 thiserror.workspace = true
 
 [lints]

@@ -92,6 +92,10 @@ define_id!(/// Stable command-operation identity.
 define_id!(/// Stable named undo-group identity.
     UndoGroupId);
 
+/// Stable plugin identity recorded in a project.
+define_id!(/// Stable admitted plugin identity.
+    PluginId);
+
 /// Monotonic immutable revision identity within one project.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -162,6 +166,12 @@ pub struct StudioDesign {
     pub collections: BTreeMap<CollectionId, ContentCollection>,
     pub bindings: BTreeMap<BindingId, ContentBinding>,
     pub forms: BTreeMap<FormId, FormDefinition>,
+    /// Admitted plugin installations referenced by this project.
+    #[serde(default)]
+    pub plugins: BTreeMap<PluginId, InstalledPlugin>,
+    /// Values configured through plugin and station settings schemas.
+    #[serde(default)]
+    pub settings: BTreeMap<SettingKey, SettingValue>,
 }
 
 impl StudioDesign {
@@ -183,6 +193,8 @@ impl StudioDesign {
             collections: BTreeMap::new(),
             bindings: BTreeMap::new(),
             forms: BTreeMap::new(),
+            plugins: BTreeMap::new(),
+            settings: BTreeMap::new(),
         }
     }
 }
@@ -206,6 +218,9 @@ pub struct DesignNode {
     pub accessibility: AccessibilityProperties,
     pub responsive_overrides: BTreeMap<ResponsiveVariantId, ResponsiveNodeOverride>,
     pub interaction_ids: Vec<InteractionId>,
+    /// Optional source identity retained for imported or generated nodes.
+    #[serde(default)]
+    pub provenance: Option<SourceProvenance>,
 }
 
 impl DesignNode {
@@ -225,6 +240,7 @@ impl DesignNode {
             accessibility: AccessibilityProperties::default(),
             responsive_overrides: BTreeMap::new(),
             interaction_ids: Vec::new(),
+            provenance: None,
         }
     }
 
@@ -238,6 +254,51 @@ impl DesignNode {
                 |override_value| self.layout.merged_with(&override_value.layout),
             )
     }
+}
+
+/// Safe source identity attached to generated or imported design entities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceProvenance {
+    pub source_id: String,
+    pub source_label: String,
+    pub source_locator: Option<String>,
+}
+
+/// A plugin admitted into a project, including the descriptor provenance needed for review.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstalledPlugin {
+    pub id: PluginId,
+    pub version: String,
+    pub publisher: String,
+    pub provenance: SourceProvenance,
+}
+
+/// Stable key for one generated settings value.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingKey {
+    pub plugin_id: PluginId,
+    pub group_id: String,
+    pub field_id: String,
+}
+
+/// Values retained by the design model for generated settings.
+///
+/// Secret values are intentionally represented only by a protected-store reference. The
+/// referenced secret never enters the design document, command history, or plugin guest.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SettingValue {
+    Text(String),
+    Number(String),
+    Boolean(bool),
+    Color(String),
+    Image(LibraryAssetId),
+    Select(String),
+    SecretReference(String),
+    Device(String),
 }
 
 /// Whether a node is a catalog primitive or a project-owned composition instance.

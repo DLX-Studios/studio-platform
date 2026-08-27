@@ -21,6 +21,7 @@ pub mod prototype;
 pub mod script_editor;
 pub mod session;
 pub mod workspace;
+pub mod ux;
 
 pub use agent::{
     AgentBatch, AgentBatchOutcome, AgentBatchResult, AgentCancellation, AgentChannel,
@@ -57,6 +58,7 @@ pub use model::{
     STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, SlotDefinition,
     StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenOverride,
     TokenUsage, TokenValue, TombstoneReference, TypographyToken, UndoGroupId, ValueKind,
+    InstalledPlugin, PluginId, SettingKey, SettingValue, SourceProvenance,
 };
 pub use navigation::{
     CODE_INTERACTION_CYCLE, CODE_INTERACTION_SOURCE_MISSING, CODE_INTERACTION_TARGET_MISSING,
@@ -99,4 +101,11 @@ pub use workspace::{
     PanelId, PanelState, ViewSwitchSnapshot, WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceCommand,
     WorkspaceController, WorkspaceError, WorkspacePersistence, WorkspaceRecord, WorkspaceState,
     command_registry, find_commands,
+};
+pub use ux::{
+    BrandSlot, GeneratedSettingsSurface, ImportDestination, ImportProposal, ImportReview,
+    ImportReviewError, ImportReviewStatus, ImportSource, ImportWarning, InferredEntity,
+    PluginBrowseCard, PluginCatalog, SettingsControl, SettingsError, SettingsFieldView, SettingsTab,
+    TemplateDefinition, TemplateError, TemplateNode, TemplateScreen, plugin_install_batch,
+    setting_change_batch,
 };
