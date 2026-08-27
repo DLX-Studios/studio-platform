@@ -12,8 +12,8 @@ use thiserror::Error;
 use crate::{
     command::{CommandBatch, HistoryEntry},
     model::{
-        Actor, DesignerDiagnostic, NodeId, OperationId, ProjectId, RevisionId, SelectionSnapshot,
-        StudioDesignSnapshot, UndoGroupId,
+        Actor, CollectionId, DesignerDiagnostic, FixtureKind, FormId, NodeId, OperationId,
+        ProjectId, PropertyValue, RevisionId, SelectionSnapshot, StudioDesignSnapshot, UndoGroupId,
     },
     persistence::{PersistenceError, SessionFuture},
 };
@@ -37,14 +37,36 @@ pub trait DesignerSession: Send {
 }
 
 /// Closed query vocabulary shared by native UI, agents, MCP, tests, and builds.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DesignerQuery {
     Snapshot,
-    Node { node_id: NodeId },
+    Node {
+        node_id: NodeId,
+    },
     Diagnostics,
     History,
     SessionState,
+    /// Return one collection by id (ticket 49).
+    Collection {
+        collection_id: CollectionId,
+    },
+    /// Return all collections (ticket 49).
+    Collections,
+    /// Return all typed bindings (ticket 49).
+    Bindings,
+    /// Return all declarative forms (ticket 49).
+    Forms,
+    /// Return deterministic fixture preview for a collection (ticket 49).
+    Preview {
+        collection_id: CollectionId,
+        fixture: Option<FixtureKind>,
+    },
+    /// Run declarative form validation in prototype mode (ticket 49).
+    ValidateForm {
+        form_id: FormId,
+        values: std::collections::BTreeMap<String, PropertyValue>,
+    },
 }
 
 /// Owned immutable result of one typed query.
@@ -61,6 +83,12 @@ pub enum DesignerQueryResult {
     Diagnostics(Vec<DesignerDiagnostic>),
     History(HistorySnapshot),
     SessionState(SessionStateSnapshot),
+    Collection(Option<crate::ContentCollection>),
+    Collections(Vec<crate::ContentCollection>),
+    Bindings(Vec<crate::ContentBinding>),
+    Forms(Vec<crate::FormDefinition>),
+    Preview(Option<crate::CollectionPreview>),
+    FormValidation(crate::FormValidationResult),
 }
 
 /// Result of a command, undo, or redo request.

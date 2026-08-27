@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Actor, DeletionTombstone, DesignNode, NodeId, NodeParent, OperationId, ProjectId,
-    PropertyValue, RevisionId, UndoGroupId,
+    Actor, BindingId, CollectionId, ContentBinding, ContentCollection, ContentCollectionSchema,
+    ContentFixture, ContentRecord, DeletionTombstone, DesignNode, FormDefinition, FormId, NodeId,
+    NodeParent, OperationId, ProjectId, PropertyValue, RecordId, RevisionId, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -88,6 +89,48 @@ pub enum Command {
     RenameNode {
         node_id: NodeId,
         name: String,
+    },
+    // --- Content collection CRUD (ticket 49) ---
+    CreateCollection {
+        collection: ContentCollection,
+    },
+    UpdateCollectionSchema {
+        collection_id: CollectionId,
+        schema: ContentCollectionSchema,
+    },
+    DeleteCollection {
+        collection_id: CollectionId,
+    },
+    CreateRecord {
+        collection_id: CollectionId,
+        record: ContentRecord,
+    },
+    UpdateRecord {
+        collection_id: CollectionId,
+        record_id: RecordId,
+        values: BTreeMap<String, PropertyValue>,
+    },
+    DeleteRecord {
+        collection_id: CollectionId,
+        record_id: RecordId,
+    },
+    SetFixture {
+        collection_id: CollectionId,
+        fixture: ContentFixture,
+    },
+    // --- Typed bindings (ticket 49) ---
+    UpsertBinding {
+        binding: ContentBinding,
+    },
+    RemoveBinding {
+        binding_id: BindingId,
+    },
+    // --- Declarative forms (ticket 49) ---
+    UpsertForm {
+        form: FormDefinition,
+    },
+    RemoveForm {
+        form_id: FormId,
     },
 }
 

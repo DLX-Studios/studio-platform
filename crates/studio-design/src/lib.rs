@@ -7,6 +7,7 @@
 //! transports, and Runtime UI trees.
 
 pub mod command;
+pub mod content;
 mod engine;
 pub mod model;
 pub mod persistence;
@@ -15,17 +16,22 @@ pub mod session;
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
+pub use content::*;
 pub use engine::DefaultDesignerSession;
 pub use model::{
-    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
-    CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
-    DesignerDiagnostic, DiagnosticSeverity, Interaction, InteractionAction, InteractionEvent,
-    InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit, LibraryAssetId,
-    NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId, PropertyValue,
-    ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId, ReusableComposition,
-    RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId,
-    SelectionSnapshot, SlotDefinition, StudioDesign, StudioDesignSnapshot, StyleProperties,
-    TokenId, TokenKind, TokenValue, TombstoneReference, UndoGroupId, ValueKind,
+    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingId, BindingPath,
+    BindingSource, CollectionId, CollectionPreview, ColorValue, CompositionId, CompositionInput,
+    ContentBinding, ContentCollection, ContentCollectionSchema, ContentFieldKind,
+    ContentFieldSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
+    DesignNodeSource, DesignToken, DesignerDiagnostic, DiagnosticSeverity, FixtureKind,
+    FormDefinition, FormFieldSchema, FormId, FormValidationResult, Interaction, InteractionAction,
+    InteractionEvent, InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit,
+    LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId,
+    PropertyValue, RecordId, ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId,
+    ReusableComposition, RevisionId, RevisionMetadata, RevisionReason,
+    STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, SlotDefinition,
+    StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenValue,
+    TombstoneReference, UndoGroupId, ValueKind,
 };
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,

@@ -75,6 +75,14 @@ define_id!(/// Stable interaction identity.
     InteractionId);
 define_id!(/// Stable admitted Library asset identity.
     LibraryAssetId);
+define_id!(/// Stable Content Collection identity.
+    CollectionId);
+define_id!(/// Stable Content Collection record identity.
+    RecordId);
+define_id!(/// Stable Content Binding identity.
+    BindingId);
+define_id!(/// Stable declarative form identity.
+    FormId);
 define_id!(/// Stable actor identity.
     ActorId);
 define_id!(/// Stable command-operation identity.
@@ -149,6 +157,9 @@ pub struct StudioDesign {
     pub tokens: BTreeMap<TokenId, DesignToken>,
     pub responsive_variants: BTreeMap<ResponsiveVariantId, ResponsiveVariant>,
     pub interactions: BTreeMap<InteractionId, Interaction>,
+    pub collections: BTreeMap<CollectionId, ContentCollection>,
+    pub bindings: BTreeMap<BindingId, ContentBinding>,
+    pub forms: BTreeMap<FormId, FormDefinition>,
 }
 
 impl StudioDesign {
@@ -167,6 +178,9 @@ impl StudioDesign {
             tokens: BTreeMap::new(),
             responsive_variants: BTreeMap::new(),
             interactions: BTreeMap::new(),
+            collections: BTreeMap::new(),
+            bindings: BTreeMap::new(),
+            forms: BTreeMap::new(),
         }
     }
 }
@@ -671,6 +685,159 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
+/// Closed kind of a content field inside a collection schema.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentFieldKind {
+    String,
+    Integer,
+    Decimal,
+    Boolean,
+    Color,
+    Length,
+    Asset,
+}
+
+/// One field declaration inside a typed content collection.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentFieldSchema {
+    pub kind: ContentFieldKind,
+    pub required: bool,
+}
+
+/// Closed schema for one typed content collection.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentCollectionSchema {
+    pub schema_version: u16,
+    pub fields: BTreeMap<String, ContentFieldSchema>,
+}
+
+/// One typed content collection with schema-aware CRUD records.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentCollection {
+    pub schema_version: u16,
+    pub id: CollectionId,
+    pub name: String,
+    pub schema: ContentCollectionSchema,
+    pub records: BTreeMap<RecordId, ContentRecord>,
+    pub fixture: ContentFixture,
+}
+
+/// One schema-validated record inside a collection.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentRecord {
+    pub schema_version: u16,
+    pub id: RecordId,
+    pub values: BTreeMap<String, PropertyValue>,
+}
+
+/// Closed fixture state for deterministic preview of a collection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixtureKind {
+    Empty,
+    Loading,
+    Error,
+    Populated,
+    Edge,
+}
+
+/// Preview fixture selected for a collection.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentFixture {
+    pub schema_version: u16,
+    pub kind: FixtureKind,
+    /// Optional user-authored edge records shown only when kind is `Edge`.
+    pub edge_records: Vec<ContentRecord>,
+    /// Optional deterministic error message shown only when kind is `Error`.
+    pub error_message: Option<String>,
+}
+
+impl Default for ContentFixture {
+    fn default() -> Self {
+        Self {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            kind: FixtureKind::Populated,
+            edge_records: Vec::new(),
+            error_message: None,
+        }
+    }
+}
+
+/// What a typed binding reads.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindingSource {
+    pub collection_id: CollectionId,
+    pub field: String,
+}
+
+/// Typed repeated-content binding attached to a node property.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentBinding {
+    pub schema_version: u16,
+    pub id: BindingId,
+    pub node_id: NodeId,
+    pub property: String,
+    pub source: BindingSource,
+    pub expected_kind: ContentFieldKind,
+    /// Optional typed fallback rendered when the binding cannot resolve.
+    pub fallback: Option<PropertyValue>,
+    /// When true the binding repeats the node once per collection record.
+    pub repeated: bool,
+}
+
+/// One form field with declarative validation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormFieldSchema {
+    pub kind: ContentFieldKind,
+    pub required: bool,
+    pub minimum_length: Option<usize>,
+    pub maximum_length: Option<usize>,
+    pub pattern: Option<String>,
+    pub minimum_value: Option<String>,
+    pub maximum_value: Option<String>,
+}
+
+/// Declarative form definition whose validation runs in prototype mode.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormDefinition {
+    pub schema_version: u16,
+    pub id: FormId,
+    pub name: String,
+    pub fields: BTreeMap<String, FormFieldSchema>,
+    /// Optional collection the form writes to.
+    pub target_collection_id: Option<CollectionId>,
+}
+
+/// Result of evaluating one declarative form in prototype mode.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormValidationResult {
+    pub valid: bool,
+    pub field_errors: BTreeMap<String, String>,
+}
+
+/// Deterministic preview of one collection for a fixture state.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionPreview {
+    pub collection_id: CollectionId,
+    pub fixture: FixtureKind,
+    pub records: Vec<ContentRecord>,
+    pub is_loading: bool,
+    pub is_error: bool,
+    pub error_message: Option<String>,
+}
+
 /// Stable, safe diagnostic returned by the Designer seam.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -680,4 +847,8 @@ pub struct DesignerDiagnostic {
     pub message: String,
     pub node_id: Option<NodeId>,
     pub interaction_id: Option<InteractionId>,
+    pub collection_id: Option<CollectionId>,
+    pub binding_id: Option<BindingId>,
+    pub form_id: Option<FormId>,
+    pub record_id: Option<RecordId>,
 }
