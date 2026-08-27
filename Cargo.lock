@@ -6117,6 +6117,7 @@ dependencies = [
  "serde_json",
  "studio-actions",
  "studio-components",
+ "studio-host",
  "studio-navigation",
  "studio-package",
  "studio-protocol",
@@ -6152,6 +6153,20 @@ dependencies = [
  "studio-security",
  "studio-ui",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "studio-host"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "studio-package",
+ "surrealdb",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

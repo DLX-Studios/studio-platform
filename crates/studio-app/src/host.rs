@@ -5,9 +5,10 @@ use std::{ffi::OsStr, fs};
 use serde_json::Value;
 use studio_actions::Checkout;
 use studio_components::{HostEventDispatcher, NativeStateStore};
+use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
 use studio_package::{
     ArchivePolicy, CanonicalBundleInput, ManifestPolicy, TrustStore, canonical_bundle_document,
-    inspect_archive, parse_manifest, verify_bundle_signature,
+    VerifiedMigrationBundle, inspect_archive, parse_manifest, verify_bundle_signature,
 };
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
 use studio_security::PluginPrincipal;
@@ -90,6 +91,10 @@ pub enum LaunchErrorCode {
     GuestInvalid,
     /// Initial guest output or retained tree is invalid.
     UiInvalid,
+    /// A signed application migration must run before guest access.
+    MigrationRequired,
+    /// A required application migration failed or was quarantined.
+    MigrationInvalid,
 }
 
 /// Detailed host-owned startup rejection.
@@ -116,6 +121,12 @@ pub enum LaunchError {
     /// Initial protocol mount admission failed.
     #[error("plugin UI mount failed: {0}")]
     UiInvalid(String),
+    /// The selected signed bundle declares migrations but no lifecycle was provided.
+    #[error("plugin application migration must complete before launch")]
+    MigrationRequired,
+    /// Migration failed safely; the application remains unavailable until recovery.
+    #[error("plugin application migration failed: {0}")]
+    MigrationInvalid(MigrationError),
 }
 
 impl LaunchError {
@@ -130,6 +141,8 @@ impl LaunchError {
             Self::IntegrityInvalid => LaunchErrorCode::IntegrityInvalid,
             Self::GuestInvalid(_) => LaunchErrorCode::GuestInvalid,
             Self::UiInvalid(_) => LaunchErrorCode::UiInvalid,
+            Self::MigrationRequired => LaunchErrorCode::MigrationRequired,
+            Self::MigrationInvalid(_) => LaunchErrorCode::MigrationInvalid,
         }
     }
 }
@@ -196,6 +209,62 @@ impl StudioHost {
     ///
     /// Returns a host-owned [`LaunchError`] before exposing any partially prepared surface.
     pub fn prepare(&self, request: LaunchRequest) -> Result<PluginSurface, LaunchError> {
+        self.prepare_internal(request, false)
+    }
+
+    /// Run signed application migrations and launch only after the lifecycle commits.
+    ///
+    /// The runner receives a host-owned LocalStore and a host callback for the migration document;
+    /// no database or guest capability crosses into migration code. Unsigned development bundles
+    /// are rejected because migrations are an authenticated package authority.
+    pub async fn prepare_with_migrations<S, F>(
+        &self,
+        request: LaunchRequest,
+        store: &S,
+        action: F,
+    ) -> Result<PluginSurface, LaunchError>
+    where
+        S: LocalStore,
+        F: FnMut(&studio_package::MigrationDeclaration, &[u8], &mut Value)
+                -> Result<(), MigrationStepError>
+            + Send,
+    {
+        if self.wayland == WaylandAvailability::Unavailable {
+            return Err(LaunchError::WaylandUnavailable);
+        }
+        if request.mode() != LaunchMode::Production {
+            return Err(LaunchError::MigrationRequired);
+        }
+        let path = request.path();
+        if !path.is_absolute()
+            || !path.metadata().is_ok_and(|metadata| {
+                metadata.file_type().is_file()
+                    && metadata.len() <= self.config.archive_policy.max_archive_bytes as u64
+            })
+        {
+            return Err(LaunchError::PathInvalid);
+        }
+        let bytes = fs::read(path).map_err(|_| LaunchError::PathInvalid)?;
+        let archive = inspect_archive(&bytes, self.config.archive_policy)
+            .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+        let package = VerifiedMigrationBundle::admit(
+            &archive,
+            self.config.manifest_policy,
+            &self.config.trust_store,
+        )
+        .map_err(|error| LaunchError::MigrationInvalid(MigrationError::Admission(error)))?;
+        MigrationRunner::new(store)
+            .run(&package, action)
+            .await
+            .map_err(LaunchError::MigrationInvalid)?;
+        self.prepare_internal(request, true)
+    }
+
+    fn prepare_internal(
+        &self,
+        request: LaunchRequest,
+        migrations_complete: bool,
+    ) -> Result<PluginSurface, LaunchError> {
         if self.wayland == WaylandAvailability::Unavailable {
             return Err(LaunchError::WaylandUnavailable);
         }
@@ -241,6 +310,9 @@ impl StudioHost {
         } else {
             canonical_bundle_document(&canonical_input)
                 .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+        }
+        if !manifest.migrations.is_empty() && !migrations_complete {
+            return Err(LaunchError::MigrationRequired);
         }
 
         let engine =

@@ -4,6 +4,7 @@ mod archive;
 mod error;
 mod integrity;
 mod manifest;
+mod migration;
 mod pack;
 mod sign;
 mod trust;
@@ -18,9 +19,10 @@ pub use integrity::{
     canonical_bundle_document, canonicalize_json, verify_bundle_signature,
 };
 pub use manifest::{
-    BundleLimits, Capability, ManifestPolicy, ManifestV1, Publisher, SecretDeclaration,
-    parse_manifest,
+    BundleLimits, Capability, ManifestPolicy, ManifestV1, MigrationDeclaration, Publisher,
+    SecretDeclaration, parse_manifest,
 };
+pub use migration::{MigrationAdmissionError, VerifiedMigrationBundle};
 pub use pack::{PackError, PackInput, PackMode, pack_bundle};
 pub use sign::sign_bundle;
 pub use trust::{TrustStore, TrustedPublisherKey};

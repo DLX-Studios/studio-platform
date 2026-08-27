@@ -6,9 +6,14 @@
 
 /// Embedded, host-owned local persistence.
 pub mod local_store;
+pub mod migrations;
 
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
     LocalStoreError, StoreBatch, StoreBatchEntry, StoreExecutor, StoreMetadata, StoreTask,
     StoreTaskError,
+};
+pub use migrations::{
+    MigrationError, MigrationErrorCode, MigrationLifecycle, MigrationRunner, MigrationState,
+    MigrationStepError, MigrationRunReport, RecoveryPoint, MIGRATION_STATE_BATCH_ID,
 };
