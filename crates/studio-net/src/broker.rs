@@ -146,6 +146,17 @@ impl<'store> RestBroker<'store> {
         declaration: &RouteGroupDeclaration,
     ) -> Result<(), BrokerError> {
         let compiled = declaration.compile(&self.ceilings)?;
+        self.install_compiled_group(compiled)
+    }
+
+    /// Install a route group that was compiled by an upstream package admission phase.
+    ///
+    /// Keeping this seam separate from [`Self::declare_group`] lets a host install an admitted
+    /// provider plan without parsing or reinterpreting manifest strings a second time.
+    pub fn install_compiled_group(
+        &mut self,
+        compiled: CompiledRouteGroup,
+    ) -> Result<(), BrokerError> {
         if self.groups.iter().any(|group| group.id() == compiled.id()) {
             return Err(BrokerError::with_detail(
                 BrokerErrorCode::DeclarationInvalid,

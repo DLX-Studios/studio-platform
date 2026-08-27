@@ -8,7 +8,7 @@ use studio_components::{HostEventDispatcher, NativeStateStore};
 use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
 use studio_package::{
     ArchivePolicy, CanonicalBundleInput, ManifestPolicy, TrustStore, canonical_bundle_document,
-    TrustStoreError, VerifiedMigrationBundle, inspect_archive, parse_manifest,
+    ProviderRegistry, TrustStoreError, VerifiedMigrationBundle, inspect_archive, parse_manifest,
     verify_bundle_signature,
 };
 use studio_net::{BrokerError, RestBroker, RestBrokerConfig};
@@ -61,6 +61,8 @@ pub struct HostConfig {
     pub manifest_policy: ManifestPolicy,
     /// Host–guest message and UI ceilings.
     pub protocol_limits: ProtocolLimits,
+    /// Host-maintained provider descriptor and capability policy.
+    pub provider_registry: ProviderRegistry,
 }
 
 impl HostConfig {
@@ -72,6 +74,7 @@ impl HostConfig {
             archive_policy: ArchivePolicy::default(),
             manifest_policy: ManifestPolicy::default(),
             protocol_limits: ProtocolLimits::default(),
+            provider_registry: ProviderRegistry::maintained(),
         }
     }
 }
@@ -349,6 +352,12 @@ impl StudioHost {
             return Err(LaunchError::MigrationRequired);
         }
 
+        let provider_plan = self
+            .config
+            .provider_registry
+            .admit(&manifest, &studio_net::limits::BrokerLimits::default())
+            .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+
         let engine =
             SandboxEngine::new().map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
         let module_policy = ModulePolicy {
@@ -388,6 +397,7 @@ impl StudioHost {
             instance,
             render_assets,
             self.config.protocol_limits,
+            provider_plan,
         ))
     }
 }
