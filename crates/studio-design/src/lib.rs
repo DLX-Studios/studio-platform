@@ -16,6 +16,7 @@ pub mod persistence;
 pub mod projection;
 pub mod responsive;
 pub mod prototype;
+pub mod script_editor;
 pub mod session;
 pub mod workspace;
 
@@ -73,6 +74,11 @@ pub use responsive::{
 pub use prototype::{
     PrototypeDispatch, PrototypeEffect, PrototypeError, PrototypeEvent, PrototypeSession,
     PrototypeStateSnapshot, PrototypeTraceEntry,
+};
+pub use script_editor::{
+    EditorSnapshot, OutlineNode, ScriptCommitMetadata, ScriptCommitOutcome, ScriptCommitPlan,
+    ScriptDiagnostic, ScriptDocumentAdapter, ScriptEdit, ScriptEditor, ScriptEditorError,
+    SyntaxToken, SyntaxTokenKind,
 };
 pub use session::{
     AgentRun, AgentRunStatus, BatchConflict, CanvasStateSnapshot, CanvasTransform, CommandOutcome,
