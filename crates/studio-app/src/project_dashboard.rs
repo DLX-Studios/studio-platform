@@ -624,12 +624,14 @@ impl<P: DashboardPersistence> ProjectDashboard<P> {
         validate_text(&identity_key, "identity key")?;
         let state = persistence.load(&identity_key)?.unwrap_or_default();
         validate_state(&state)?;
-        Ok(Self {
+        let mut dashboard = Self {
             identity_key,
             persistence,
             state,
             focus: DashboardFocus::Search,
-        })
+        };
+        dashboard.restore_focus();
+        Ok(dashboard)
     }
 
     /// Construct a dashboard with an explicit identity key, useful for adapters without a
@@ -642,12 +644,14 @@ impl<P: DashboardPersistence> ProjectDashboard<P> {
         validate_text(&identity_key, "identity key")?;
         let state = persistence.load(&identity_key)?.unwrap_or_default();
         validate_state(&state)?;
-        Ok(Self {
+        let mut dashboard = Self {
             identity_key,
             persistence,
             state,
             focus: DashboardFocus::Search,
-        })
+        };
+        dashboard.restore_focus();
+        Ok(dashboard)
     }
 
     /// Persisted state, for host adapters and deterministic tests.
@@ -692,6 +696,7 @@ impl<P: DashboardPersistence> ProjectDashboard<P> {
                 .occurred_at
                 .cmp(&left.occurred_at)
                 .then_with(|| left.project_id.cmp(&right.project_id))
+                .then_with(|| left.label.cmp(right.label))
         });
         DashboardSnapshot {
             mode: self.state.query.mode,
@@ -712,9 +717,7 @@ impl<P: DashboardPersistence> ProjectDashboard<P> {
     /// Replace the search query. Matching is case-insensitive over names and admitted metadata.
     pub fn set_search(&mut self, search: impl Into<String>) -> Result<(), DashboardError> {
         let search = search.into();
-        if search.len() > MAX_TEXT_LENGTH || search.chars().any(char::is_control) {
-            return Err(DashboardError::InvalidMetadata);
-        }
+        validate_search(&search)?;
         let previous = self.state.clone();
         self.state.query.search = search;
         self.persist_or_restore(previous, Ok(()))
@@ -1015,6 +1018,20 @@ impl<P: DashboardPersistence> ProjectDashboard<P> {
         self.focus = DashboardFocus::Project(index);
     }
 
+    fn restore_focus(&mut self) {
+        self.focus = DashboardFocus::Search;
+        let Some(selection) = self.state.query.selection.as_deref() else {
+            return;
+        };
+        if let Some(index) = self
+            .filtered_projects()
+            .iter()
+            .position(|project| project.id == selection)
+        {
+            self.focus = DashboardFocus::Project(index);
+        }
+    }
+
     fn move_focus(&mut self, forward: bool, project_count: usize) {
         let mut stops = vec![
             DashboardFocus::Search,
@@ -1093,6 +1110,7 @@ fn validate_state(state: &DashboardState) -> Result<(), DashboardError> {
     for activity in &state.activity {
         validate_text(&activity.project_id, "activity project id")?;
     }
+    validate_search(&state.query.search)?;
     if let Some(project_id) = &state.query.selection {
         validate_text(project_id, "selection")?;
     }
@@ -1142,6 +1160,13 @@ fn state_rank(project: &ProjectRecord) -> (bool, SyncState, bool) {
 
 fn validate_text(value: &str, _field: &str) -> Result<(), DashboardError> {
     if value.is_empty() || value.len() > MAX_TEXT_LENGTH || value.chars().any(char::is_control) {
+        return Err(DashboardError::InvalidMetadata);
+    }
+    Ok(())
+}
+
+fn validate_search(value: &str) -> Result<(), DashboardError> {
+    if value.len() > MAX_TEXT_LENGTH || value.chars().any(char::is_control) {
         return Err(DashboardError::InvalidMetadata);
     }
     Ok(())
