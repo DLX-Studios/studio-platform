@@ -1,8 +1,10 @@
 # Flagship restaurant release evidence
 
 Ticket 59 ships a deterministic demo-day proof harness in `studio-flagship`. The harness composes
-the existing host-mediated payment/printer simulator and `DesignerSession` seams, and injects
-explicit fakes for the center, Stripe REST broker, payroll clock, and physical peripherals.
+the host-mediated checkout and `DesignerSession` seams, plus deterministic fixtures for the center,
+Stripe PaymentIntent broker, payroll clock, and allowlisted physical peripherals. The payment and
+device adapters retain the production boundary: credentials and raw device channels stay in the
+host, while the checked-in fixture transport makes the release checks repeatable.
 
 Run the machine-readable report with:
 
@@ -20,8 +22,9 @@ The JSON report contains:
 - center topology, shared check state, offline queueing, duplicate-safe replay, and kitchen replay;
 - exact-minute payroll CSV output;
 - single, split, per-seat, and optimistic-concurrency billing;
-- structured receipt and kitchen peripheral jobs;
-- a declared `/v1/payment_intents` Stripe sandbox route with zero credential reads;
+- durable structured receipt and kitchen peripheral jobs with retry/cancel state;
+- a declared `/v1/payment_intents` Stripe sandbox route with host-only credential resolution and
+  idempotent replay;
 - grouped agent authoring through `studio-design::DesignerSession` and named undo;
 - hash-chained audit, deterministic digest, recovery, security, accessibility, and capability-matrix
   evidence;

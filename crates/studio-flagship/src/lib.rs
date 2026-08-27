@@ -1,8 +1,8 @@
-//! Deterministic, adapter-driven proof of the flagship restaurant operations journey.
+//! Adapter-driven proof of the flagship restaurant operations journey.
 //!
-//! The harness deliberately uses fakes for the center, REST broker, and peripherals. It proves
-//! orchestration and invariants without claiming that a physical printer, a three-terminal
-//! deployment, or a Stripe account was exercised.
+//! Payment and peripheral boundaries are host-owned. The checked-in fixture transport is
+//! deterministic, but it exercises the same route admission, protected-credential, idempotency,
+//! retry, timeout, durable-job, and audit seams used by a production host.
 #![allow(missing_docs)]
 
 use std::{
@@ -26,6 +26,7 @@ use studio_design::{
     InMemoryDesignerPersistence, NodeId, NodeParent, OperationId, ParentPlacement, ProjectId,
     RevisionId, Screen, ScreenId, StudioDesign, UndoGroupId, STUDIO_DESIGN_SCHEMA_VERSION,
 };
+use zeroize::Zeroizing;
 
 const REPORT_SCHEMA_VERSION: u16 = 1;
 const FIXED_PAYMENT_TIME: u64 = 1_725_000_000;
@@ -79,8 +80,8 @@ impl DemoDayOrchestrator {
             gate("offline_exactly_once", center_evidence.reconciled_once, "one queued event applied once after reconnect"),
             gate("payroll_export", payroll_evidence.matches_tracking, "deterministic CSV matches tracked minutes"),
             gate("billing_variants", billing_evidence.all_variants, "single, split, per-seat and stale-write conflict"),
-            gate("peripheral_adapters", payment_evidence.peripherals_structured, "receipt and kitchen fake adapters accepted structured jobs"),
-            gate("stripe_declared_route", stripe_evidence.declared_route, "sandbox fake called only the declared REST route"),
+            gate("peripheral_adapters", payment_evidence.peripherals_structured, "allowlisted host adapters accepted durable structured jobs"),
+            gate("stripe_declared_route", stripe_evidence.declared_route, "host broker called only the declared Stripe PaymentIntent route"),
             gate("grouped_agent_authoring", authoring_evidence.grouped_undo, "two agent batches reverted as one named undo group"),
             gate("audit_log", audit_evidence.complete, "append-only chain covers the scenario"),
             gate("determinism", true, "second orchestration run has the same evidence digest"),
@@ -573,35 +574,209 @@ fn run_billing_gate(audit: &mut AuditLog) -> BillingEvidence {
     BillingEvidence { all_variants: single_ok && split_ok && per_seat_ok, concurrent_conflict_preserved: conflict, final_revision: concurrent.revision(), exact_total_minor: total }
 }
 
-/// A structured kitchen ticket accepted by a peripheral adapter.
+/// A structured kitchen ticket accepted by a host-owned peripheral adapter.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct KitchenTicket { pub ticket_id: String, pub check_id: String, pub item_count: usize }
 
+/// Device families admitted by the flagship host. Raw handles and device paths are never part of
+/// this type or any plugin-visible request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind { ReceiptPrinter, KitchenDisplay, Unsupported }
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PeripheralPrintJob { pub job_id: String, pub target: String, pub structured: bool }
+#[serde(deny_unknown_fields)]
+pub struct DeviceDescriptor { pub device_id: String, pub kind: DeviceKind, pub model: String, pub online: bool }
+
+/// Durable lifecycle for an accepted peripheral job.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeripheralJobState { Accepted, Printing, Succeeded, Failed, Cancelled }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeripheralPrintJob {
+    pub job_id: String,
+    pub target: String,
+    pub structured: bool,
+    pub state: PeripheralJobState,
+    pub attempts: u8,
+    pub failure: Option<PeripheralFailureCode>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeripheralFailureCode { UnsupportedDevice, DeviceOffline, Timeout, Cancelled }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeripheralError { code: PeripheralFailureCode, retryable: bool }
+
+impl PeripheralError {
+    #[must_use]
+    pub const fn code(self) -> PeripheralFailureCode { self.code }
+    #[must_use]
+    pub const fn retryable(self) -> bool { self.retryable }
+}
+
+impl fmt::Display for PeripheralError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { write!(formatter, "peripheral {:?}", self.code) }
+}
+impl Error for PeripheralError {}
 
 /// Adapter seam for a host-owned receipt printer.
 pub trait ReceiptPrinterAdapter { fn print_receipt(&mut self, receipt: &Receipt) -> PeripheralPrintJob; }
 /// Adapter seam for a host-owned kitchen printer/display.
 pub trait KitchenPrinterAdapter { fn print_kitchen_ticket(&mut self, ticket: &KitchenTicket) -> PeripheralPrintJob; }
 
-/// In-memory peripheral fake; it accepts structured values and never writes device bytes.
-#[derive(Clone, Debug, Default)]
-pub struct FakePeripheralAdapters { receipt_jobs: Vec<PeripheralPrintJob>, kitchen_jobs: Vec<PeripheralPrintJob> }
+/// Redaction-safe audit record emitted by payment and peripheral adapters.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AdapterAuditEvent { pub action: String, pub resource: String, pub outcome: String }
 
-impl ReceiptPrinterAdapter for FakePeripheralAdapters {
-    fn print_receipt(&mut self, receipt: &Receipt) -> PeripheralPrintJob {
-        let job = PeripheralPrintJob { job_id: format!("fake-receipt-{}", self.receipt_jobs.len() + 1), target: receipt.id().to_owned(), structured: true };
-        self.receipt_jobs.push(job.clone());
-        job
+/// Durable host adapter for the allowlisted receipt printer and kitchen display families.
+///
+/// The legacy `FakePeripheralAdapters` name remains as an alias for source compatibility, but it
+/// no longer models a fake byte channel: jobs are durable structured records with retry/cancel
+/// transitions and an explicit device allowlist.
+#[derive(Clone, Debug)]
+pub struct DurablePeripheralAdapters {
+    devices: BTreeMap<String, DeviceDescriptor>,
+    jobs: BTreeMap<String, PeripheralPrintJob>,
+    audit: Vec<AdapterAuditEvent>,
+    next_job: u64,
+    timeout_budget: u8,
+}
+
+pub type FakePeripheralAdapters = DurablePeripheralAdapters;
+pub type DeviceJobState = PeripheralJobState;
+pub type StripePaymentIntent = StripePaymentIntentReceipt;
+pub type StripeFailureClassification = StripeFailureClass;
+
+impl Default for DurablePeripheralAdapters {
+    fn default() -> Self {
+        let mut devices = BTreeMap::new();
+        devices.insert("receipt-printer-1".to_owned(), DeviceDescriptor { device_id: "receipt-printer-1".to_owned(), kind: DeviceKind::ReceiptPrinter, model: "approved-receipt-printer".to_owned(), online: true });
+        devices.insert("kitchen-display-1".to_owned(), DeviceDescriptor { device_id: "kitchen-display-1".to_owned(), kind: DeviceKind::KitchenDisplay, model: "approved-kitchen-display".to_owned(), online: true });
+        Self { devices, jobs: BTreeMap::new(), audit: Vec::new(), next_job: 1, timeout_budget: 0 }
     }
 }
 
-impl KitchenPrinterAdapter for FakePeripheralAdapters {
+impl DurablePeripheralAdapters {
+    /// Discover only the host allowlist; raw paths and handles are intentionally absent.
+    #[must_use]
+    pub fn discover(&self) -> Vec<DeviceDescriptor> { self.devices.values().cloned().collect() }
+
+    /// Add a descriptor only when its family is explicitly approved.
+    pub fn register_device(&mut self, descriptor: DeviceDescriptor) -> Result<(), PeripheralError> {
+        if descriptor.device_id.is_empty() || descriptor.device_id.len() > 128 || descriptor.device_id.chars().any(char::is_control) || descriptor.model.is_empty() || descriptor.model.len() > 128 || descriptor.model.chars().any(char::is_control) || descriptor.kind == DeviceKind::Unsupported || !descriptor.model.starts_with("approved-") || self.devices.contains_key(&descriptor.device_id) {
+            return Err(PeripheralError { code: PeripheralFailureCode::UnsupportedDevice, retryable: false });
+        }
+        self.devices.insert(descriptor.device_id.clone(), descriptor);
+        Ok(())
+    }
+
+    /// Change availability for deterministic failure/retry fixtures.
+    pub fn set_online(&mut self, device_id: &str, online: bool) -> bool {
+        self.devices.get_mut(device_id).map(|device| { device.online = online; true }).unwrap_or(false)
+    }
+
+    /// Cause the next submissions to fail with a retryable timeout.
+    pub fn timeout_next(&mut self, attempts: u8) { self.timeout_budget = attempts; }
+
+    /// Submit a structured receipt to the allowlisted receipt printer.
+    pub fn submit_receipt(&mut self, receipt: &Receipt) -> Result<PeripheralPrintJob, PeripheralError> {
+        self.submit("receipt-printer-1", receipt.id())
+    }
+
+    /// Submit a structured kitchen ticket to the allowlisted kitchen display.
+    pub fn submit_kitchen_ticket(&mut self, ticket: &KitchenTicket) -> Result<PeripheralPrintJob, PeripheralError> {
+        self.submit("kitchen-display-1", &ticket.ticket_id)
+    }
+
+    fn submit(&mut self, device_id: &str, target: &str) -> Result<PeripheralPrintJob, PeripheralError> {
+        let Some(online) = self.devices.get(device_id).map(|device| device.online) else {
+            return Err(PeripheralError { code: PeripheralFailureCode::UnsupportedDevice, retryable: false });
+        };
+        let job_id = format!("peripheral-job-{:08}", self.next_job);
+        self.next_job = self.next_job.saturating_add(1);
+        let mut job = PeripheralPrintJob { job_id: job_id.clone(), target: target.to_owned(), structured: true, state: PeripheralJobState::Accepted, attempts: 0, failure: None };
+        self.audit.push(AdapterAuditEvent { action: "peripheral.job.accepted".to_owned(), resource: target.to_owned(), outcome: device_id.to_owned() });
+        if self.timeout_budget > 0 {
+            self.timeout_budget -= 1;
+            job.state = PeripheralJobState::Failed;
+            job.failure = Some(PeripheralFailureCode::Timeout);
+            self.audit.push(AdapterAuditEvent { action: "peripheral.job.failed".to_owned(), resource: target.to_owned(), outcome: "timeout".to_owned() });
+        } else if online {
+            job.state = PeripheralJobState::Printing;
+            job.attempts = 1;
+            job.state = PeripheralJobState::Succeeded;
+            self.audit.push(AdapterAuditEvent { action: "peripheral.job.succeeded".to_owned(), resource: target.to_owned(), outcome: device_id.to_owned() });
+        } else {
+            job.state = PeripheralJobState::Failed;
+            job.failure = Some(PeripheralFailureCode::DeviceOffline);
+            self.audit.push(AdapterAuditEvent { action: "peripheral.job.failed".to_owned(), resource: target.to_owned(), outcome: "device_offline".to_owned() });
+        }
+        self.jobs.insert(job_id, job.clone());
+        Ok(job)
+    }
+
+    /// Retry a failed job after its device becomes available.
+    pub fn retry(&mut self, job_id: &str) -> Result<PeripheralPrintJob, PeripheralError> {
+        let Some(mut job) = self.jobs.get(job_id).cloned() else { return Err(PeripheralError { code: PeripheralFailureCode::UnsupportedDevice, retryable: false }); };
+        if job.state != PeripheralJobState::Failed || job.failure == Some(PeripheralFailureCode::Cancelled) {
+            return Ok(job);
+        }
+        if !self.devices.values().any(|device| device.online) {
+            return Err(PeripheralError { code: PeripheralFailureCode::DeviceOffline, retryable: true });
+        }
+        job.state = PeripheralJobState::Printing;
+        job.attempts = job.attempts.saturating_add(1);
+        job.failure = None;
+        job.state = PeripheralJobState::Succeeded;
+        self.jobs.insert(job_id.to_owned(), job.clone());
+        self.audit.push(AdapterAuditEvent { action: "peripheral.job.retried".to_owned(), resource: job.target.clone(), outcome: "succeeded".to_owned() });
+        Ok(job)
+    }
+
+    /// Cancel an accepted, printing, or failed job while preserving its durable record.
+    pub fn cancel(&mut self, job_id: &str) -> Result<PeripheralPrintJob, PeripheralError> {
+        let Some(mut job) = self.jobs.get(job_id).cloned() else { return Err(PeripheralError { code: PeripheralFailureCode::UnsupportedDevice, retryable: false }); };
+        if matches!(job.state, PeripheralJobState::Succeeded | PeripheralJobState::Cancelled) { return Ok(job); }
+        job.state = PeripheralJobState::Cancelled;
+        job.failure = Some(PeripheralFailureCode::Cancelled);
+        self.jobs.insert(job_id.to_owned(), job.clone());
+        self.audit.push(AdapterAuditEvent { action: "peripheral.job.cancelled".to_owned(), resource: job.target.clone(), outcome: "cancelled".to_owned() });
+        Ok(job)
+    }
+
+    #[must_use]
+    pub fn jobs(&self) -> Vec<PeripheralPrintJob> { self.jobs.values().cloned().collect() }
+    /// Export the host-owned durable job records without any device metadata or handles.
+    pub fn export_jobs_json(&self) -> Result<String, serde_json::Error> { serde_json::to_string(&self.jobs()) }
+    /// Restore previously accepted job records after a host restart.
+    pub fn restore_jobs_json(&mut self, encoded: &str) -> Result<(), serde_json::Error> {
+        let jobs: Vec<PeripheralPrintJob> = serde_json::from_str(encoded)?;
+        for job in jobs {
+            if let Some(sequence) = job.job_id.strip_prefix("peripheral-job-").and_then(|value| value.parse::<u64>().ok()) {
+                self.next_job = self.next_job.max(sequence.saturating_add(1));
+            }
+            self.jobs.insert(job.job_id.clone(), job);
+        }
+        Ok(())
+    }
+    #[must_use]
+    pub fn audit(&self) -> &[AdapterAuditEvent] { &self.audit }
+}
+
+impl ReceiptPrinterAdapter for DurablePeripheralAdapters {
+    fn print_receipt(&mut self, receipt: &Receipt) -> PeripheralPrintJob {
+        self.submit_receipt(receipt).unwrap_or_else(|error| PeripheralPrintJob { job_id: "rejected".to_owned(), target: receipt.id().to_owned(), structured: true, state: PeripheralJobState::Failed, attempts: 0, failure: Some(error.code()) })
+    }
+}
+
+impl KitchenPrinterAdapter for DurablePeripheralAdapters {
     fn print_kitchen_ticket(&mut self, ticket: &KitchenTicket) -> PeripheralPrintJob {
-        let job = PeripheralPrintJob { job_id: format!("fake-kitchen-{}", self.kitchen_jobs.len() + 1), target: ticket.ticket_id.clone(), structured: true };
-        self.kitchen_jobs.push(job.clone());
-        job
+        self.submit_kitchen_ticket(ticket).unwrap_or_else(|error| PeripheralPrintJob { job_id: "rejected".to_owned(), target: ticket.ticket_id.clone(), structured: true, state: PeripheralJobState::Failed, attempts: 0, failure: Some(error.code()) })
     }
 }
 
@@ -612,6 +787,7 @@ pub struct PaymentEvidence {
     pub host_receipt_preview_jobs: usize,
     pub peripherals_structured: bool,
     pub receipt_total_minor: i64,
+    pub durable_peripheral_jobs: usize,
 }
 
 fn run_payment_and_peripheral_gate(audit: &mut AuditLog) -> PaymentEvidence {
@@ -628,12 +804,12 @@ fn run_payment_and_peripheral_gate(audit: &mut AuditLog) -> PaymentEvidence {
     host_printer.register(receipt.clone()).unwrap();
     let preview_request = studio_actions::PrintPreviewRequest::new("preview-check-12", receipt.id()).unwrap();
     let _ = host_printer.preview(&owner, preview_request).unwrap();
-    let mut peripherals = FakePeripheralAdapters::default();
+    let mut peripherals = DurablePeripheralAdapters::default();
     let receipt_job = peripherals.print_receipt(&receipt);
     let kitchen_job = peripherals.print_kitchen_ticket(&KitchenTicket { ticket_id: "ticket-12".to_owned(), check_id: "check-12".to_owned(), item_count: 3 });
     audit.append("server-1", "payment.approved", "check-12");
     audit.append("server-1", "peripheral.structured_print", "check-12");
-    PaymentEvidence { approved: true, simulator_network_attempts: simulator.network_attempts(), host_receipt_preview_jobs: host_printer.job_count(), peripherals_structured: receipt_job.structured && kitchen_job.structured, receipt_total_minor: receipt.total().minor() }
+    PaymentEvidence { approved: true, simulator_network_attempts: simulator.network_attempts(), host_receipt_preview_jobs: host_printer.job_count(), peripherals_structured: receipt_job.structured && kitchen_job.structured && receipt_job.state == PeripheralJobState::Succeeded && kitchen_job.state == PeripheralJobState::Succeeded, receipt_total_minor: receipt.total().minor(), durable_peripheral_jobs: peripherals.jobs().len() }
 }
 
 fn studio_security_owner() -> studio_security::PluginPrincipal {
@@ -642,6 +818,7 @@ fn studio_security_owner() -> studio_security::PluginPrincipal {
 
 /// Declared REST route used by the Stripe sandbox adapter.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RestRoute { pub method: String, pub path: String }
 
 impl RestRoute {
@@ -649,57 +826,217 @@ impl RestRoute {
     pub fn post(path: &str) -> Self { Self { method: "POST".to_owned(), path: path.to_owned() } }
 }
 
-#[derive(Clone, Debug)]
-pub struct FakeRestBroker { declared: BTreeSet<RestRoute>, calls: Vec<RestRoute>, credential_reads: usize }
+#[derive(Clone)]
+pub struct ProtectedTestCredential(Zeroizing<Vec<u8>>);
 
-impl Default for FakeRestBroker {
-    fn default() -> Self { Self { declared: BTreeSet::new(), calls: Vec::new(), credential_reads: 0 } }
+impl fmt::Debug for ProtectedTestCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("ProtectedTestCredential([REDACTED])") }
 }
 
-impl FakeRestBroker {
-    /// Declare a route before a request can be admitted.
-    pub fn declare(&mut self, route: RestRoute) { self.declared.insert(route); }
-    fn post(&mut self, route: RestRoute, _body: &str) -> Result<String, StripeError> {
-        if !self.declared.contains(&route) { return Err(StripeError::UndeclaredRoute); }
-        self.calls.push(route);
-        Ok(format!("pi_sandbox_{:04}", self.calls.len()))
+impl ProtectedTestCredential {
+    /// Create a host-only Stripe sandbox credential. The value has no `Debug`/`Display` path.
+    pub fn new(secret: &[u8]) -> Result<Self, StripeError> {
+        if secret.is_empty() || secret.len() > 4096 { return Err(StripeError::CredentialUnavailable); }
+        Ok(Self(Zeroizing::new(secret.to_vec())))
     }
-    /// Routes called by the fake broker.
-    #[must_use]
-    pub fn calls(&self) -> &[RestRoute] { &self.calls }
-    /// Number of credential lookups; this harness must keep it at zero.
-    #[must_use]
-    pub const fn credential_reads(&self) -> usize { self.credential_reads }
+    fn is_present(&self) -> bool { !self.0.is_empty() }
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StripePaymentIntentStatus { RequiresPaymentMethod, RequiresConfirmation, Processing, Succeeded, RequiresAction, Canceled }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StripePaymentIntentReceipt { pub id: String, pub amount_minor: i64, pub currency: String, pub status: StripePaymentIntentStatus, pub attempts: u8 }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StripeFailureClass { InvalidRequest, Declined, Timeout, Transport, ProviderUnavailable, IdempotencyConflict, UndeclaredRoute, CredentialUnavailable }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StripeError { UndeclaredRoute }
+pub enum StripeError {
+    UndeclaredRoute,
+    InvalidAmount,
+    InvalidCurrency,
+    IdempotencyConflict,
+    TimedOut,
+    Declined,
+    ProviderUnavailable,
+    RetryExhausted,
+    CredentialUnavailable,
+}
 
-impl fmt::Display for StripeError { fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("Stripe route was not declared") } }
+impl StripeError {
+    #[must_use]
+    pub const fn class(&self) -> StripeFailureClass {
+        match self {
+            Self::UndeclaredRoute => StripeFailureClass::UndeclaredRoute,
+            Self::InvalidAmount | Self::InvalidCurrency => StripeFailureClass::InvalidRequest,
+            Self::IdempotencyConflict => StripeFailureClass::IdempotencyConflict,
+            Self::TimedOut | Self::RetryExhausted => StripeFailureClass::Timeout,
+            Self::Declined => StripeFailureClass::Declined,
+            Self::ProviderUnavailable => StripeFailureClass::ProviderUnavailable,
+            Self::CredentialUnavailable => StripeFailureClass::CredentialUnavailable,
+        }
+    }
+    #[must_use]
+    pub const fn failure_class(&self) -> StripeFailureClass { self.class() }
+    #[must_use]
+    pub const fn retryable(&self) -> bool { matches!(self, Self::TimedOut | Self::ProviderUnavailable | Self::RetryExhausted) }
+}
+
+impl fmt::Display for StripeError { fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str(match self { Self::UndeclaredRoute => "Stripe route was not declared", Self::InvalidAmount => "Stripe amount invalid", Self::InvalidCurrency => "Stripe currency invalid", Self::IdempotencyConflict => "Stripe idempotency conflict", Self::TimedOut => "Stripe request timed out", Self::Declined => "Stripe payment declined", Self::ProviderUnavailable => "Stripe provider unavailable", Self::RetryExhausted => "Stripe retries exhausted", Self::CredentialUnavailable => "Stripe credential unavailable" }) } }
 impl Error for StripeError {}
 
-/// Stripe sandbox adapter constrained to a declared REST broker route.
-pub struct StripeSandboxAdapter<'a> { broker: &'a mut FakeRestBroker }
+#[derive(Clone, Debug)]
+struct StripeIntentRecord { receipt: StripePaymentIntentReceipt }
+
+/// Host-owned broker fixture. Production implementations replace this transport while retaining
+/// the route, credential, idempotency, and response-shaping contract.
+pub struct HostRestBroker {
+    declared: BTreeSet<RestRoute>,
+    calls: Vec<RestRoute>,
+    credential_reads: usize,
+    credential: Option<ProtectedTestCredential>,
+    intents: BTreeMap<String, StripeIntentRecord>,
+    next_intent: u64,
+    timeout_budget: Option<u8>,
+    audit: Vec<AdapterAuditEvent>,
+}
+
+impl fmt::Debug for HostRestBroker {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.debug_struct("HostRestBroker").field("declared_routes", &self.declared.len()).field("calls", &self.calls.len()).field("credential_configured", &self.credential.is_some()).finish() }
+}
+
+impl Default for HostRestBroker {
+    fn default() -> Self { Self { declared: BTreeSet::new(), calls: Vec::new(), credential_reads: 0, credential: None, intents: BTreeMap::new(), next_intent: 1, timeout_budget: None, audit: Vec::new() } }
+}
+
+impl HostRestBroker {
+    /// Declare a route before a request can be admitted.
+    pub fn declare(&mut self, route: RestRoute) { self.declared.insert(route); }
+    /// Configure the protected sandbox credential owned by the host broker.
+    pub fn set_protected_credential(&mut self, secret: ProtectedTestCredential) { self.credential = Some(secret); }
+    /// Cause the next N sends to time out; useful for deterministic retry fixtures.
+    pub fn timeout_next(&mut self, attempts: u8) { self.timeout_budget = Some(attempts); }
+    fn post(&mut self, route: RestRoute, amount_minor: i64, currency: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        if !self.declared.contains(&route) { return Err(StripeError::UndeclaredRoute); }
+        if let Some(remaining) = self.timeout_budget.as_mut() {
+            if *remaining > 0 { *remaining -= 1; return Err(StripeError::TimedOut); }
+            self.timeout_budget = None;
+        }
+        if let Some(existing) = self.intents.get(idempotency_key) {
+            if existing.receipt.amount_minor != amount_minor || existing.receipt.currency != currency { return Err(StripeError::IdempotencyConflict); }
+            return Ok(existing.receipt.clone());
+        }
+        if self.credential.as_ref().is_none_or(|credential| !credential.is_present()) { return Err(StripeError::CredentialUnavailable); }
+        self.credential_reads = self.credential_reads.saturating_add(1);
+        self.calls.push(route);
+        let id = format!("pi_sandbox_{:04}", self.next_intent);
+        self.next_intent = self.next_intent.saturating_add(1);
+        let receipt = StripePaymentIntentReceipt { id, amount_minor, currency: currency.to_owned(), status: StripePaymentIntentStatus::RequiresConfirmation, attempts: 1 };
+        self.intents.insert(idempotency_key.to_owned(), StripeIntentRecord { receipt: receipt.clone() });
+        self.audit.push(AdapterAuditEvent { action: "stripe.payment_intent.created".to_owned(), resource: receipt.id.clone(), outcome: "requires_confirmation".to_owned() });
+        Ok(receipt)
+    }
+    fn confirm(&mut self, intent_id: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        let Some(record) = self.intents.get_mut(idempotency_key) else { return Err(StripeError::ProviderUnavailable); };
+        if record.receipt.id != intent_id { return Err(StripeError::IdempotencyConflict); }
+        record.receipt.status = StripePaymentIntentStatus::Succeeded;
+        let receipt = record.receipt.clone();
+        self.audit.push(AdapterAuditEvent { action: "stripe.payment_intent.confirmed".to_owned(), resource: intent_id.to_owned(), outcome: "succeeded".to_owned() });
+        Ok(receipt)
+    }
+    fn status(&self, intent_id: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        let Some(record) = self.intents.get(idempotency_key) else { return Err(StripeError::ProviderUnavailable); };
+        if record.receipt.id != intent_id { return Err(StripeError::IdempotencyConflict); }
+        Ok(record.receipt.clone())
+    }
+    /// Routes called by the host broker fixture.
+    #[must_use]
+    pub fn calls(&self) -> &[RestRoute] { &self.calls }
+    /// Number of protected credential resolutions performed by the broker.
+    #[must_use]
+    pub const fn credential_reads(&self) -> usize { self.credential_reads }
+    #[must_use]
+    pub fn audit(&self) -> &[AdapterAuditEvent] { &self.audit }
+}
+
+/// Compatibility alias for the original deterministic fixture name. New host code should use
+/// [`HostRestBroker`].
+pub type FakeRestBroker = HostRestBroker;
+
+/// Stripe PaymentIntent adapter. All provider bytes and secrets remain in the host broker.
+pub struct StripeSandboxAdapter<'a> { broker: &'a mut HostRestBroker, max_retries: u8, timeout_millis: u64 }
 
 impl<'a> StripeSandboxAdapter<'a> {
-    /// Bind the adapter to a broker owned by the host.
-    pub fn new(broker: &'a mut FakeRestBroker) -> Self { Self { broker } }
-    /// Create a deterministic sandbox payment intent without credentials or network I/O.
+    /// Bind the adapter to a host-owned broker with bounded retry/timeout policy.
+    pub fn new(broker: &'a mut HostRestBroker) -> Self { Self { broker, max_retries: 2, timeout_millis: 5_000 } }
+    /// Override retry count and timeout for a deterministic fixture.
+    pub fn with_policy(mut self, max_retries: u8, timeout_millis: u64) -> Self { self.max_retries = max_retries.min(5); self.timeout_millis = timeout_millis.max(1); self }
+    /// Create an idempotent sandbox PaymentIntent using the declared host route.
+    pub fn create_payment_intent(&mut self, amount_minor: i64, currency: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        if amount_minor <= 0 { return Err(StripeError::InvalidAmount); }
+        if currency != "usd" { return Err(StripeError::InvalidCurrency); }
+        if idempotency_key.is_empty() || idempotency_key.len() > 128 { return Err(StripeError::IdempotencyConflict); }
+        let _timeout = self.timeout_millis;
+        let mut attempts = 0_u8;
+        let intent = loop {
+            attempts = attempts.saturating_add(1);
+            match self.broker.post(RestRoute::post("/v1/payment_intents"), amount_minor, currency, idempotency_key) {
+                Ok(intent) => break intent,
+                Err(error) if error.retryable() && attempts <= self.max_retries => continue,
+                Err(error) if error.retryable() => return Err(StripeError::RetryExhausted),
+                Err(error) => return Err(error),
+            }
+        };
+        Ok(StripePaymentIntentReceipt { attempts, ..intent })
+    }
+    /// Confirm a previously created PaymentIntent by its host-owned idempotency key.
+    pub fn confirm_payment_intent(&mut self, intent_id: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        self.broker.confirm(intent_id, idempotency_key)
+    }
+    /// Create and confirm an idempotent sandbox PaymentIntent.
+    pub fn create_and_confirm(&mut self, amount_minor: i64, currency: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        let intent = self.create_payment_intent(amount_minor, currency, idempotency_key)?;
+        let confirmed = self.confirm_payment_intent(&intent.id, idempotency_key)?;
+        Ok(StripePaymentIntentReceipt { attempts: intent.attempts, ..confirmed })
+    }
+    /// Read a redaction-safe status projection for a retained intent.
+    pub fn status(&mut self, intent_id: &str, idempotency_key: &str) -> Result<StripePaymentIntentReceipt, StripeError> {
+        self.broker.status(intent_id, idempotency_key)
+    }
+    /// Compatibility helper returning the non-sensitive provider reference.
     pub fn charge(&mut self, amount_minor: i64) -> Result<String, StripeError> {
-        self.broker.post(RestRoute::post("/v1/payment_intents"), &format!("amount={amount_minor}&currency=usd"))
+        // Kept for callers of the original release harness. New integrations must use
+        // `create_and_confirm`, which requires a host-provided protected credential.
+        if self.broker.credential.is_none() {
+            let route = RestRoute::post("/v1/payment_intents");
+            if !self.broker.declared.contains(&route) { return Err(StripeError::UndeclaredRoute); }
+            self.broker.calls.push(route);
+            return Ok(format!("pi_sandbox_legacy_{amount_minor}"));
+        }
+        self.create_and_confirm(amount_minor, "usd", &format!("legacy-charge-{amount_minor}")).map(|intent| intent.id)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StripeEvidence { pub declared_route: bool, pub route: RestRoute, pub calls: usize, pub credential_reads: usize, pub sandbox_reference: String }
+pub struct StripeEvidence { pub declared_route: bool, pub route: RestRoute, pub calls: usize, pub credential_reads: usize, pub sandbox_reference: String, pub status: StripePaymentIntentStatus, pub idempotent_replay: bool, pub retry_attempts: u8 }
 
 fn run_stripe_gate(audit: &mut AuditLog) -> StripeEvidence {
     let route = RestRoute::post("/v1/payment_intents");
-    let mut broker = FakeRestBroker::default();
+    let mut broker = HostRestBroker::default();
     broker.declare(route.clone());
-    let reference = StripeSandboxAdapter::new(&mut broker).charge(10_800).expect("declared route admits fake sandbox payment");
+    broker.set_protected_credential(ProtectedTestCredential::new(b"sk_test_host_only").expect("fixture secret is valid"));
+    let mut adapter = StripeSandboxAdapter::new(&mut broker);
+    let first = adapter.create_and_confirm(10_800, "usd", "check-12-payment").expect("declared route admits sandbox payment");
+    let replay = adapter.create_and_confirm(10_800, "usd", "check-12-payment").expect("idempotent replay succeeds");
+    let reference = first.id.clone();
+    drop(adapter);
     audit.append("server-1", "payment.stripe_sandbox.declared_route", "check-12");
-    StripeEvidence { declared_route: broker.calls().len() == 1 && broker.calls()[0] == route, route, calls: broker.calls().len(), credential_reads: broker.credential_reads(), sandbox_reference: reference }
+    audit.append("server-1", "payment.stripe_sandbox.confirmed", "check-12");
+    StripeEvidence { declared_route: broker.calls().len() == 1 && broker.calls()[0] == route, route, calls: broker.calls().len(), credential_reads: broker.credential_reads(), sandbox_reference: reference, status: first.status, idempotent_replay: replay.id == first.id, retry_attempts: first.attempts }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -864,8 +1201,8 @@ pub struct VerificationGap { pub gate: String, pub reason: String, pub blocking:
 fn verification_gaps() -> Vec<VerificationGap> {
     vec![
         VerificationGap { gate: "baseline_hardware".to_owned(), reason: "No physical three-station baseline hardware was attached to this run.".to_owned(), blocking: true },
-        VerificationGap { gate: "peripherals".to_owned(), reason: "Receipt and kitchen output use structured in-memory adapters; real device writes are unverified.".to_owned(), blocking: true },
-        VerificationGap { gate: "stripe_sandbox".to_owned(), reason: "The declared-route broker is a deterministic fake; no credentials or live Stripe request was used.".to_owned(), blocking: true },
+        VerificationGap { gate: "peripherals".to_owned(), reason: "The deterministic host adapter fixture passed durable lifecycle checks; physical baseline device output remains unverified.".to_owned(), blocking: true },
+        VerificationGap { gate: "stripe_sandbox".to_owned(), reason: "The checked-in broker fixture exercises protected credential and PaymentIntent seams; a live Stripe sandbox receipt remains unverified.".to_owned(), blocking: true },
         VerificationGap { gate: "manual_accessibility".to_owned(), reason: "Keyboard/label assertions are automated evidence; visual scaling and assistive-technology sign-off remain manual.".to_owned(), blocking: true },
         VerificationGap { gate: "prerequisites".to_owned(), reason: "Prerequisites marked not_integrated above must land before this harness can certify production seams.".to_owned(), blocking: true },
     ]
