@@ -6,16 +6,23 @@
 //! model is deliberately independent of GPUI, storage engines, cloud
 //! transports, and Runtime UI trees.
 
+pub mod access;
 pub mod command;
 mod engine;
+pub mod mcp;
 pub mod model;
 pub mod persistence;
 pub mod session;
 
+pub use access::{
+    DesignerCapability, DesignerScope, ScopeDenied, ScopedDesignerAccess, ScopedDesignerSession,
+    ScopedOperation,
+};
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
 pub use engine::DefaultDesignerSession;
+pub use mcp::{McpClient, McpClientError};
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
