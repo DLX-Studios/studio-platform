@@ -13,6 +13,7 @@ pub mod plugin_surface;
 mod preferences;
 mod print_preview;
 pub mod project_dashboard;
+pub mod resilience;
 mod router;
 pub mod settings;
 mod shutdown;
@@ -31,6 +32,8 @@ pub use focus_view::{
 pub use host::StudioHost;
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;
+pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
+pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
 pub use router::CheckoutRouter;
 pub use settings::{
     AboutInfo, AccessibilitySettings, AutosaveSettings, BuildSigningSettings, CapabilitySettings,

@@ -20,6 +20,7 @@ pub mod projection;
 pub mod responsive;
 pub mod prototype;
 pub mod script_editor;
+pub mod recovery;
 pub mod session;
 pub mod workspace;
 pub mod ux;
@@ -97,6 +98,13 @@ pub use script_editor::{
     EditorSnapshot, OutlineNode, ScriptCommitMetadata, ScriptCommitOutcome, ScriptCommitPlan,
     ScriptDiagnostic, ScriptDocumentAdapter, ScriptEdit, ScriptEditor, ScriptEditorError,
     SyntaxToken, SyntaxTokenKind,
+};
+pub use recovery::{
+    ConflictCenter, ConflictIntent, ConflictPersistence, ConflictRecord, ConflictStatus,
+    InMemoryConflictPersistence, InMemoryRecoveryPersistence, JournalEntry, LogicalSnapshot,
+    RecoveryBundle, RecoveryCenter, RecoveryPersistence, RecoveryRecord, RecoveryState,
+    ResolutionChoice, ResolutionPlan, ResilienceError,
+    RESILIENCE_SCHEMA_VERSION,
 };
 pub use session::{
     AgentRun, AgentRunStatus, BatchConflict, CanvasStateSnapshot, CanvasTransform, CommandOutcome,
