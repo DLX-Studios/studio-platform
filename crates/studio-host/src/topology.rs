@@ -91,6 +91,14 @@ impl OperationId {
 pub struct ConflictId(String);
 
 impl ConflictId {
+    /// Parse a conflict identity received from a host transport.
+    pub fn from_str(value: impl Into<String>) -> Result<Self, TopologyError> {
+        let value = value.into();
+        valid_identifier(&value, 256)
+            .then_some(Self(value))
+            .ok_or_else(|| TopologyError::new(TopologyErrorCode::InvalidIdentifier))
+    }
+
     fn generated(revision: u64, operation: &OperationId) -> Self {
         Self(format!("conflict-{revision}-{}", operation.as_str()))
     }
@@ -625,6 +633,14 @@ impl Enrollment {
     pub const fn station_id(&self) -> &StationId {
         &self.station_id
     }
+
+    /// Return the host-only credential for authenticated center transport.
+    ///
+    /// This accessor is crate-scoped deliberately: protocol adapters may place the credential
+    /// in an authenticated transport header, but guest code cannot obtain it.
+    pub(crate) const fn credential(&self) -> &str {
+        &self.credential
+    }
 }
 
 impl fmt::Debug for Enrollment {
@@ -804,6 +820,45 @@ impl CenterServer {
     ) -> Result<ApplyResult, TopologyError> {
         let mut state = lock(&self.state)?;
         apply_locked(&mut state, enrollment, operation)
+    }
+
+    /// Return a previously recorded receipt for an enrolled station operation.
+    pub(crate) fn receipt(
+        &self,
+        enrollment: &Enrollment,
+        operation_id: &OperationId,
+    ) -> Result<OperationReceipt, TopologyError> {
+        let state = lock(&self.state)?;
+        authorize(&state, enrollment)?;
+        state
+            .operations
+            .get(operation_id)
+            .map(|stored| stored.receipt.clone())
+            .ok_or_else(|| TopologyError::new(TopologyErrorCode::OperationUnknown))
+    }
+
+    /// Authenticate a station credential received by a host transport adapter.
+    ///
+    /// The returned enrollment proof remains host-owned and is intended for protocol handlers;
+    /// callers cannot inspect its credential through the public API.
+    pub(crate) fn authenticate(
+        &self,
+        station_id: &StationId,
+        credential: &str,
+    ) -> Result<Enrollment, TopologyError> {
+        let state = lock(&self.state)?;
+        let station = state
+            .stations
+            .get(station_id)
+            .ok_or_else(|| TopologyError::new(TopologyErrorCode::Unauthorized))?;
+        if station.credential_hash != digest_token(credential) {
+            return Err(TopologyError::new(TopologyErrorCode::Unauthorized));
+        }
+        Ok(Enrollment {
+            center_id: state.center_id.clone(),
+            station_id: station_id.clone(),
+            credential: credential.to_owned(),
+        })
     }
 
     /// Resolve one conflict through an explicit host-authorized choice.
@@ -1237,6 +1292,8 @@ pub enum TopologyErrorCode {
     OperationInvalid,
     /// Same operation identity was reused for a different intent.
     OperationIdConflict,
+    /// Requested operation receipt was not retained by the center.
+    OperationUnknown,
     /// Station attempted an operation while disconnected.
     Disconnected,
     /// Requested conflict was absent.
