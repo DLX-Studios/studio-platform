@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Actor, BindingPath, DeletionTombstone, DesignNode, DesignToken, Interaction, LayoutProperties,
-    NodeId, NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride,
+    Actor, BindingId, BindingPath, CollectionId, ContentBinding, ContentCollection,
+    ContentCollectionSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
+    DesignToken, FormDefinition, FormId, Interaction, LayoutProperties,
+    NodeId, NodeParent, OperationId, ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride,
     ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, TokenId, TokenOverride,
     TokenValue, UndoGroupId,
 };
@@ -261,6 +263,45 @@ pub enum Command {
         node_id: NodeId,
         input: String,
         value: Option<PropertyValue>,
+    },
+    CreateCollection {
+        collection: ContentCollection,
+    },
+    UpdateCollectionSchema {
+        collection_id: CollectionId,
+        schema: ContentCollectionSchema,
+    },
+    DeleteCollection {
+        collection_id: CollectionId,
+    },
+    CreateRecord {
+        collection_id: CollectionId,
+        record: ContentRecord,
+    },
+    UpdateRecord {
+        collection_id: CollectionId,
+        record_id: RecordId,
+        values: BTreeMap<String, PropertyValue>,
+    },
+    DeleteRecord {
+        collection_id: CollectionId,
+        record_id: RecordId,
+    },
+    SetFixture {
+        collection_id: CollectionId,
+        fixture: ContentFixture,
+    },
+    UpsertBinding {
+        binding: ContentBinding,
+    },
+    RemoveBinding {
+        binding_id: BindingId,
+    },
+    UpsertForm {
+        form: FormDefinition,
+    },
+    RemoveForm {
+        form_id: FormId,
     },
 }
 

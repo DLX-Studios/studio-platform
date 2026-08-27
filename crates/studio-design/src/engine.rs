@@ -4,6 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::responsive::{DeviceProfileMatrix, compare_profiles, inspect_node};
 use crate::session::CanvasStateSnapshot;
+use crate::content::{
+    binding_diagnostics, validate_binding_shape, validate_collection_schema, validate_fixture,
+    validate_form_shape, validate_record,
+};
 
 use crate::{
     NodeKind,
@@ -11,11 +15,13 @@ use crate::{
         AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
     },
     model::{
-        Actor, Alignment, BindingPath, DeletionTombstone, DesignNode, DesignNodeSource,
-        DesignToken, DesignerDiagnostic, DiagnosticSeverity, InspectedTokenValue, Interaction,
+        Actor, Alignment, BindingId, BindingPath, CollectionId, ContentBinding, ContentCollection,
+        ContentCollectionSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
+        DesignNodeSource, DesignToken, DesignerDiagnostic, DiagnosticSeverity, FixtureKind,
+        FormDefinition, FormId, InspectedTokenValue, Interaction,
         InteractionAction,
         InteractionId, LayoutProperties, Length, LengthUnit, NodeId, NodeParent, OperationId,
-        Placement, ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant,
+        Placement, ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride, ResponsiveVariant,
         ResponsiveVariantId, RevisionId, RevisionMetadata, RevisionReason,
         STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot, StudioDesign, StudioDesignSnapshot,
         StyleProperties, TokenId, TokenKind, TokenOverride, TokenUsage, TokenValue,
@@ -426,6 +432,45 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
             DesignerQuery::NodeTokenValues { node_id } => DesignerQueryResult::NodeTokenValues(
                 inspected_token_values(&self.state.current, &node_id),
             ),
+            DesignerQuery::Collection { collection_id } => DesignerQueryResult::Collection(
+                self.state.current.design.collections.get(&collection_id).cloned(),
+            ),
+            DesignerQuery::Collections => DesignerQueryResult::Collections(
+                self.state.current.design.collections.values().cloned().collect(),
+            ),
+            DesignerQuery::Bindings => DesignerQueryResult::Bindings(
+                self.state.current.design.bindings.values().cloned().collect(),
+            ),
+            DesignerQuery::Forms => DesignerQueryResult::Forms(
+                self.state.current.design.forms.values().cloned().collect(),
+            ),
+            DesignerQuery::Preview {
+                collection_id,
+                fixture,
+            } => DesignerQueryResult::Preview(
+                self.state
+                    .current
+                    .design
+                    .collections
+                    .get(&collection_id)
+                    .map(|collection| crate::content::preview_collection(collection, fixture)),
+            ),
+            DesignerQuery::ValidateForm { form_id, values } => DesignerQueryResult::FormValidation(
+                self.state
+                    .current
+                    .design
+                    .forms
+                    .get(&form_id)
+                    .map(|form| crate::content::validate_form_values(form, &values))
+                    .unwrap_or(crate::FormValidationResult {
+                        valid: false,
+                        field_errors: std::iter::once((
+                            "form".to_owned(),
+                            "the form does not exist".to_owned(),
+                        ))
+                        .collect(),
+                    }),
+            ),
             DesignerQuery::Diagnostics => DesignerQueryResult::Diagnostics(self.diagnostics()),
             DesignerQuery::DiagnosticsForNode { node_id } => DesignerQueryResult::Diagnostics(
                 self.diagnostics()
@@ -776,6 +821,33 @@ fn apply_command(
             input,
             value,
         } => set_composition_input(snapshot, node_id, input, value.as_ref(), true),
+        Command::CreateCollection { collection } => create_collection(snapshot, collection),
+        Command::UpdateCollectionSchema {
+            collection_id,
+            schema,
+        } => update_collection_schema(snapshot, collection_id, schema),
+        Command::DeleteCollection { collection_id } => delete_collection(snapshot, collection_id),
+        Command::CreateRecord {
+            collection_id,
+            record,
+        } => create_record(snapshot, collection_id, record),
+        Command::UpdateRecord {
+            collection_id,
+            record_id,
+            values,
+        } => update_record(snapshot, collection_id, record_id, values),
+        Command::DeleteRecord {
+            collection_id,
+            record_id,
+        } => delete_record(snapshot, collection_id, record_id),
+        Command::SetFixture {
+            collection_id,
+            fixture,
+        } => set_fixture(snapshot, collection_id, fixture),
+        Command::UpsertBinding { binding } => upsert_binding(snapshot, binding),
+        Command::RemoveBinding { binding_id } => remove_binding(snapshot, binding_id),
+        Command::UpsertForm { form } => upsert_form(snapshot, form),
+        Command::RemoveForm { form_id } => remove_form(snapshot, form_id),
     }
 }
 
@@ -2280,6 +2352,7 @@ fn instantiate_composition(
         },
         children: Vec::new(),
         properties: BTreeMap::new(),
+        token_overrides: BTreeMap::new(),
         layout: Default::default(),
         style: Default::default(),
         accessibility: Default::default(),
@@ -2847,6 +2920,455 @@ fn property_contains_token(value: &PropertyValue, token_id: &TokenId) -> bool {
 }
 
 fn insert_child(
+fn create_collection(
+    snapshot: &mut StudioDesignSnapshot,
+    collection: &ContentCollection,
+) -> Result<Command, DesignerDiagnostic> {
+    if snapshot.design.collections.contains_key(&collection.id) {
+        return Err(collection_diagnostic(
+            &collection.id,
+            "CONTENT_COLLECTION_EXISTS",
+            "a collection with this identity already exists",
+        ));
+    }
+    validate_content_collection(collection)?;
+    snapshot
+        .design
+        .collections
+        .insert(collection.id.clone(), collection.clone());
+    Ok(Command::DeleteCollection {
+        collection_id: collection.id.clone(),
+    })
+}
+
+fn update_collection_schema(
+    snapshot: &mut StudioDesignSnapshot,
+    collection_id: &CollectionId,
+    schema: &ContentCollectionSchema,
+) -> Result<Command, DesignerDiagnostic> {
+    let diagnostics = validate_collection_schema(schema);
+    if let Some(first) = diagnostics
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(first);
+    }
+    let collection = snapshot
+        .design
+        .collections
+        .get_mut(collection_id)
+        .ok_or_else(|| {
+            collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_MISSING",
+                "the collection does not exist",
+            )
+        })?;
+    // Check existing records against new schema.
+    for record in collection.records.values() {
+        let temp = ContentCollection {
+            schema: schema.clone(),
+            ..collection.clone()
+        };
+        let record_diags = validate_record(&temp, record);
+        if record_diags
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error)
+        {
+            return Err(collection_diagnostic(
+                collection_id,
+                "CONTENT_SCHEMA_BREAKS_RECORDS",
+                format!(
+                    "new schema would invalidate record '{}': {}",
+                    record.id, record_diags[0].message
+                ),
+            ));
+        }
+    }
+    let prior = std::mem::replace(&mut collection.schema, schema.clone());
+    // Update fixture edge records validation if needed.
+    let _ = validate_fixture(&collection.fixture);
+    Ok(Command::UpdateCollectionSchema {
+        collection_id: collection_id.clone(),
+        schema: prior,
+    })
+}
+
+fn delete_collection(
+    snapshot: &mut StudioDesignSnapshot,
+    collection_id: &CollectionId,
+) -> Result<Command, DesignerDiagnostic> {
+    let collection = snapshot
+        .design
+        .collections
+        .remove(collection_id)
+        .ok_or_else(|| {
+            collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_MISSING",
+                "the collection does not exist",
+            )
+        })?;
+    // Remove bindings that pointed at this collection; inverse will restore them.
+    let removed_bindings = snapshot
+        .design
+        .bindings
+        .iter()
+        .filter(|(_, b)| &b.source.collection_id == collection_id)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    for binding_id in &removed_bindings {
+        snapshot.design.bindings.remove(binding_id);
+    }
+    // Deleting a collection implicitly deletes its records (they live inside the collection).
+    // Inverse restores the full collection snapshot.
+    let _ = removed_bindings;
+    Ok(Command::CreateCollection { collection })
+}
+
+fn create_record(
+    snapshot: &mut StudioDesignSnapshot,
+    collection_id: &CollectionId,
+    record: &ContentRecord,
+) -> Result<Command, DesignerDiagnostic> {
+    let collection = snapshot
+        .design
+        .collections
+        .get_mut(collection_id)
+        .ok_or_else(|| {
+            collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_MISSING",
+                "the collection does not exist",
+            )
+        })?;
+    if collection.records.contains_key(&record.id) {
+        return Err(record_diagnostic_for(
+            collection_id,
+            &record.id,
+            "CONTENT_RECORD_EXISTS",
+            "a record with this identity already exists",
+        ));
+    }
+    let diagnostics = validate_record(collection, record);
+    if let Some(first) = diagnostics
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(first);
+    }
+    collection.records.insert(record.id.clone(), record.clone());
+    Ok(Command::DeleteRecord {
+        collection_id: collection_id.clone(),
+        record_id: record.id.clone(),
+    })
+}
+
+fn update_record(
+    snapshot: &mut StudioDesignSnapshot,
+    collection_id: &CollectionId,
+    record_id: &RecordId,
+    values: &BTreeMap<String, PropertyValue>,
+) -> Result<Command, DesignerDiagnostic> {
+    // Validate against an immutable view first to avoid borrow conflicts.
+    let collection_view = snapshot
+        .design
+        .collections
+        .get(collection_id)
+        .ok_or_else(|| {
+            collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_MISSING",
+                "the collection does not exist",
+            )
+        })?;
+    let existing = collection_view.records.get(record_id).ok_or_else(|| {
+        record_diagnostic_for(
+            collection_id,
+            record_id,
+            "CONTENT_RECORD_MISSING",
+            "the record does not exist",
+        )
+    })?;
+    let candidate = ContentRecord {
+        schema_version: existing.schema_version,
+        id: record_id.clone(),
+        values: values.clone(),
+    };
+    let diagnostics = validate_record(collection_view, &candidate);
+    if let Some(first) = diagnostics
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(first);
+    }
+    let collection = snapshot
+        .design
+        .collections
+        .get_mut(collection_id)
+        .expect("collection exists after validation");
+    let record = collection
+        .records
+        .get_mut(record_id)
+        .expect("record exists after validation");
+    let prior = std::mem::replace(&mut record.values, values.clone());
+    Ok(Command::UpdateRecord {
+        collection_id: collection_id.clone(),
+        record_id: record_id.clone(),
+        values: prior,
+    })
+}
+
+fn delete_record(
+    snapshot: &mut StudioDesignSnapshot,
+    collection_id: &CollectionId,
+    record_id: &RecordId,
+) -> Result<Command, DesignerDiagnostic> {
+    let collection = snapshot
+        .design
+        .collections
+        .get_mut(collection_id)
+        .ok_or_else(|| {
+            collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_MISSING",
+                "the collection does not exist",
+            )
+        })?;
+    let record = collection.records.remove(record_id).ok_or_else(|| {
+        record_diagnostic_for(
+            collection_id,
+            record_id,
+            "CONTENT_RECORD_MISSING",
+            "the record does not exist",
+        )
+    })?;
+    Ok(Command::CreateRecord {
+        collection_id: collection_id.clone(),
+        record,
+    })
+}
+
+fn set_fixture(
+    snapshot: &mut StudioDesignSnapshot,
+    collection_id: &CollectionId,
+    fixture: &ContentFixture,
+) -> Result<Command, DesignerDiagnostic> {
+    let diagnostics = validate_fixture(fixture);
+    if let Some(first) = diagnostics
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(first);
+    }
+    let collection = snapshot
+        .design
+        .collections
+        .get_mut(collection_id)
+        .ok_or_else(|| {
+            collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_MISSING",
+                "the collection does not exist",
+            )
+        })?;
+    // Validate edge records against schema when fixture is Edge.
+    if fixture.edge_records.iter().any(|r| {
+        let diags = validate_record(collection, r);
+        diags
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error)
+    }) {
+        return Err(collection_diagnostic(
+            collection_id,
+            "CONTENT_FIXTURE_EDGE_INVALID",
+            "an edge record does not match the collection schema",
+        ));
+    }
+    let prior = std::mem::replace(&mut collection.fixture, fixture.clone());
+    Ok(Command::SetFixture {
+        collection_id: collection_id.clone(),
+        fixture: prior,
+    })
+}
+
+fn upsert_binding(
+    snapshot: &mut StudioDesignSnapshot,
+    binding: &ContentBinding,
+) -> Result<Command, DesignerDiagnostic> {
+    let shape_diags = validate_binding_shape(binding);
+    if let Some(first) = shape_diags
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(first);
+    }
+    if !snapshot.design.nodes.contains_key(&binding.node_id) {
+        return Err(node_diagnostic(
+            "CONTENT_BINDING_NODE_MISSING",
+            "binding target node does not exist",
+            &binding.node_id,
+        ));
+    }
+    if !valid_field_name(&binding.property) {
+        return Err(node_diagnostic(
+            "CONTENT_BINDING_PROPERTY_INVALID",
+            "binding property name is invalid",
+            &binding.node_id,
+        ));
+    }
+    let prior = snapshot
+        .design
+        .bindings
+        .insert(binding.id.clone(), binding.clone());
+    if let Some(prior_binding) = prior {
+        Ok(Command::UpsertBinding {
+            binding: prior_binding,
+        })
+    } else {
+        Ok(Command::RemoveBinding {
+            binding_id: binding.id.clone(),
+        })
+    }
+}
+
+fn remove_binding(
+    snapshot: &mut StudioDesignSnapshot,
+    binding_id: &BindingId,
+) -> Result<Command, DesignerDiagnostic> {
+    let binding =
+        snapshot
+            .design
+            .bindings
+            .remove(binding_id)
+            .ok_or_else(|| DesignerDiagnostic {
+                code: "CONTENT_BINDING_MISSING".to_owned(),
+                severity: DiagnosticSeverity::Error,
+                message: "the binding does not exist".to_owned(),
+                node_id: None,
+                interaction_id: None,
+                collection_id: None,
+                binding_id: Some(binding_id.clone()),
+                form_id: None,
+                record_id: None,
+            })?;
+    Ok(Command::UpsertBinding { binding })
+}
+
+fn upsert_form(
+    snapshot: &mut StudioDesignSnapshot,
+    form: &FormDefinition,
+) -> Result<Command, DesignerDiagnostic> {
+    let diagnostics = validate_form_shape(form);
+    if let Some(first) = diagnostics
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(first);
+    }
+    if let Some(target) = &form.target_collection_id
+        && !snapshot.design.collections.contains_key(target)
+    {
+        return Err(collection_diagnostic(
+            target,
+            "FORM_TARGET_COLLECTION_MISSING",
+            "form target collection does not exist",
+        ));
+    }
+    let prior = snapshot.design.forms.insert(form.id.clone(), form.clone());
+    if let Some(prior_form) = prior {
+        Ok(Command::UpsertForm { form: prior_form })
+    } else {
+        Ok(Command::RemoveForm {
+            form_id: form.id.clone(),
+        })
+    }
+}
+
+fn remove_form(
+    snapshot: &mut StudioDesignSnapshot,
+    form_id: &FormId,
+) -> Result<Command, DesignerDiagnostic> {
+    let form = snapshot
+        .design
+        .forms
+        .remove(form_id)
+        .ok_or_else(|| DesignerDiagnostic {
+            code: "FORM_MISSING".to_owned(),
+            severity: DiagnosticSeverity::Error,
+            message: "the form does not exist".to_owned(),
+            node_id: None,
+            interaction_id: None,
+            collection_id: None,
+            binding_id: None,
+            form_id: Some(form_id.clone()),
+            record_id: None,
+        })?;
+    Ok(Command::UpsertForm { form })
+}
+
+fn validate_content_collection(collection: &ContentCollection) -> Result<(), DesignerDiagnostic> {
+    if collection.schema_version != STUDIO_DESIGN_SCHEMA_VERSION {
+        return Err(collection_diagnostic(
+            &collection.id,
+            "CONTENT_COLLECTION_SCHEMA_INVALID",
+            "collection has an unsupported schema version",
+        ));
+    }
+    if collection.name.trim().is_empty()
+        || collection.name.len() > 256
+        || collection.name.chars().any(char::is_control)
+    {
+        return Err(collection_diagnostic(
+            &collection.id,
+            "CONTENT_COLLECTION_NAME_INVALID",
+            "collection name must be 1..=256 safe bytes",
+        ));
+    }
+    let schema_diags = validate_collection_schema(&collection.schema);
+    if let Some(first) = schema_diags
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(DesignerDiagnostic {
+            collection_id: Some(collection.id.clone()),
+            ..first
+        });
+    }
+    let fixture_diags = validate_fixture(&collection.fixture);
+    if let Some(first) = fixture_diags
+        .into_iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Err(DesignerDiagnostic {
+            collection_id: Some(collection.id.clone()),
+            ..first
+        });
+    }
+    for record in collection.records.values() {
+        let diags = validate_record(collection, record);
+        if let Some(first) = diags
+            .into_iter()
+            .find(|d| d.severity == DiagnosticSeverity::Error)
+        {
+            return Err(first);
+        }
+    }
+    if collection.fixture.edge_records.iter().any(|r| {
+        let diags = validate_record(collection, r);
+        diags
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error)
+    }) {
+        return Err(collection_diagnostic(
+            &collection.id,
+            "CONTENT_FIXTURE_EDGE_INVALID",
+            "an edge record does not match the collection schema",
+        ));
+    }
+    Ok(())
+}
+
     design: &mut StudioDesign,
     placement: &ParentPlacement,
     child: NodeId,
@@ -3146,7 +3668,7 @@ fn finalize_inverse_tombstones(commands: &mut [Command], revision: RevisionId) {
 }
 
 fn reference_diagnostics(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnostic> {
-    snapshot
+    let mut diagnostics = snapshot
         .tombstones
         .values()
         .flat_map(|tombstone| &tombstone.references)
@@ -3159,8 +3681,14 @@ fn reference_diagnostics(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnos
             ),
             node_id: Some(reference.target_node_id.clone()),
             interaction_id: None,
+            collection_id: None,
+            binding_id: None,
+            form_id: None,
+            record_id: None,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    diagnostics.extend(binding_diagnostics(&snapshot.design));
+    diagnostics
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3414,6 +3942,90 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
         } else if let Err(error) = validate_interaction(design, interaction) {
             diagnostics.push(error);
         }
+    }
+    for (collection_id, collection) in &design.collections {
+        if collection.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+            || collection.id != *collection_id
+        {
+            diagnostics.push(collection_diagnostic(
+                collection_id,
+                "CONTENT_COLLECTION_SCHEMA_INVALID",
+                "a collection identity or schema version is invalid",
+            ));
+        }
+        diagnostics.extend(
+            validate_collection_schema(&collection.schema)
+                .into_iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+                .map(|diagnostic| DesignerDiagnostic {
+                    collection_id: Some(collection_id.clone()),
+                    ..diagnostic
+                }),
+        );
+        diagnostics.extend(
+            validate_fixture(&collection.fixture)
+                .into_iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+                .map(|diagnostic| DesignerDiagnostic {
+                    collection_id: Some(collection_id.clone()),
+                    ..diagnostic
+                }),
+        );
+        for (record_id, record) in &collection.records {
+            if record.id != *record_id {
+                diagnostics.push(record_diagnostic_for(
+                    collection_id,
+                    record_id,
+                    "CONTENT_RECORD_ID_MISMATCH",
+                    "a record identity does not match its map key",
+                ));
+            }
+            diagnostics.extend(validate_record(collection, record));
+        }
+        for edge in &collection.fixture.edge_records {
+            diagnostics.extend(validate_record(collection, edge));
+        }
+    }
+    for (binding_id, binding) in &design.bindings {
+        if binding.schema_version != STUDIO_DESIGN_SCHEMA_VERSION || binding.id != *binding_id {
+            diagnostics.push(DesignerDiagnostic {
+                code: "CONTENT_BINDING_SCHEMA_INVALID".to_owned(),
+                severity: DiagnosticSeverity::Error,
+                message: "a binding identity or schema version is invalid".to_owned(),
+                node_id: Some(binding.node_id.clone()),
+                interaction_id: None,
+                collection_id: Some(binding.source.collection_id.clone()),
+                binding_id: Some(binding_id.clone()),
+                form_id: None,
+                record_id: None,
+            });
+        }
+        diagnostics.extend(
+            validate_binding_shape(binding)
+                .into_iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error),
+        );
+    }
+    diagnostics.extend(binding_diagnostics(design));
+    for (form_id, form) in &design.forms {
+        if form.schema_version != STUDIO_DESIGN_SCHEMA_VERSION || form.id != *form_id {
+            diagnostics.push(DesignerDiagnostic {
+                code: "FORM_SCHEMA_INVALID".to_owned(),
+                severity: DiagnosticSeverity::Error,
+                message: "a form identity or schema version is invalid".to_owned(),
+                node_id: None,
+                interaction_id: None,
+                collection_id: form.target_collection_id.clone(),
+                binding_id: None,
+                form_id: Some(form_id.clone()),
+                record_id: None,
+            });
+        }
+        diagnostics.extend(
+            validate_form_shape(form)
+                .into_iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error),
+        );
     }
     diagnostics
 }
@@ -3819,6 +4431,10 @@ fn interaction_diagnostic(
         message: message.into(),
         node_id: None,
         interaction_id: Some(interaction_id.clone()),
+        collection_id: None,
+        binding_id: None,
+        form_id: None,
+        record_id: None,
     }
 }
 
@@ -3833,6 +4449,47 @@ fn diagnostic(
         message: message.into(),
         node_id,
         interaction_id: None,
+        collection_id: None,
+        binding_id: None,
+        form_id: None,
+        record_id: None,
+    }
+}
+
+fn collection_diagnostic(
+    collection_id: &CollectionId,
+    code: &str,
+    message: impl Into<String>,
+) -> DesignerDiagnostic {
+    DesignerDiagnostic {
+        code: code.to_owned(),
+        severity: DiagnosticSeverity::Error,
+        message: message.into(),
+        node_id: None,
+        interaction_id: None,
+        collection_id: Some(collection_id.clone()),
+        binding_id: None,
+        form_id: None,
+        record_id: None,
+    }
+}
+
+fn record_diagnostic_for(
+    collection_id: &CollectionId,
+    record_id: &RecordId,
+    code: &str,
+    message: impl Into<String>,
+) -> DesignerDiagnostic {
+    DesignerDiagnostic {
+        code: code.to_owned(),
+        severity: DiagnosticSeverity::Error,
+        message: message.into(),
+        node_id: None,
+        interaction_id: None,
+        collection_id: Some(collection_id.clone()),
+        binding_id: None,
+        form_id: None,
+        record_id: Some(record_id.clone()),
     }
 }
 

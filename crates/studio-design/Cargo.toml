@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Studio Design source model and DesignerSession command seam"
 
 [dependencies]
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 studio-protocol = { path = "../studio-protocol" }

@@ -13,8 +13,9 @@ use crate::{CompareReport, DeviceProfileMatrix, PropertyProvenance};
 use crate::{
     command::{CommandBatch, HistoryEntry},
     model::{
-        Actor, DesignerDiagnostic, NodeId, OperationId, ProjectId, RevisionId, SelectionSnapshot,
-        StudioDesignSnapshot, TokenId, UndoGroupId,
+        Actor, CollectionId, DesignerDiagnostic, FixtureKind, FormId, NodeId, OperationId,
+        ProjectId, PropertyValue, RevisionId, SelectionSnapshot, StudioDesignSnapshot, TokenId,
+        UndoGroupId,
     },
     persistence::{PersistenceError, SessionFuture},
 };
@@ -59,6 +60,20 @@ pub enum DesignerQuery {
     NodeTokenValues {
         node_id: NodeId,
     },
+    Collection {
+        collection_id: CollectionId,
+    },
+    Collections,
+    Bindings,
+    Forms,
+    Preview {
+        collection_id: CollectionId,
+        fixture: Option<FixtureKind>,
+    },
+    ValidateForm {
+        form_id: FormId,
+        values: BTreeMap<String, PropertyValue>,
+    },
     Diagnostics,
     DiagnosticsForNode {
         node_id: NodeId,
@@ -93,6 +108,12 @@ pub enum DesignerQueryResult {
     Token(Option<crate::DesignToken>),
     TokenUsages(Vec<crate::TokenUsage>),
     NodeTokenValues(Vec<crate::InspectedTokenValue>),
+    Collection(Option<crate::ContentCollection>),
+    Collections(Vec<crate::ContentCollection>),
+    Bindings(Vec<crate::ContentBinding>),
+    Forms(Vec<crate::FormDefinition>),
+    Preview(Option<crate::CollectionPreview>),
+    FormValidation(crate::FormValidationResult),
     Diagnostics(Vec<DesignerDiagnostic>),
     History(HistorySnapshot),
     SessionState(SessionStateSnapshot),

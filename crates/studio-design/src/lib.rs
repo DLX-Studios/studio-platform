@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod command;
+pub mod content;
 mod engine;
 pub mod model;
 pub mod persistence;
@@ -26,16 +27,21 @@ pub use agent::{
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
+pub use content::*;
 pub use engine::{DefaultDesignerSession, validate_layout};
 pub use model::{
-    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, Alignment, BindingPath, ColorValue,
-    CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
-    BorderToken, DesignerDiagnostic, DeviceProfileId, DiagnosticSeverity, InputEnvironment,
-    InspectedTokenValue, Interaction, InteractionAction,
+    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, Alignment, BindingId,
+    BindingPath, BindingSource, BorderToken, CollectionId, CollectionPreview, ColorValue,
+    CompositionId, CompositionInput, ContentBinding, ContentCollection, ContentCollectionSchema,
+    ContentFieldKind, ContentFieldSchema, ContentFixture, ContentRecord, DeletionTombstone,
+    DesignNode, DesignNodeSource, DesignToken, DesignerDiagnostic, DeviceProfileId,
+    DiagnosticSeverity, FixtureKind, FormDefinition, FormFieldSchema, FormId,
+    FormValidationResult, InputEnvironment, InspectedTokenValue, Interaction, InteractionAction,
     InteractionEvent, InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit,
     InvalidIdentity,
     LayoutPosition, LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint,
-    Placement, ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId,
+    Placement, ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride, ResponsiveVariant,
+    ResponsiveVariantId,
     ReusableComposition, RevisionId, RevisionMetadata, RevisionReason,
     STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, SlotDefinition,
     StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenOverride,

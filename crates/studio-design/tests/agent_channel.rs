@@ -109,6 +109,9 @@ fn design() -> StudioDesign {
         tokens: BTreeMap::new(),
         responsive_variants: BTreeMap::new(),
         interactions: BTreeMap::new(),
+        collections: BTreeMap::new(),
+        bindings: BTreeMap::new(),
+        forms: BTreeMap::new(),
     }
 }
 
@@ -366,6 +369,10 @@ fn injected_studio_check_feedback_is_machine_readable_and_emitted_to_the_dock() 
             message: "add an accessible label".to_owned(),
             node_id: Some(node_id("left")),
             interaction_id: None,
+            collection_id: None,
+            binding_id: None,
+            form_id: None,
+            record_id: None,
         }],
     };
     let mut channel = LiveAgentChannel::with_checker_and_event_sink(created(), checker, sink);

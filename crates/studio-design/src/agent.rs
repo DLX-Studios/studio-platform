@@ -1218,5 +1218,9 @@ fn agent_diagnostic(code: &str, message: impl Into<String>) -> DesignerDiagnosti
         message: message.into(),
         node_id: None,
         interaction_id: None,
+        collection_id: None,
+        binding_id: None,
+        form_id: None,
+        record_id: None,
     }
 }
