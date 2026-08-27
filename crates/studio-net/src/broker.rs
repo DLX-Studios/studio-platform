@@ -42,6 +42,24 @@ pub struct RestBroker<'store> {
     ceilings: BrokerLimits,
 }
 
+/// Host-owned inputs used to construct one package REST broker.
+///
+/// The route declarations are consumed and compiled before the broker is returned. Credential
+/// and OAuth resolvers are host-only trait objects; no resolver or secret-bearing value appears in
+/// the guest API.
+pub struct RestBrokerConfig<'store> {
+    /// One host transport shared by this package's admitted routes.
+    pub transport: Arc<dyn crate::transport::HttpTransport>,
+    /// Host ceilings applied while compiling every declaration.
+    pub ceilings: BrokerLimits,
+    /// Signed route declarations admitted for this package.
+    pub declarations: Vec<RouteGroupDeclaration>,
+    /// Optional protected-secret send-time injector.
+    pub named_secret_injector: Option<Arc<dyn NamedSecretInjector + 'store>>,
+    /// Optional OAuth provider-session resolver.
+    pub oauth_resolver: Option<Arc<dyn OAuthSessionResolver>>,
+}
+
 impl std::fmt::Debug for RestBroker<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -67,6 +85,54 @@ impl<'store> RestBroker<'store> {
             rate_windows: Mutex::new(HashMap::new()),
             ceilings,
         }
+    }
+
+    /// Construct and atomically install all declarations for one admitted package.
+    ///
+    /// No partially declared broker is returned: every route is compiled first, duplicate ids are
+    /// rejected, and only then are credential resolvers bound.
+    pub fn from_config(config: RestBrokerConfig<'store>) -> Result<Arc<Self>, BrokerError> {
+        config.ceilings.validate()?;
+        let mut broker = Self::new(config.transport, config.ceilings);
+        broker.install_groups(config.declarations.iter())?;
+        if let Some(injector) = config.named_secret_injector {
+            broker.set_named_secret_injector(injector);
+        }
+        if let Some(resolver) = config.oauth_resolver {
+            broker.set_oauth_resolver(resolver);
+        }
+        Ok(Arc::new(broker))
+    }
+
+    /// Compile and install a complete declaration set atomically.
+    pub fn install_groups<'declarations, I>(
+        &mut self,
+        declarations: I,
+    ) -> Result<(), BrokerError>
+    where
+        I: IntoIterator<Item = &'declarations RouteGroupDeclaration>,
+    {
+        self.ceilings.validate()?;
+        let compiled = declarations
+            .into_iter()
+            .map(|declaration| declaration.compile(&self.ceilings))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut ids = self
+            .groups
+            .iter()
+            .map(|group| group.id().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        if compiled
+            .iter()
+            .any(|group| !ids.insert(group.id().to_owned()))
+        {
+            return Err(BrokerError::with_detail(
+                BrokerErrorCode::DeclarationInvalid,
+                "duplicate route group id".to_owned(),
+            ));
+        }
+        self.groups.extend(compiled);
+        Ok(())
     }
 
     /// Validate, compile, and install one signed route-group declaration.

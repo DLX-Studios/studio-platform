@@ -18,6 +18,7 @@ studio-components = { path = "../studio-components" }
 studio-design = { path = "../studio-design" }
 studio-host = { path = "../studio-host" }
 studio-navigation = { path = "../studio-navigation" }
+studio-net = { path = "../studio-net" }
 studio-package = { path = "../studio-package" }
 studio-protocol = { path = "../studio-protocol" }
 studio-security = { path = "../studio-security" }
