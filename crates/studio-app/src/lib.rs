@@ -35,7 +35,6 @@ pub use identity_shell::{IdentityShellRoute, IdentityShellState};
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;
 pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
-pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
 pub use router::CheckoutRouter;
 pub use settings::{
     AboutInfo, AccessibilitySettings, AutosaveSettings, BuildSigningSettings, CapabilitySettings,

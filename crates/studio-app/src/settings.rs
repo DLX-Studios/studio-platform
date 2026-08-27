@@ -19,6 +19,9 @@ use studio_security::SensitiveValueFilter;
 /// The current on-disk settings schema.
 pub const SETTINGS_SCHEMA_VERSION: u16 = 1;
 
+/// Maximum size of a project identity that may cross a settings/recovery route boundary.
+const MAX_PROJECT_ID_BYTES: usize = 128;
+
 /// Theme selected by the designer.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -541,6 +544,8 @@ pub enum ProjectSettingChange {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingsErrorCode {
+    /// A caller supplied a value that cannot safely cross a settings boundary.
+    InvalidInput,
     /// The persistence backend is unavailable.
     Unavailable,
     /// Stored settings cannot be decoded safely.
@@ -563,6 +568,13 @@ pub struct SettingsError {
 }
 
 impl SettingsError {
+    fn invalid_project_id() -> Self {
+        Self {
+            code: SettingsErrorCode::InvalidInput,
+            message: "project identity is invalid for settings".to_owned(),
+        }
+    }
+
     fn incompatible() -> Self {
         Self {
             code: SettingsErrorCode::Incompatible,
@@ -680,6 +692,9 @@ impl<P: SettingsPersistence> SettingsController<P> {
 
     /// Load one project, applying defaults for a newly created project.
     pub fn project(&self, project_id: &str) -> Result<ProjectSettings, SettingsError> {
+        if !valid_project_id(project_id) {
+            return Err(SettingsError::invalid_project_id());
+        }
         let settings = self
             .persistence
             .load_project(project_id)?
@@ -819,7 +834,7 @@ impl<T: FeedbackTransport> FeedbackService<T> {
                 diagnostics
                     .iter()
                     .map(|diagnostic| RedactedDiagnostic {
-                        code: diagnostic.code().to_owned(),
+                        code: self.filter.sanitize(diagnostic.code()),
                         message: self.filter.sanitize(diagnostic.message()),
                     })
                     .collect()
@@ -838,6 +853,13 @@ impl<T: FeedbackTransport> FeedbackService<T> {
     }
 }
 
+fn valid_project_id(project_id: &str) -> bool {
+    !project_id.is_empty()
+        && project_id.len() <= MAX_PROJECT_ID_BYTES
+        && !project_id.chars().any(char::is_control)
+        && !project_id.contains(['/', '\\', '?', '#'])
+}
+
 /// Core workflows covered by Help.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HelpTopic {
@@ -849,14 +871,20 @@ pub enum HelpTopic {
     Dashboard,
     /// Studio Design editing workflow.
     Design,
+    /// Agent-assisted authoring workflow.
+    Agents,
     /// Prototype and preview workflow.
     Preview,
     /// Build and signing workflow.
     Build,
     /// Library workflow.
     Library,
+    /// Extension and template workflow.
+    Extensions,
     /// Recovery workflow.
     Recovery,
+    /// Keyboard command and focus workflow.
+    Keyboard,
 }
 
 /// One deterministic Help article.
@@ -917,6 +945,16 @@ impl HelpTopic {
                     "Undo a named change when needed.",
                 ],
             },
+            Self::Agents => HelpArticle {
+                topic: self,
+                title: "Agents and conversations",
+                summary: "Use the host-owned agent channel without exposing project secrets.",
+                steps: &[
+                    "Open a conversation from the project shell.",
+                    "Review proposed changes and diagnostics before applying them.",
+                    "Keep protected credentials and capabilities host-owned.",
+                ],
+            },
             Self::Preview => HelpArticle {
                 topic: self,
                 title: "Preview and test",
@@ -947,6 +985,16 @@ impl HelpTopic {
                     "Bind it to a design property.",
                 ],
             },
+            Self::Extensions => HelpArticle {
+                topic: self,
+                title: "Extensions and templates",
+                summary: "Admit signed extensions and templates through project settings.",
+                steps: &[
+                    "Review the extension identity and requested capabilities.",
+                    "Grant only the capabilities the project needs.",
+                    "Disable or remove an extension from its project settings.",
+                ],
+            },
             Self::Recovery => HelpArticle {
                 topic: self,
                 title: "Recovery",
@@ -955,6 +1003,16 @@ impl HelpTopic {
                     "Open the recovery center.",
                     "Review the snapshot and journal status.",
                     "Choose restore or keep the current revision.",
+                ],
+            },
+            Self::Keyboard => HelpArticle {
+                topic: self,
+                title: "Keyboard commands",
+                summary: "Move through shell surfaces with predictable focus and shortcuts.",
+                steps: &[
+                    "Use Tab or Arrow keys to move focus.",
+                    "Press Enter to activate the focused surface.",
+                    "Press Escape to dismiss the current support surface.",
                 ],
             },
         }
@@ -984,10 +1042,13 @@ impl HelpNavigator {
                 HelpTopic::Identity,
                 HelpTopic::Dashboard,
                 HelpTopic::Design,
+                HelpTopic::Agents,
                 HelpTopic::Preview,
                 HelpTopic::Build,
                 HelpTopic::Library,
+                HelpTopic::Extensions,
                 HelpTopic::Recovery,
+                HelpTopic::Keyboard,
             ],
             index: 0,
         }
