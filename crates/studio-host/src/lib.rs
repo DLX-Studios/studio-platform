@@ -6,6 +6,8 @@
 
 /// Host-mediated application data namespaces and typed collection helpers.
 pub mod application_data;
+/// Host-owned append-only application audit records.
+pub mod audit_log;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
 
@@ -14,6 +16,10 @@ pub use application_data::{
     ApplicationDataGuestApi, ApplicationDataHandle, ApplicationDataHost, ApplicationDataNamespace,
     CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
     ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
+};
+pub use audit_log::{
+    AUDIT_LOG_FORMAT_VERSION, AuditEvent, AuditEventKind, AuditEventType, AuditLog,
+    AuditLogDiagnostic, AuditLogError, AuditLogErrorCode, AuditQuery, AuditRecord,
 };
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
