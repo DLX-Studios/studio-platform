@@ -60,7 +60,12 @@ fn main() {
         None
     } else {
         let result = LaunchRequest::parse_from(arguments).and_then(|request| {
-            StudioHost::new(HostConfig::new(TrustStore::default()), wayland).prepare(request)
+            let trust_store = match request.mode() {
+                studio_app::cli::LaunchMode::Production => TrustStore::load_from_environment()
+                    .map_err(studio_app::host::LaunchError::TrustConfigurationInvalid)?,
+                studio_app::cli::LaunchMode::Development => TrustStore::default(),
+            };
+            StudioHost::new(HostConfig::new(trust_store), wayland).prepare(request)
         });
         match result {
             Ok(surface) => {

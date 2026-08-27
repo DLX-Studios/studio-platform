@@ -143,6 +143,31 @@ fn trust(signing_key: &SigningKey) -> TrustStore {
     .unwrap()
 }
 
+fn provisioned_trust(signing_key: &SigningKey) -> TrustStore {
+    let public_key = signing_key
+        .verifying_key()
+        .to_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let snapshot = json!({
+        "schemaVersion": 1,
+        "snapshotId": "test-launch-1",
+        "version": 1,
+        "validFrom": 100,
+        "expiresAt": 300,
+        "keys": [{
+            "publisherId": "example",
+            "keyId": "key-1",
+            "publicKey": public_key,
+            "validFrom": 100,
+            "expiresAt": 300
+        }],
+        "revocations": []
+    });
+    TrustStore::from_json_at(&serde_json::to_vec(&snapshot).unwrap(), 200).unwrap()
+}
+
 fn production_request(path: &Path) -> LaunchRequest {
     LaunchRequest::parse_from(["studio", "--bundle", path.to_str().unwrap()]).unwrap()
 }
@@ -177,7 +202,7 @@ fn valid_signed_bundle_mounts_before_exposing_the_surface() {
         &signed_bundle(plugin_module(), &signing_key, true),
     );
     let host = StudioHost::new(
-        HostConfig::new(trust(&signing_key)),
+        HostConfig::new(provisioned_trust(&signing_key)),
         WaylandAvailability::Available,
     );
     let surface = host.prepare(production_request(&path)).unwrap();
@@ -185,6 +210,24 @@ fn valid_signed_bundle_mounts_before_exposing_the_surface() {
     assert_eq!(surface.mode(), LaunchMode::Production);
     assert_eq!(surface.registry().root_id(), Some("root"));
     assert!(surface.warning().is_none());
+}
+
+#[test]
+fn production_rejects_empty_default_trust_before_guest_execution() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let fixtures = FixtureDirectory::new();
+    let path = fixtures.write(
+        "valid.studio",
+        &signed_bundle(plugin_module(), &signing_key, true),
+    );
+    let host = StudioHost::new(
+        HostConfig::new(TrustStore::default()),
+        WaylandAvailability::Available,
+    );
+    assert_eq!(
+        host.prepare(production_request(&path)).unwrap_err().code(),
+        LaunchErrorCode::TrustConfigurationInvalid
+    );
 }
 
 #[test]

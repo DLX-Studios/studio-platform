@@ -8,7 +8,8 @@ use studio_components::{HostEventDispatcher, NativeStateStore};
 use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
 use studio_package::{
     ArchivePolicy, CanonicalBundleInput, ManifestPolicy, TrustStore, canonical_bundle_document,
-    VerifiedMigrationBundle, inspect_archive, parse_manifest, verify_bundle_signature,
+    TrustStoreError, VerifiedMigrationBundle, inspect_archive, parse_manifest,
+    verify_bundle_signature,
 };
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
 use studio_security::PluginPrincipal;
@@ -87,6 +88,8 @@ pub enum LaunchErrorCode {
     BundleInvalid,
     /// Production publisher signature/trust validation failed.
     IntegrityInvalid,
+    /// Operator publisher trust configuration is absent or unusable.
+    TrustConfigurationInvalid,
     /// WebAssembly policy, instantiation, or initialization failed.
     GuestInvalid,
     /// Initial guest output or retained tree is invalid.
@@ -115,6 +118,9 @@ pub enum LaunchError {
     /// Trust or signature admission failed.
     #[error("plugin integrity verification failed")]
     IntegrityInvalid,
+    /// Operator publisher trust configuration is absent or unusable.
+    #[error("publisher trust configuration rejected: {0}")]
+    TrustConfigurationInvalid(TrustStoreError),
     /// Module policy or runtime startup failed.
     #[error("plugin guest startup failed: {0}")]
     GuestInvalid(String),
@@ -139,6 +145,7 @@ impl LaunchError {
             Self::WaylandUnavailable => LaunchErrorCode::WaylandUnavailable,
             Self::BundleInvalid(_) => LaunchErrorCode::BundleInvalid,
             Self::IntegrityInvalid => LaunchErrorCode::IntegrityInvalid,
+            Self::TrustConfigurationInvalid(_) => LaunchErrorCode::TrustConfigurationInvalid,
             Self::GuestInvalid(_) => LaunchErrorCode::GuestInvalid,
             Self::UiInvalid(_) => LaunchErrorCode::UiInvalid,
             Self::MigrationRequired => LaunchErrorCode::MigrationRequired,
@@ -247,6 +254,11 @@ impl StudioHost {
         let bytes = fs::read(path).map_err(|_| LaunchError::PathInvalid)?;
         let archive = inspect_archive(&bytes, self.config.archive_policy)
             .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+        if self.config.trust_store.is_empty() {
+            return Err(LaunchError::TrustConfigurationInvalid(
+                TrustStoreError::NoActiveKeys,
+            ));
+        }
         let package = VerifiedMigrationBundle::admit(
             &archive,
             self.config.manifest_policy,
@@ -299,6 +311,11 @@ impl StudioHost {
         };
         let render_assets = canonical_input.assets.clone();
         if mode == LaunchMode::Production {
+            if self.config.trust_store.is_empty() {
+                return Err(LaunchError::TrustConfigurationInvalid(
+                    TrustStoreError::NoActiveKeys,
+                ));
+            }
             verify_bundle_signature(
                 &canonical_input,
                 &archive.signature,
