@@ -36,3 +36,4 @@ pub use session::{
     DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate, SessionError,
     SessionStateSnapshot, ToolKind,
 };
+pub use studio_protocol::NodeKind;

@@ -4,8 +4,12 @@
 //! handles. Guests, extensions, agents, and MCP clients do not receive a
 //! SurrealDB connection or SurrealQL execution capability.
 
+/// Adapter from the host `LocalStore` to Studio Design persistence records.
+pub mod designer_persistence;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
+
+pub use designer_persistence::LocalStoreDesignerPersistence;
 
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,

@@ -32,6 +32,12 @@ pub struct DefaultDesignerSession<P> {
 }
 
 impl<P: DesignerPersistence> DefaultDesignerSession<P> {
+    /// Consume the session and return its persistence adapter for orderly host shutdown.
+    #[must_use]
+    pub fn into_persistence(self) -> P {
+        self.persistence
+    }
+
     /// Validate and durably create a project before returning its session.
     ///
     /// # Errors
