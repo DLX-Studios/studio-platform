@@ -11,6 +11,7 @@ members = [
     "crates/studio-host",
     "crates/studio-navigation",
     "crates/studio-net",
+    "crates/studio-oauth",
     "crates/studio-package",
     "crates/studio-plugin-registry",
     "crates/studio-protocol",
