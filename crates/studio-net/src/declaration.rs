@@ -21,6 +21,13 @@ use crate::error::{BrokerError, BrokerErrorCode};
 use crate::limits::{BrokerLimits, DeclaredLimits, EffectiveLimits};
 use crate::schema::JsonSchema;
 
+// WebSocket declarations live in the host-owned session module but are also available from the
+// declaration namespace alongside REST route declarations.
+pub use crate::websocket::{
+    CompiledWebSocketDeclaration, WebSocketBrokerLimits, WebSocketDeclaration,
+    WebSocketDeclaredLimits, WebSocketEffectiveLimits,
+};
+
 /// Closed HTTP method catalog admitted by route-group declarations.
 #[derive(Clone, Copy, Debug, Eq, Hash, JsonSchema, PartialEq, Deserialize, Serialize)]
 pub enum HttpMethod {

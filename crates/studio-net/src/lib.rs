@@ -33,9 +33,14 @@ pub mod limits;
 pub mod schema;
 pub mod streaming;
 pub mod transport;
+pub mod websocket;
 
 pub use error::{BrokerError, BrokerErrorCode};
 pub use guest::{GuestRestApi, StreamHandle, StreamEvent, TypedResponse};
-
-/// UNVERIFIED: crate has not been compiled yet; a serialized runner verifies builds, tests,
-/// clippy, and formatting after the writing agent completes its commits.
+pub use websocket::{
+    CompiledWebSocketDeclaration, GuestWebSocketApi, OpaqueSessionId, SessionBroker, SessionEvent,
+    SessionHandle, SessionId, WebSocketBroker, WebSocketBrokerLimits, WebSocketConnectRequest,
+    WebSocketConnection, WebSocketDeclaration, WebSocketDeclaredLimits, WebSocketEffectiveLimits,
+    WebSocketEvent, WebSocketGuestApi, WebSocketLimits, WebSocketOpenRequest, WebSocketSession,
+    WebSocketTransport, WebSocketTransportError,
+};
