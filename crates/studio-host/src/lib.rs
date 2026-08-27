@@ -19,6 +19,8 @@ pub mod local_store;
 /// Host-owned center authority, station enrollment, offline replay, and conflicts.
 pub mod topology;
 pub mod migrations;
+/// Declarative, host-owned scheduled and event-triggered workflows.
+pub mod workflows;
 
 pub use application_data::{
     APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
@@ -62,4 +64,13 @@ pub use topology::{
 pub use migrations::{
     MigrationError, MigrationErrorCode, MigrationLifecycle, MigrationRunner, MigrationState,
     MigrationStepError, MigrationRunReport, RecoveryPoint, MIGRATION_STATE_BATCH_ID,
+};
+pub use workflows::{
+    ManualWorkflowClock, MemoryWorkflowAuditLog, MemoryWorkflowRuntime, MissedFirePolicy,
+    NoopWorkflowAudit, QueueWorkflowEventSource, RetryPolicy, SystemWorkflowClock,
+    WorkflowAction, WorkflowAuditEntry, WorkflowAuditSink, WorkflowClock, WorkflowCommit,
+    WorkflowDefinition, WorkflowDiagnostic, WorkflowDiagnosticCode, WorkflowEngine, WorkflowError,
+    WorkflowEvent, WorkflowEventSource, WorkflowEventSourceKind, WorkflowPayload,
+    WorkflowPluginEvent, WorkflowRunReport, WorkflowRunStatus, WorkflowRuntime,
+    WorkflowRuntimeError, WorkflowRuntimeErrorCode, WorkflowTrigger,
 };
