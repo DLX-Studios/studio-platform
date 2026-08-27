@@ -10,6 +10,7 @@ description = "Deterministic restaurant operations demo and release evidence har
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+zeroize.workspace = true
 studio-actions = { path = "../studio-actions" }
 studio-design = { path = "../studio-design" }
 studio-security = { path = "../studio-security" }
