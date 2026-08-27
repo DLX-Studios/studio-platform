@@ -2,6 +2,10 @@
 
 ## Automated gates
 
+- [ ] Ticket 59 flagship deterministic evidence report: `cargo run --locked -p studio-flagship --bin flagship-evidence`
+  (the report is expected to remain `release_ready: false` until its explicit hardware, cloud, and
+  prerequisite integration gaps are closed; see [Flagship release evidence](release/FLAGSHIP_RELEASE_EVIDENCE.md)).
+
 - [x] `bun run test:all`
 - [x] `./scripts/test-starter-quickstart.sh`
 - [x] four 60-second fuzz smoke runs
