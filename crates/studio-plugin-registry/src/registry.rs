@@ -195,7 +195,7 @@ impl ExtensionRegistry {
             });
             return Err(RegistryError::hook_violation(
                 LifecycleHook::Admission,
-                reason,
+                &reason,
             ));
         }
         let state = self
@@ -360,7 +360,7 @@ impl ExtensionRegistry {
         if !unconsented.is_empty() {
             let names = unconsented
                 .iter()
-                .map(DeclaredCapability::name)
+                .map(|capability| capability.name())
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(RegistryError::consent_denied(format!(
@@ -586,7 +586,7 @@ impl ExtensionRegistry {
             Ok(_) => Ok(()),
             Err(reason) => {
                 self.contain(plugin_id, hook, reason.clone());
-                Err(RegistryError::hook_violation(hook, reason))
+                Err(RegistryError::hook_violation(hook, &reason))
             }
         }
     }
@@ -621,10 +621,11 @@ fn validate_for_admission(
     value: &Value,
     policy: &DescriptorPolicy,
 ) -> Result<PluginDescriptorV1, RegistryError> {
-    crate::descriptor::validate_descriptor_value(value, policy).map_err(map_descriptor_error)
+    crate::descriptor::validate_descriptor_value(value, policy)
+        .map_err(|error| map_descriptor_error(&error))
 }
 
-fn map_descriptor_error(error: DescriptorError) -> RegistryError {
+fn map_descriptor_error(error: &DescriptorError) -> RegistryError {
     match error.code() {
         DescriptorErrorCode::VersionUnsupported => {
             RegistryError::compatibility_unsupported(error.detail())

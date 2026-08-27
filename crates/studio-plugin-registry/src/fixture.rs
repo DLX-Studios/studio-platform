@@ -35,7 +35,7 @@ fn text(value: &str) -> PrimitiveInputValue {
 fn node(kind: &str) -> CompositionNode {
     CompositionNode {
         kind: kind.to_owned(),
-        inputs: Default::default(),
+        inputs: std::collections::BTreeMap::default(),
         children: Vec::new(),
     }
 }
@@ -51,13 +51,14 @@ fn leaf(kind: &str, name: &str) -> CompositionNode {
 fn branch(kind: &str, children: Vec<CompositionNode>) -> CompositionNode {
     CompositionNode {
         kind: kind.to_owned(),
-        inputs: Default::default(),
+        inputs: std::collections::BTreeMap::default(),
         children,
     }
 }
 
 /// The authored pos-pack descriptor before signing.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn pos_pack_descriptor() -> PluginDescriptorV1 {
     let receipt_totals = CompositionContribution {
         id: "pos.receipt-totals".to_owned(),

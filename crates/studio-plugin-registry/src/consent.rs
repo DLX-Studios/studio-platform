@@ -133,7 +133,7 @@ impl ConsentLedger {
             .filter(|(key, decision)| {
                 key.project_id == project_id
                     && key.plugin_id == plugin_id
-                    && *decision == ConsentDecision::Granted
+                    && **decision == ConsentDecision::Granted
             })
             .map(|(key, _)| key.capability)
             .collect()

@@ -666,12 +666,12 @@ fn validate_field_type(kind: &SettingsFieldType) -> Result<(), DescriptorError> 
             }
         }
         SettingsFieldType::Number { min, max, default } => {
-            if let (Some(min), Some(max)) = (min, max) {
-                if min > max {
-                    return Err(DescriptorError::contribution_invalid(
-                        "number field bounds inverted".to_owned(),
-                    ));
-                }
+            if let (Some(min), Some(max)) = (min, max)
+                && min > max
+            {
+                return Err(DescriptorError::contribution_invalid(
+                    "number field bounds inverted".to_owned(),
+                ));
             }
             if let Some(default) = default
                 && (min.is_some_and(|min| *default < min) || max.is_some_and(|max| *default > max))
@@ -732,7 +732,7 @@ fn validate_field_type(kind: &SettingsFieldType) -> Result<(), DescriptorError> 
         SettingsFieldType::DevicePicker { device_kind } => {
             validate_id_text(device_kind, "devicePicker.deviceKind")?;
         }
-        SettingsFieldType::Image => {}
+        SettingsFieldType::Image | SettingsFieldType::Boolean { .. } => {}
     }
     Ok(())
 }
@@ -888,7 +888,11 @@ fn validate_secret_name(value: &str) -> Result<(), DescriptorError> {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{byte:02x}"));
+    }
+    out
 }
 
 fn hex_decode(value: &str) -> Option<Vec<u8>> {

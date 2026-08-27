@@ -189,7 +189,7 @@ impl RegistryError {
         }
     }
 
-    pub(crate) fn hook_violation(hook: LifecycleHook, reason: ViolationReason) -> Self {
+    pub(crate) fn hook_violation(hook: LifecycleHook, reason: &ViolationReason) -> Self {
         Self {
             code: RegistryErrorCode::HookViolation,
             detail: format!("hook {} contained: {reason:?}", hook.name()),

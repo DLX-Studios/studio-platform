@@ -73,7 +73,6 @@ impl ProjectUsage {
     pub fn release_all(&mut self, project_id: &str, plugin_id: &str) -> usize {
         self.entries
             .remove(&(project_id.to_owned(), plugin_id.to_owned()))
-            .map(|artifacts| artifacts.len())
-            .unwrap_or(0)
+            .map_or(0, |artifacts| artifacts.len())
     }
 }

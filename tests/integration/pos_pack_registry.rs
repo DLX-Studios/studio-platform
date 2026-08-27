@@ -10,8 +10,8 @@ use studio_plugin_registry::{
     CompositionContribution, CompositionNode, ConsentDecision, DeclaredCapability,
     DescriptorErrorCode, DescriptorPolicy, HookBudget, HookCallback, HookDeclaration,
     LifecycleHook, OwnedArtifact, PluginDescriptorV1, PluginState, RegistryErrorCode,
-    SettingsField, SettingsFieldType, SignedDescriptorEnvelope, ViolationReason,
-    pos_pack_descriptor, pos_pack_envelope, pos_pack_seed, pos_pack_trust_keys,
+    SignedDescriptorEnvelope, ViolationReason, pos_pack_descriptor, pos_pack_envelope,
+    pos_pack_seed, pos_pack_trust_keys,
 };
 
 const PROJECT: &str = "project-1";
@@ -56,6 +56,7 @@ fn signed_descriptor_verifies_with_package_trust_machinery() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn full_walkthrough_admission_consent_install_lifecycle_removal_report() {
     let mut registry = registry();
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -449,7 +450,7 @@ fn third_party_descriptors_cannot_register_renderer_kinds_or_unknown_fields() {
                 title: "Hostile Renderer".to_owned(),
                 tree: CompositionNode {
                     kind: "native.fancyRenderer".to_owned(),
-                    inputs: Default::default(),
+                    inputs: std::collections::BTreeMap::default(),
                     children: Vec::new(),
                 },
             });
