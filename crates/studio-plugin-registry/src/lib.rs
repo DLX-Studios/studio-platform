@@ -20,12 +20,14 @@ pub use descriptor::{
     DeclaredCapability, DescriptorPolicy, DescriptorPublisher, DescriptorSignature, HookBudget,
     HookDeclaration, LifecycleHook, MAX_DESCRIPTOR_BYTES, MAX_HOOK_MEMORY_BYTES, MAX_HOOK_TIME_MS,
     PluginDescriptorV1, PrimitiveInputValue, SelectOption, SettingsField, SettingsFieldType,
-    SettingsGroup, SignedDescriptorEnvelope, parse_descriptor_envelope, validate_descriptor_value,
+    SettingsGroup, SignedDescriptorEnvelope, TemplateContribution, TemplateScreen, TemplateToken,
+    BrandSlotContribution, parse_descriptor_envelope, validate_descriptor_value,
 };
 pub use error::{DescriptorError, DescriptorErrorCode, RegistryError, RegistryErrorCode};
 pub use fixture::{
     POS_PACK_KEY_ID, POS_PACK_PUBLISHER, pos_pack_descriptor, pos_pack_envelope, pos_pack_seed,
-    pos_pack_trust_keys, pos_pack_trust_store,
+    pos_pack_template_descriptor, pos_pack_template_envelope, pos_pack_trust_keys,
+    pos_pack_trust_store,
 };
 pub use lifecycle::{
     HookCallback, HookContext, HookFailure, HookRunReport, HookRunner, PluginState,

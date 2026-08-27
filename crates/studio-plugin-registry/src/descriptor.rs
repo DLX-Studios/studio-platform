@@ -119,6 +119,80 @@ pub struct Contributions {
     /// Declarative actions referenced by commands and interactions.
     #[serde(default)]
     pub actions: Vec<ActionContribution>,
+    /// Vertical templates that can seed a project through ordinary design commands.
+    #[serde(default)]
+    pub templates: Vec<TemplateContribution>,
+}
+
+/// A vertical project template contributed by an admitted plugin.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TemplateContribution {
+    /// Stable template identity scoped to the plugin.
+    pub id: String,
+    /// Safe display title.
+    pub title: String,
+    /// Human-readable template description.
+    pub description: String,
+    /// Application category used by the Designer browser.
+    pub category: String,
+    /// Optional admitted preview asset reference.
+    #[serde(default)]
+    pub preview_image: Option<String>,
+    /// Screens instantiated when the template is selected.
+    #[serde(default)]
+    pub screens: Vec<TemplateScreen>,
+    /// Design tokens seeded by the template.
+    #[serde(default)]
+    pub tokens: Vec<TemplateToken>,
+    /// Token identities exposed for customer rebranding.
+    #[serde(default)]
+    pub brand_slots: Vec<BrandSlotContribution>,
+    /// Additional capabilities that must be consented before activation.
+    #[serde(default)]
+    pub required_capabilities: Vec<DeclaredCapability>,
+}
+
+/// A serializable token value supplied by a template.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TemplateToken {
+    /// Stable token identity scoped to the template.
+    pub id: String,
+    /// Human-readable token name.
+    pub name: String,
+    /// Closed token kind name (`color`, `length`, `number`, `string`, or `typography`).
+    pub kind: String,
+    /// Canonical JSON token value interpreted by the Designer.
+    pub value: Value,
+}
+
+/// A customer-editable mapping from a template brand slot to one design token.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrandSlotContribution {
+    /// Stable slot identity scoped to the template.
+    pub id: String,
+    /// Safe display label.
+    pub label: String,
+    /// Token identity whose value is changed when the slot is rebranded.
+    pub token_id: String,
+    /// Expected token kind.
+    pub kind: String,
+}
+
+/// One screen in a vertical template's declarative tree.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TemplateScreen {
+    /// Stable screen identity scoped to the template.
+    pub id: String,
+    /// Safe screen title.
+    pub title: String,
+    /// Absolute route.
+    pub route: String,
+    /// Approved primitive tree root.
+    pub tree: CompositionNode,
 }
 
 /// One Reusable Composition contributed as a tree of approved primitive kinds.
@@ -554,6 +628,89 @@ fn validate_contributions(descriptor: &PluginDescriptorV1) -> Result<(), Descrip
             return Err(DescriptorError::duplicate_contribution(&composition.id));
         }
         validate_tree(&composition.tree)?;
+    }
+    let mut template_ids = std::collections::BTreeSet::new();
+    for template in &descriptor.contributions.templates {
+        validate_id_text(&template.id, "template.id")?;
+        validate_safe_text(&template.title, "template.title")?;
+        validate_safe_text(&template.description, "template.description")?;
+        validate_id_text(&template.category, "template.category")?;
+        if !template_ids.insert(template.id.as_str()) {
+            return Err(DescriptorError::duplicate_contribution(&template.id));
+        }
+        if template.screens.is_empty() {
+            return Err(DescriptorError::contribution_invalid(format!(
+                "template {} must declare at least one screen",
+                template.id
+            )));
+        }
+        let mut screen_ids = std::collections::BTreeSet::new();
+        let mut routes = std::collections::BTreeSet::new();
+        for screen in &template.screens {
+            validate_id_text(&screen.id, "template.screen.id")?;
+            validate_safe_text(&screen.title, "template.screen.title")?;
+            if !screen.route.starts_with('/') || !routes.insert(screen.route.as_str()) {
+                return Err(DescriptorError::contribution_invalid(format!(
+                    "template {} has an invalid or duplicate screen route",
+                    template.id
+                )));
+            }
+            if !screen_ids.insert(screen.id.as_str()) {
+                return Err(DescriptorError::duplicate_contribution(&screen.id));
+            }
+            validate_tree(&screen.tree)?;
+        }
+        let mut token_ids = std::collections::BTreeSet::new();
+        for token in &template.tokens {
+            validate_id_text(&token.id, "template.token.id")?;
+            validate_safe_text(&token.name, "template.token.name")?;
+            if !token_ids.insert(token.id.as_str()) {
+                return Err(DescriptorError::duplicate_contribution(&token.id));
+            }
+            if !matches!(
+                token.kind.as_str(),
+                "color" | "length" | "number" | "string" | "typography"
+            ) {
+                return Err(DescriptorError::contribution_invalid(format!(
+                    "template token {} has an unknown kind",
+                    token.id
+                )));
+            }
+        }
+        let mut slot_ids = std::collections::BTreeSet::new();
+        for slot in &template.brand_slots {
+            validate_id_text(&slot.id, "template.brandSlot.id")?;
+            validate_safe_text(&slot.label, "template.brandSlot.label")?;
+            validate_id_text(&slot.token_id, "template.brandSlot.tokenId")?;
+            if !slot_ids.insert(slot.id.as_str()) {
+                return Err(DescriptorError::duplicate_contribution(&slot.id));
+            }
+            if !token_ids.contains(slot.token_id.as_str())
+                || slot.kind.as_str() != template
+                    .tokens
+                    .iter()
+                    .find(|token| token.id == slot.token_id)
+                    .map_or("", |token| token.kind.as_str())
+            {
+                return Err(DescriptorError::contribution_invalid(format!(
+                    "template brand slot {} references an unknown or mismatched token",
+                    slot.id
+                )));
+            }
+        }
+        if template
+            .required_capabilities
+            .iter()
+            .any(|capability| !descriptor.capabilities.contains(capability))
+        {
+            return Err(DescriptorError::contribution_invalid(format!(
+                "template {} requires an undeclared capability",
+                template.id
+            )));
+        }
+        if let Some(preview_image) = &template.preview_image {
+            validate_id_text(preview_image, "template.previewImage")?;
+        }
     }
     let mut group_ids = std::collections::BTreeSet::new();
     let mut secret_names = std::collections::BTreeSet::new();

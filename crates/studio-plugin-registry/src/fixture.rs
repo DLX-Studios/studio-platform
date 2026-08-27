@@ -5,11 +5,13 @@
 use ed25519_dalek::SigningKey;
 
 use crate::descriptor::{
-    ActionContribution, ActionOperation, CommandContribution, CompatibilityRange,
+    ActionContribution, ActionOperation, BrandSlotContribution, CommandContribution, CompatibilityRange,
     CompositionContribution, CompositionNode, Contributions, DeclaredCapability, HookBudget,
     HookDeclaration, LifecycleHook, PluginDescriptorV1, PrimitiveInputValue, SelectOption,
-    SettingsField, SettingsFieldType, SettingsGroup, SignedDescriptorEnvelope,
+    SettingsField, SettingsFieldType, SettingsGroup, SignedDescriptorEnvelope, TemplateContribution,
+    TemplateScreen, TemplateToken,
 };
+use serde_json::json;
 use studio_package::{TrustStore, TrustedPublisherKey};
 
 /// Fixture publisher identity.
@@ -185,6 +187,7 @@ pub fn pos_pack_descriptor() -> PluginDescriptorV1 {
                     screen: "register".to_owned(),
                 },
             }],
+            templates: Vec::new(),
         },
         capabilities: vec![DeclaredCapability::PrinterSimulate],
         lifecycle: vec![
@@ -265,4 +268,44 @@ pub fn pos_pack_trust_keys() -> Vec<TrustedPublisherKey> {
 #[must_use]
 pub fn pos_pack_trust_store() -> TrustStore {
     TrustStore::from_keys(pos_pack_trust_keys()).expect("fixture trust keys valid")
+}
+
+/// A deterministic template-bearing descriptor used by Designer projection tests.
+#[must_use]
+pub fn pos_pack_template_descriptor() -> PluginDescriptorV1 {
+    let mut descriptor = pos_pack_descriptor();
+    descriptor.contributions.templates = vec![TemplateContribution {
+        id: "pos.register".to_owned(),
+        title: "Restaurant register".to_owned(),
+        description: "A register flow for a small restaurant".to_owned(),
+        category: "restaurant".to_owned(),
+        preview_image: None,
+        screens: vec![TemplateScreen {
+            id: "register".to_owned(),
+            title: "Register".to_owned(),
+            route: "/register".to_owned(),
+            tree: branch("column", vec![leaf("text", "Register")]),
+        }],
+        tokens: vec![TemplateToken {
+            id: "brand.primary".to_owned(),
+            name: "Brand primary".to_owned(),
+            kind: "color".to_owned(),
+            value: json!({"type": "color", "value": {"space": "srgb_hex", "value": "#0F766E"}}),
+        }],
+        brand_slots: vec![BrandSlotContribution {
+            id: "primary".to_owned(),
+            label: "Primary color".to_owned(),
+            token_id: "brand.primary".to_owned(),
+            kind: "color".to_owned(),
+        }],
+        required_capabilities: vec![DeclaredCapability::PrinterSimulate],
+    }];
+    descriptor
+}
+
+/// Sign the deterministic template-bearing fixture descriptor.
+#[must_use]
+pub fn pos_pack_template_envelope() -> SignedDescriptorEnvelope {
+    SignedDescriptorEnvelope::sign(&pos_pack_template_descriptor(), &pos_pack_seed())
+        .expect("template fixture descriptor signs")
 }

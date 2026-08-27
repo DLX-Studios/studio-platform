@@ -11,6 +11,7 @@ mod engine;
 pub mod model;
 pub mod persistence;
 pub mod session;
+pub mod ux;
 
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
@@ -23,9 +24,10 @@ pub use model::{
     InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit, LibraryAssetId,
     NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId, PropertyValue,
     ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId, ReusableComposition,
-    RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId,
-    SelectionSnapshot, SlotDefinition, StudioDesign, StudioDesignSnapshot, StyleProperties,
-    TokenId, TokenKind, TokenValue, TombstoneReference, UndoGroupId, ValueKind,
+    InstalledPlugin, RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION,
+    Screen, ScreenId, SelectionSnapshot, SettingKey, SettingValue, SlotDefinition, SourceProvenance,
+    StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenValue,
+    TombstoneReference, UndoGroupId, ValueKind, PluginId,
 };
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
@@ -37,3 +39,10 @@ pub use session::{
     SessionStateSnapshot, ToolKind,
 };
 pub use studio_protocol::NodeKind;
+pub use ux::{
+    BrandSlot, GeneratedSettingsSurface, ImportDestination, ImportProposal, ImportReview,
+    ImportReviewError, ImportReviewStatus, ImportSource, ImportWarning, InferredEntity,
+    PluginBrowseCard, PluginCatalog, SettingsControl, SettingsError, SettingsFieldView, SettingsTab,
+    TemplateDefinition, TemplateError, TemplateNode, TemplateScreen, plugin_install_batch,
+    setting_change_batch,
+};

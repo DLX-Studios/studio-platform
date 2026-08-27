@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Actor, DeletionTombstone, DesignNode, NodeId, NodeParent, OperationId, ProjectId,
-    PropertyValue, RevisionId, UndoGroupId,
+    Actor, DeletionTombstone, DesignNode, DesignToken, InstalledPlugin, NodeId, NodeParent,
+    OperationId, ProjectId, RevisionId, SettingKey, SettingValue, TokenId, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -60,6 +60,30 @@ pub enum Command {
     InsertNode {
         parent: ParentPlacement,
         node: Box<DesignNode>,
+    },
+    /// Add one screen record; its root is inserted by a sibling command in the same batch.
+    InsertScreen {
+        screen: Box<crate::Screen>,
+        index: usize,
+    },
+    /// Remove a screen after its root has been removed.
+    RemoveScreen {
+        screen_id: crate::ScreenId,
+    },
+    /// Add, replace, or remove one design token.
+    SetToken {
+        token_id: TokenId,
+        token: Option<DesignToken>,
+    },
+    /// Add, replace, or remove one generated settings value.
+    SetSetting {
+        key: SettingKey,
+        value: Option<SettingValue>,
+    },
+    /// Add, replace, or remove one project plugin reference.
+    SetPlugin {
+        plugin_id: crate::PluginId,
+        plugin: Option<InstalledPlugin>,
     },
     MoveNode {
         node_id: NodeId,
