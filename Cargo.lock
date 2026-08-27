@@ -6161,6 +6161,7 @@ dependencies = [
  "serde",
  "serde_json",
  "studio-protocol",
+ "studio-script",
  "thiserror 2.0.19",
 ]
 

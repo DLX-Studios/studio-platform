@@ -10,6 +10,7 @@ pub mod command;
 mod engine;
 pub mod model;
 pub mod persistence;
+pub mod script_editor;
 pub mod session;
 
 pub use command::{
@@ -30,6 +31,11 @@ pub use model::{
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
     PersistenceError, PersistenceErrorCode, SessionFuture,
+};
+pub use script_editor::{
+    EditorSnapshot, OutlineNode, ScriptCommitMetadata, ScriptCommitOutcome, ScriptCommitPlan,
+    ScriptDiagnostic, ScriptDocumentAdapter, ScriptEdit, ScriptEditor, ScriptEditorError,
+    SyntaxToken, SyntaxTokenKind,
 };
 pub use session::{
     BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
