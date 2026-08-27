@@ -11,7 +11,7 @@
 //! they are rejected with stable source-linked diagnostics during lowering
 //! instead of being carried through for a later runtime to interpret.
 
-use studio_script::Span;
+use crate::Span;
 
 /// The only Studio IR version currently produced by this crate.
 pub const STUDIO_IR_VERSION: u16 = 1;
