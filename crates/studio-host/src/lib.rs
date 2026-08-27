@@ -12,11 +12,15 @@ pub mod local_store;
 pub use application_data::{
     APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
     ApplicationDataGuestApi, ApplicationDataHandle, ApplicationDataHost, ApplicationDataNamespace,
+    ApplicationDataQueryGuestApi,
     CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
-    ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
+    ForbiddenDataOperation, GuestDataRequest, PatchOperation, QueryDeclaration, QueryLimits,
+    QueryRequest, QueryResponse, QuerySource, RecordId, RecordSchema, StoredRecord,
+    SurrealQueryDeclaration, SurrealQueryError, SurrealQueryErrorCode, SurrealQueryLimits,
+    SurrealQueryRequest, SurrealQueryResponse,
 };
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
     LocalStoreError, StoreBatch, StoreBatchEntry, StoreExecutor, StoreMetadata, StoreTask,
-    StoreTaskError,
+    StoreTaskError, SurrealQueryStore,
 };

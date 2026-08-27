@@ -10,10 +10,8 @@ use std::{collections::BTreeMap, error::Error, fmt};
 
 use sha2::{Digest, Sha256};
 
-use crate::protected::{
-    ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus,
-    TrustMode,
-};
+use crate::protected::{ApplicationEnvironment, ProtectedSecretState, ProtectedSecretStatus};
+use crate::{PluginPrincipal, TrustMode};
 
 const DATA_PARTITION_DOMAIN: &[u8] = b"studio.environment.data-partition.v1";
 const ACTIVE_ENVIRONMENT_SETTING: &str = "environment.active";
@@ -286,7 +284,7 @@ pub struct EnvironmentDataScope<'a> {
     partition: [u8; 32],
 }
 
-impl EnvironmentDataScope<'_> {
+impl<'a> EnvironmentDataScope<'a> {
     /// This scope's environment.
     #[must_use]
     pub const fn environment(self) -> ApplicationEnvironment {
@@ -449,7 +447,7 @@ impl PromotionPlan {
     ) -> Result<Self, EnvironmentError> {
         let entries: Vec<PromotionEntry> = statuses
             .into_iter()
-            .map(SecretFreeMetadata::describe)
+            .map(|status| SecretFreeMetadata::describe(&status))
             .collect();
         match direction {
             PromotionDirection::DevelopmentToStaging
