@@ -6,6 +6,8 @@
 
 /// Host-mediated application data namespaces and typed collection helpers.
 pub mod application_data;
+/// Host-owned append-only application audit records.
+pub mod audit_log;
 /// Adapter from the host `LocalStore` to Studio Design persistence records.
 pub mod designer_persistence;
 /// Host-owned, content-addressed Studio Library asset admission and catalog.
@@ -22,6 +24,10 @@ pub use application_data::{
     ApplicationDataGuestApi, ApplicationDataHandle, ApplicationDataHost, ApplicationDataNamespace,
     CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
     ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
+};
+pub use audit_log::{
+    AUDIT_LOG_FORMAT_VERSION, AuditEvent, AuditEventKind, AuditEventType, AuditLog,
+    AuditLogDiagnostic, AuditLogError, AuditLogErrorCode, AuditQuery, AuditRecord,
 };
 pub use designer_persistence::LocalStoreDesignerPersistence;
 pub use library_assets::{
