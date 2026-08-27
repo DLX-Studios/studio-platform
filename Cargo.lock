@@ -8049,6 +8049,8 @@ dependencies = [
  "serde_json",
  "studio-actions",
  "studio-components",
+ "studio-design",
+ "studio-host",
  "studio-navigation",
  "studio-package",
  "studio-protocol",
@@ -8087,39 +8089,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "studio-flagship"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "studio-actions",
- "studio-design",
- "studio-security",
-]
-
-[[package]]
-name = "studio-host"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "surrealdb",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
 name = "studio-design"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "serde",
  "serde_json",
  "studio-plugin-registry",
  "studio-protocol",
  "studio-script",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -8138,14 +8117,17 @@ dependencies = [
 name = "studio-host"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "studio-design",
+ "studio-security",
  "surrealdb",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -8215,7 +8197,10 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "keyring",
+ "pbkdf2",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sha2 0.11.0",
  "zeroize",
 ]

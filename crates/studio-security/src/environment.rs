@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, error::Error, fmt};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    PluginPrincipal, TrustMode,
-    protected::{ApplicationEnvironment, ProtectedSecretState, ProtectedSecretStatus},
+    ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus,
+    TrustMode,
 };
 
 const DATA_PARTITION_DOMAIN: &[u8] = b"studio.environment.data-partition.v1";

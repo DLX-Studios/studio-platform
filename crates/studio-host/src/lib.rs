@@ -10,10 +10,10 @@ pub mod application_data;
 pub mod designer_persistence;
 /// Host-owned, content-addressed Studio Library asset admission and catalog.
 pub mod library_assets;
+/// Host-owned local identity and offline session authentication.
+pub mod identity;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
-/// Adapter from the host `LocalStore` to Studio Design persistence records.
-pub mod designer_persistence;
 /// Host-owned center authority, station enrollment, offline replay, and conflicts.
 pub mod topology;
 
@@ -30,6 +30,11 @@ pub use library_assets::{
     AssetSourceKind, AssetUsage, BlobReference, DeletePolicy, DeleteResult, LibraryAssetError,
     LibraryAssetStore, LibraryDiagnostic, LibraryDiagnosticCode, LibraryPanelAction,
     LibraryPanelKey, LibraryPanelState, RuntimeVariant, RuntimeVariantSpec,
+};
+pub use identity::{
+    CreateIdentityRequest, IdentityError, IdentityErrorCode, IdentityKind, IdentityService,
+    IdentitySession, IdentitySnapshot, IdentityState, IdentitySummary, SessionState,
+    SessionSummary,
 };
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,

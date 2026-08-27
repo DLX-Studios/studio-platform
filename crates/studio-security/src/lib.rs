@@ -7,6 +7,8 @@ mod protected;
 mod redaction;
 mod registry;
 mod secret;
+mod password;
+mod session;
 
 pub use capability::{ActionGate, CapabilityId, SecurityError, SecurityErrorCode};
 pub use environment::{
@@ -26,3 +28,8 @@ pub use protected::{
 pub use redaction::{ArtifactKind, RedactionError, SensitiveValueFilter};
 pub use registry::SecretRegistry;
 pub use secret::{OpaqueHandle, SecretError, SecretErrorCode, SecretPurpose};
+pub use password::{PasswordError, PasswordErrorCode, PasswordVerifier};
+pub use session::{
+    MemorySessionCredentialStore, OsSessionCredentialStore, SessionCredentialError,
+    SessionCredentialErrorCode, SessionCredentialStore,
+};

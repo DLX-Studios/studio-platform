@@ -8,8 +8,11 @@ rust-version.workspace = true
 [dependencies]
 getrandom.workspace = true
 keyring.workspace = true
+pbkdf2.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sha2_10.workspace = true
 zeroize.workspace = true
 
 [lints]

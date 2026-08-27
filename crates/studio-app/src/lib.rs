@@ -9,6 +9,7 @@ mod failure_surface;
 pub mod focus_view;
 pub mod foundation;
 pub mod host;
+pub mod identity_shell;
 pub mod plugin_surface;
 mod preferences;
 mod print_preview;
@@ -30,6 +31,7 @@ pub use focus_view::{
     FocusViewState,
 };
 pub use host::StudioHost;
+pub use identity_shell::{IdentityShellRoute, IdentityShellState};
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;
 pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
