@@ -73,6 +73,12 @@ pub struct NativeComponent {
 }
 
 /// Renderer readiness for one closed protocol kind.
+// The four readiness flags are an orthogonal matrix over the closed protocol;
+// collapsing them into a bitmask would trade a documented struct for opaque bits.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "readiness matrix is genuinely four independent booleans"
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComponentReadiness {
     /// Closed protocol kind.
