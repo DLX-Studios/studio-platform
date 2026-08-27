@@ -9,7 +9,9 @@
 pub mod command;
 mod engine;
 pub mod model;
+pub mod navigation;
 pub mod persistence;
+pub mod prototype;
 pub mod session;
 
 pub use command::{
@@ -27,9 +29,18 @@ pub use model::{
     SelectionSnapshot, SlotDefinition, StudioDesign, StudioDesignSnapshot, StyleProperties,
     TokenId, TokenKind, TokenValue, TombstoneReference, UndoGroupId, ValueKind,
 };
+pub use navigation::{
+    CODE_INTERACTION_CYCLE, CODE_INTERACTION_SOURCE_MISSING, CODE_INTERACTION_TARGET_MISSING,
+    CODE_ROUTE_DUPLICATE, CODE_ROUTE_INVALID, EventInspectorEntry, InteractionGraph,
+    InteractionInspectorEntry, NavigationEdge, NavigationGraph, NavigationScreen,
+};
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
     PersistenceError, PersistenceErrorCode, SessionFuture,
+};
+pub use prototype::{
+    PrototypeDispatch, PrototypeEffect, PrototypeError, PrototypeEvent, PrototypeSession,
+    PrototypeStateSnapshot, PrototypeTraceEntry,
 };
 pub use session::{
     BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
