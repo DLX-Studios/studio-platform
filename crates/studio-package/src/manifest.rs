@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use studio_net::declaration::RouteGroupDeclaration;
 
 use crate::ManifestError;
 
@@ -64,6 +65,25 @@ pub struct ManifestV1 {
     /// Protected values required at runtime, declared without values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretDeclaration>,
+    /// Integration-plugin references enabled by this application package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub integrations: Vec<IntegrationReference>,
+    /// Signed host-mediated route groups contributed by enabled integrations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<RouteGroupDeclaration>,
+}
+
+/// A version-pinned integration enabled by an application package.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IntegrationReference {
+    /// Stable integration/plugin id, for example `github`.
+    pub id: String,
+    /// Descriptor version selected by the package.
+    pub version: String,
+    /// Public configuration values; secrets remain named declarations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<Value>,
 }
 
 /// Signed publisher identity.
@@ -171,6 +191,8 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
     }
     validate_assets(&manifest.assets)?;
     validate_secrets(&manifest.secrets)?;
+    validate_integrations(&manifest.integrations)?;
+    validate_routes(&manifest.routes)?;
     let mut capabilities = HashSet::new();
     if manifest
         .capabilities
@@ -185,6 +207,35 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
         || manifest.limits.event_fuel > policy.max_event_fuel
     {
         return Err(ManifestError::LimitInvalid);
+    }
+    Ok(())
+}
+
+fn validate_integrations(integrations: &[IntegrationReference]) -> Result<(), ManifestError> {
+    let mut ids = HashSet::new();
+    for integration in integrations {
+        if !valid_integration_id(&integration.id)
+            || Version::parse(&integration.version).is_err()
+            || !ids.insert(integration.id.as_str())
+        {
+            return Err(ManifestError::ManifestInvalid("integrations"));
+        }
+        if let Some(config) = &integration.config
+            && serde_json::to_vec(config).map_or(true, |bytes| bytes.len() > 16 * 1024)
+        {
+            return Err(ManifestError::ManifestInvalid("integrations.config"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_routes(routes: &[studio_net::declaration::RouteGroupDeclaration]) -> Result<(), ManifestError> {
+    let mut ids = HashSet::new();
+    let ceilings = studio_net::limits::BrokerLimits::default();
+    for route in routes {
+        if !ids.insert(route.id.as_str()) || route.compile(&ceilings).is_err() {
+            return Err(ManifestError::ManifestInvalid("routes"));
+        }
     }
     Ok(())
 }
@@ -214,20 +265,34 @@ fn valid_secret_name(value: &str) -> bool {
 }
 
 fn validate_plugin_id(id: &str) -> Result<(), ManifestError> {
-    let segments: Vec<_> = id.split('.').collect();
-    if segments.len() < 2
-        || id.len() > 128
-        || segments.iter().any(|segment| {
-            segment.is_empty()
-                || !segment.starts_with(char::is_alphanumeric)
-                || !segment.chars().all(|character| {
-                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-                })
-        })
-    {
+    if !valid_plugin_id(id) {
         return Err(ManifestError::ManifestInvalid("id"));
     }
     Ok(())
+}
+
+fn valid_plugin_id(id: &str) -> bool {
+    let segments: Vec<_> = id.split('.').collect();
+    segments.len() >= 2
+        && id.len() <= 128
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment.starts_with(char::is_alphanumeric)
+                && segment.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+        })
+}
+
+fn valid_integration_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.starts_with(|character: char| character.is_ascii_lowercase())
+        && id.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-' | '_')
+        })
 }
 
 fn validate_safe_text(

@@ -6,7 +6,7 @@ import {
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
-const supportedExamples = new Set(["starter", "pos-desktop"]);
+const supportedExamples = new Set(["starter", "pos-desktop", "github-viewer"]);
 const encoder = new TextEncoder();
 const EXAMPLE_SEED = Buffer.alloc(32, 7);
 const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
@@ -204,7 +204,7 @@ export async function buildExample(example = "pos-desktop"): Promise<BundleBuild
 if (import.meta.main) {
   const example = process.argv[2];
   if (!example || !supportedExamples.has(example)) {
-    console.error("usage: bun run ./scripts/build-example.ts <pos-desktop|starter>");
+    console.error("usage: bun run ./scripts/build-example.ts <pos-desktop|starter|github-viewer>");
     process.exit(2);
   }
   const result = await buildExample(example);

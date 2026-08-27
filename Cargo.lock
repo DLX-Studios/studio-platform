@@ -8027,6 +8027,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-ai"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-net",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "studio-actions"
 version = "0.1.0"
 dependencies = [
@@ -8114,6 +8124,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-github"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-net",
+ "studio-security",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "studio-host"
 version = "0.1.0"
 dependencies = [
@@ -8155,6 +8176,7 @@ dependencies = [
  "serde_jcs",
  "serde_json",
  "sha2 0.11.0",
+ "studio-net",
  "studio-security",
  "thiserror 2.0.20",
  "zip",
