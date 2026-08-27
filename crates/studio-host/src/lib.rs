@@ -8,6 +8,8 @@
 pub mod application_data;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
+/// Declarative, host-owned scheduled and event-triggered workflows.
+pub mod workflows;
 
 pub use application_data::{
     APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
@@ -19,4 +21,13 @@ pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
     LocalStoreError, StoreBatch, StoreBatchEntry, StoreExecutor, StoreMetadata, StoreTask,
     StoreTaskError,
+};
+pub use workflows::{
+    ManualWorkflowClock, MemoryWorkflowAuditLog, MemoryWorkflowRuntime, MissedFirePolicy,
+    NoopWorkflowAudit, QueueWorkflowEventSource, RetryPolicy, SystemWorkflowClock,
+    WorkflowAction, WorkflowAuditEntry, WorkflowAuditSink, WorkflowClock, WorkflowCommit,
+    WorkflowDefinition, WorkflowDiagnostic, WorkflowDiagnosticCode, WorkflowEngine, WorkflowError,
+    WorkflowEvent, WorkflowEventSource, WorkflowEventSourceKind, WorkflowPayload,
+    WorkflowPluginEvent, WorkflowRunReport, WorkflowRunStatus, WorkflowRuntime,
+    WorkflowRuntimeError, WorkflowRuntimeErrorCode, WorkflowTrigger,
 };
