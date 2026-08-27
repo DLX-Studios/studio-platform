@@ -2,6 +2,7 @@
 
 mod action_dispatch;
 pub mod agent_conversation;
+pub mod bootstrap;
 pub mod cli;
 mod confirmation_surface;
 pub mod connection;
@@ -21,6 +22,11 @@ pub mod settings;
 mod shutdown;
 
 pub use action_dispatch::{NativeCheckoutError, NativeCheckoutShell};
+pub use bootstrap::{
+    BootstrapError, LocalStoreDashboardPersistence, LocalStoreSettingsPersistence,
+    NativeProductBootstrap, NativeProductShell, NativeProductState, OfflineSyncWorker,
+    ProductRoute,
+};
 pub use confirmation_surface::{
     ProtectedConfirmationView, ProtectedPaymentError, ProtectedPaymentErrorCode,
     ProtectedPaymentSession,

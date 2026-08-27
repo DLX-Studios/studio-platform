@@ -308,6 +308,50 @@ where
         Ok(self.snapshot_from_catalog(&catalog))
     }
 
+    /// Read the startup snapshot from a synchronous native bootstrap boundary.
+    pub fn snapshot_blocking(&self) -> Result<IdentitySnapshot, IdentityError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| IdentityError::Store(LocalStoreError::new(
+                crate::LocalStoreDiagnosticCode::ExecutorUnavailable,
+            )))?;
+        runtime.block_on(self.snapshot())
+    }
+
+    /// Resume a remembered session from a synchronous native bootstrap boundary.
+    pub fn resume_blocking(&self, session_id: &str) -> Result<IdentitySession, IdentityError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| IdentityError::Store(LocalStoreError::new(
+                crate::LocalStoreDiagnosticCode::ExecutorUnavailable,
+            )))?;
+        runtime.block_on(self.resume(session_id))
+    }
+
+    /// Persist welcome dismissal from a synchronous native shell callback.
+    pub fn dismiss_welcome_blocking(&self) -> Result<(), IdentityError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| IdentityError::Store(LocalStoreError::new(
+                crate::LocalStoreDiagnosticCode::ExecutorUnavailable,
+            )))?;
+        runtime.block_on(self.dismiss_welcome())
+    }
+
+    /// Persist welcome revisit from a synchronous native shell callback.
+    pub fn revisit_welcome_blocking(&self) -> Result<(), IdentityError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| IdentityError::Store(LocalStoreError::new(
+                crate::LocalStoreDiagnosticCode::ExecutorUnavailable,
+            )))?;
+        runtime.block_on(self.revisit_welcome())
+    }
+
     /// Persist that the product welcome has been dismissed.
     pub async fn dismiss_welcome(&self) -> Result<(), IdentityError> {
         let mut catalog = self.load_catalog().await?;
@@ -440,6 +484,17 @@ where
             .expect("identity session lock is not poisoned")
             .remove(session_id);
         Ok(())
+    }
+
+    /// Revoke a remembered session from a synchronous native shell callback.
+    pub fn revoke_session_blocking(&self, session_id: &str) -> Result<(), IdentityError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| IdentityError::Store(LocalStoreError::new(
+                crate::LocalStoreDiagnosticCode::ExecutorUnavailable,
+            )))?;
+        runtime.block_on(self.revoke_session(session_id))
     }
 
     /// List public remembered-session metadata for the account chooser.

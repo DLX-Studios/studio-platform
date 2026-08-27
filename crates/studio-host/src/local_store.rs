@@ -185,6 +185,11 @@ impl LocalStoreError {
         }
     }
 
+    /// Construct a sanitized store error for a typed host adapter.
+    pub fn new_for_adapter(code: LocalStoreDiagnosticCode) -> Self {
+        Self::new(code)
+    }
+
     /// The safe diagnostic suitable for UI, logs, and automation results.
     #[must_use]
     pub const fn diagnostic(&self) -> &LocalStoreDiagnostic {
@@ -592,6 +597,43 @@ impl EmbeddedLocalStore {
     #[must_use]
     pub const fn durability(&self) -> Durability {
         self.durability
+    }
+
+    /// Open a store from a synchronous native bootstrap boundary.
+    ///
+    /// GPUI startup is synchronous, while the storage engine is intentionally
+    /// asynchronous. Keeping this bridge here prevents application code from
+    /// depending on the storage engine or creating an executor of its own.
+    pub fn open_blocking(
+        directory: impl Into<PathBuf>,
+        durability: Durability,
+    ) -> Result<Self, LocalStoreError> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
+        runtime.block_on(Self::open(directory, durability))
+    }
+
+    /// Read one typed batch from a synchronous host adapter.
+    pub fn batch_entries_blocking(
+        &self,
+        batch_id: &str,
+    ) -> Result<Vec<StoreBatchEntry>, LocalStoreError> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
+        runtime.block_on(self.batch_entries(batch_id))
+    }
+
+    /// Persist one typed batch from a synchronous host adapter.
+    pub fn write_batch_blocking(&self, batch: &StoreBatch) -> Result<(), LocalStoreError> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
+        runtime.block_on(self.write_batch(batch))
     }
 }
 
