@@ -20,6 +20,8 @@ pub mod rbac;
 pub mod local_store;
 /// Host-owned center authority, station enrollment, offline replay, and conflicts.
 pub mod topology;
+/// Versioned host-only HTTP/WebSocket center protocol and station client.
+pub mod center_protocol;
 pub mod migrations;
 /// Declarative, host-owned scheduled and event-triggered workflows.
 pub mod workflows;
@@ -69,6 +71,18 @@ pub use topology::{
     OperationReceipt, PairingToken, PersistentCenter, SharedRecord, Station, StationCache,
     StationId, StationLocalState, StationSettings, StationWriteResult, TopologyError,
     TopologyErrorCode, WriteIntent, WriteOperation,
+};
+pub use center_protocol::{
+    CenterBackoffSleeper, CenterConflictResolutionRequest, CenterEnrollmentRequest,
+    CenterErrorResponse, CenterHttpMethod, CenterHttpRequest, CenterHttpResponse,
+    CenterHttpTransport, CenterNetworkError, CenterNetworkErrorCode, CenterOperationRequest,
+    CenterOperationResponse, CenterPersistenceError, CenterProtocolLimits, CenterProtocolServer,
+    CenterResponse, CenterStationClient, CenterStationState, CenterStationStateStore,
+    CenterTransportError, CenterWebSocketConnectRequest, CenterWebSocketConnection,
+    CenterWebSocketClient, CenterWebSocketFrame, CenterWebSocketTransport, CENTER_CONFLICT_PATH_PREFIX,
+    CENTER_ENROLL_PATH, CENTER_OPERATIONS_PATH, CENTER_PROTOCOL_MEDIA_TYPE,
+    CENTER_PROTOCOL_VERSION, CENTER_SNAPSHOT_PATH, CENTER_WEBSOCKET_SUBPROTOCOL,
+    CENTER_RECEIPTS_PATH_PREFIX,
 };
 pub use migrations::{
     MigrationError, MigrationErrorCode, MigrationLifecycle, MigrationRunner, MigrationState,
