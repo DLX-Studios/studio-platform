@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, error::Error, fmt};
 
 use sha2::{Digest, Sha256};
 
-use crate::protected::{
+use crate::{
     ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus,
     TrustMode,
 };
@@ -286,7 +286,7 @@ pub struct EnvironmentDataScope<'a> {
     partition: [u8; 32],
 }
 
-impl EnvironmentDataScope<'_> {
+impl<'a> EnvironmentDataScope<'a> {
     /// This scope's environment.
     #[must_use]
     pub const fn environment(self) -> ApplicationEnvironment {
@@ -449,7 +449,7 @@ impl PromotionPlan {
     ) -> Result<Self, EnvironmentError> {
         let entries: Vec<PromotionEntry> = statuses
             .into_iter()
-            .map(SecretFreeMetadata::describe)
+            .map(|status| status.describe())
             .collect();
         match direction {
             PromotionDirection::DevelopmentToStaging

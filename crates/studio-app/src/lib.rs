@@ -7,6 +7,7 @@ mod diagnostic;
 mod failure_surface;
 pub mod foundation;
 pub mod host;
+pub mod identity_shell;
 pub mod plugin_surface;
 mod preferences;
 mod print_preview;
@@ -21,6 +22,7 @@ pub use confirmation_surface::{
 pub use diagnostic::SafeDiagnostic;
 pub use failure_surface::{FailureSurface, PluginRecovery, RecoveryError, RestartTrigger};
 pub use host::StudioHost;
+pub use identity_shell::{IdentityShellRoute, IdentityShellState};
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;
 pub use router::CheckoutRouter;

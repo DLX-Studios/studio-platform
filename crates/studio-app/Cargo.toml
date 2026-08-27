@@ -14,6 +14,7 @@ gpui_platform.workspace = true
 serde_json.workspace = true
 studio-actions = { path = "../studio-actions" }
 studio-components = { path = "../studio-components" }
+studio-host = { path = "../studio-host" }
 studio-navigation = { path = "../studio-navigation" }
 studio-package = { path = "../studio-package" }
 studio-protocol = { path = "../studio-protocol" }
