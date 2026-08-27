@@ -70,6 +70,9 @@ impl DemoDayOrchestrator {
         let audit_evidence = audit.evidence();
         let capability_matrix = CapabilityMatrixEvidence::certified();
         let a11y = AccessibilityEvidence::certified();
+        let recovery_safe = center_evidence.recovery_safe;
+        let duplicate_replay_count = center_evidence.duplicate_replay_count;
+        let secrets_absent = audit_evidence.secrets_absent;
         let gates = vec![
             gate("employee_roles_pin", employee_evidence.passed, "offline host-side PIN and role proof"),
             gate("center_topology_replay", center_evidence.passed, "four-node topology and shared check convergence"),
@@ -109,14 +112,14 @@ impl DemoDayOrchestrator {
                 digest: String::new(),
             },
             recovery: RecoveryEvidence {
-                acknowledged_operations_preserved: center_evidence.recovery_safe,
-                duplicate_replay_count: center_evidence.duplicate_replay_count,
+                acknowledged_operations_preserved: recovery_safe,
+                duplicate_replay_count,
                 operational_truth_center_owned: true,
             },
             security: SecurityEvidence {
                 raw_pin_observed: false,
                 credentials_observed: false,
-                secret_free_report: audit_evidence.secrets_absent,
+                secret_free_report: secrets_absent,
             },
             accessibility: a11y,
             capability_matrix,
