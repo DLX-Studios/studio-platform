@@ -98,13 +98,13 @@ fn durability_and_batches_fail_with_stable_safe_codes() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let error =
-                EmbeddedLocalStore::open(directory.path(), Durability::Interval(
-                    std::time::Duration::from_millis(50),
-                ))
-                .await
-                .err()
-                .expect("sub-100 ms interval is rejected");
+            let error = EmbeddedLocalStore::open(
+                directory.path(),
+                Durability::Interval(std::time::Duration::from_millis(50)),
+            )
+            .await
+            .err()
+            .expect("sub-100 ms interval is rejected");
             assert_code(error, LocalStoreDiagnosticCode::DurabilityInvalid);
 
             let store = opened(directory.path());
@@ -113,10 +113,13 @@ fn durability_and_batches_fail_with_stable_safe_codes() {
                 Err(error) => assert_code(error, LocalStoreDiagnosticCode::BatchInvalid),
                 Ok(_) => panic!("empty batch must be rejected"),
             }
-            let gap = StoreBatch::new("gap", [StoreBatchEntry {
-                ordinal: 4,
-                payload: serde_json::json!({}),
-            }]);
+            let gap = StoreBatch::new(
+                "gap",
+                [StoreBatchEntry {
+                    ordinal: 4,
+                    payload: serde_json::json!({}),
+                }],
+            );
             match gap {
                 Err(error) => assert_code(error, LocalStoreDiagnosticCode::BatchInvalid),
                 Ok(_) => panic!("ordinal gaps must be rejected"),
@@ -195,7 +198,10 @@ fn corrupted_manifest_fails_safely() {
                 .await
                 .err()
                 .expect("corrupted manifest must fail recovery");
-            assert_code(recover_error, LocalStoreDiagnosticCode::EngineManifestCorrupt);
+            assert_code(
+                recover_error,
+                LocalStoreDiagnosticCode::EngineManifestCorrupt,
+            );
         });
 }
 

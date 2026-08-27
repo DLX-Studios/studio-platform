@@ -29,7 +29,10 @@ use std::collections::BTreeSet;
 use studio_protocol::NodeKind;
 use crate::{AttributeValue, Diagnostic, Element, Location, Node, Severity, Span, StudioDocument};
 
-use crate::ir::{IrElement, IrNavigationAction, IrNavigationOperation, IrProperty, IrScreen, IrText, IrNode, IrTriggerEvent};
+use crate::ir::{
+    IrElement, IrNavigationAction, IrNavigationOperation, IrNode, IrProperty, IrScreen, IrText,
+    IrTriggerEvent,
+};
 
 /// Stable diagnostic code for a `$item.*` binding outside the static subset.
 pub const CODE_IR_UNSUPPORTED_BINDING: &str = "STUDIO201";
@@ -134,11 +137,7 @@ fn collect_ids_from_element(element: &Element, ids: &mut BTreeSet<String>) {
     }
 }
 
-fn lower_screen(
-    root: &Element,
-    source: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> IrScreen {
+fn lower_screen(root: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>) -> IrScreen {
     let root_node = lower_node(root, source, diagnostics);
     IrScreen {
         id: root.id.clone(),
@@ -147,11 +146,7 @@ fn lower_screen(
     }
 }
 
-fn lower_node(
-    element: &Element,
-    source: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> IrNode {
+fn lower_node(element: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>) -> IrNode {
     let span = locate_element(source, &element.id);
     validate_kind(&element.kind, span, diagnostics);
 
@@ -449,7 +444,9 @@ fn is_valid_route(route: &str) -> bool {
 fn is_route_segment(segment: &str) -> bool {
     let mut characters = segment.chars();
     matches!(characters.next(), Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit())
-        && characters.all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }
 
 /// Locate the `<script>` body region as absolute `(start_offset, text)`.

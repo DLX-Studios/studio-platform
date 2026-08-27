@@ -20,11 +20,11 @@ use surrealdb::{
     types::SurrealValue,
 };
 use thiserror::Error;
+use tokio::time as tokio_time;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::oneshot,
 };
-use tokio::time as tokio_time;
 
 /// File marking a fully initialized Studio store next to the engine data.
 const ENGINE_MANIFEST_FILE: &str = ".studio-localstore-engine.json";
@@ -313,9 +313,7 @@ fn persisted_batch(batch: &StoreBatch) -> PersistedBatch {
 }
 
 /// Selects the Studio namespace and database on a freshly opened engine.
-async fn select_session(
-    database: &Surreal<Db>,
-) -> Result<(), LocalStoreDiagnosticCode> {
+async fn select_session(database: &Surreal<Db>) -> Result<(), LocalStoreDiagnosticCode> {
     database
         .use_ns(NAMESPACE)
         .await
@@ -344,9 +342,7 @@ async fn connect_rocksdb(
 }
 
 /// Reads the engine manifest, returning `None` when no store was initialized.
-fn read_manifest(
-    directory: &Path,
-) -> Result<Option<EngineManifest>, LocalStoreDiagnosticCode> {
+fn read_manifest(directory: &Path) -> Result<Option<EngineManifest>, LocalStoreDiagnosticCode> {
     let Ok(raw) = std::fs::read_to_string(directory.join(ENGINE_MANIFEST_FILE)) else {
         return Ok(None);
     };
@@ -356,9 +352,7 @@ fn read_manifest(
 }
 
 /// Rejects manifests recorded by other engines or unsupported formats.
-fn validate_manifest(
-    manifest: &EngineManifest,
-) -> Result<(), LocalStoreDiagnosticCode> {
+fn validate_manifest(manifest: &EngineManifest) -> Result<(), LocalStoreDiagnosticCode> {
     if manifest.engine == ENGINE_MANIFEST_ROCKSDB
         && manifest.format_version == ENGINE_FORMAT_VERSION
     {
@@ -374,11 +368,10 @@ fn write_manifest(directory: &Path) -> Result<(), LocalStoreDiagnosticCode> {
         engine: ENGINE_MANIFEST_ROCKSDB.to_owned(),
         format_version: ENGINE_FORMAT_VERSION,
     };
-    let raw = serde_json::to_string(&manifest)
-        .map_err(|_| LocalStoreDiagnosticCode::OperationFailed)?;
+    let raw =
+        serde_json::to_string(&manifest).map_err(|_| LocalStoreDiagnosticCode::OperationFailed)?;
     let temporary = directory.join(ENGINE_MANIFEST_TEMPORARY_FILE);
-    std::fs::write(&temporary, raw)
-        .map_err(|_| LocalStoreDiagnosticCode::DirectoryInvalid)?;
+    std::fs::write(&temporary, raw).map_err(|_| LocalStoreDiagnosticCode::DirectoryInvalid)?;
     std::fs::rename(&temporary, directory.join(ENGINE_MANIFEST_FILE))
         .map_err(|_| LocalStoreDiagnosticCode::DirectoryInvalid)?;
     Ok(())
@@ -396,9 +389,7 @@ async fn read_schema_metadata(
 }
 
 /// Rejects schema metadata written by newer hosts or other engine formats.
-fn validate_schema_metadata(
-    metadata: &StoredMetadata,
-) -> Result<(), LocalStoreDiagnosticCode> {
+fn validate_schema_metadata(metadata: &StoredMetadata) -> Result<(), LocalStoreDiagnosticCode> {
     if metadata.schema_version > STORE_SCHEMA_VERSION
         || metadata.engine_format_version != ENGINE_FORMAT_VERSION
     {
@@ -496,10 +487,15 @@ impl EmbeddedLocalStore {
         let fresh_store = read_manifest(&directory)
             .map_err(LocalStoreError::new)?
             .is_none();
-        let database =
-            connect_rocksdb(&directory, durability).await.map_err(LocalStoreError::new)?;
-        select_session(&database).await.map_err(LocalStoreError::new)?;
-        ensure_schema_metadata(&database).await.map_err(LocalStoreError::new)?;
+        let database = connect_rocksdb(&directory, durability)
+            .await
+            .map_err(LocalStoreError::new)?;
+        select_session(&database)
+            .await
+            .map_err(LocalStoreError::new)?;
+        ensure_schema_metadata(&database)
+            .await
+            .map_err(LocalStoreError::new)?;
         if fresh_store {
             write_manifest(&directory).map_err(LocalStoreError::new)?;
         }
@@ -540,9 +536,12 @@ impl EmbeddedLocalStore {
             }
             Err(code) => return Err(LocalStoreError::new(code)),
         }
-        let database =
-            connect_rocksdb(&directory, durability).await.map_err(LocalStoreError::new)?;
-        select_session(&database).await.map_err(LocalStoreError::new)?;
+        let database = connect_rocksdb(&directory, durability)
+            .await
+            .map_err(LocalStoreError::new)?;
+        select_session(&database)
+            .await
+            .map_err(LocalStoreError::new)?;
         // A manifest exists but schema metadata does not: the store is damaged.
         match read_schema_metadata(&database).await {
             Ok(Some(found)) => {
@@ -599,8 +598,7 @@ impl LocalStore for EmbeddedLocalStore {
                 .upsert((TABLE_BATCH, batch.id()))
                 .content(record)
                 .await;
-            written
-                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
+            written.map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
             Ok(())
         }
     }
@@ -839,7 +837,9 @@ mod tests {
             "fresh engine has no schema metadata yet"
         );
 
-        ensure_schema_metadata(&database).await.expect("initializes metadata");
+        ensure_schema_metadata(&database)
+            .await
+            .expect("initializes metadata");
         let stored = read_schema_metadata(&database).await.unwrap();
         let found = stored.as_ref().expect("metadata record exists");
         validate_schema_metadata(found).expect("fresh metadata is supported");
@@ -874,11 +874,15 @@ mod tests {
     async fn typed_batches_persist_and_read_back_atomically_on_the_memory_engine() {
         let database = memory_database().await;
         select_session(&database).await.expect("session selects");
-        ensure_schema_metadata(&database).await.expect("schema initializes");
+        ensure_schema_metadata(&database)
+            .await
+            .expect("schema initializes");
 
-        let batch =
-            StoreBatch::new("round-trip", [sample_entry(0), sample_entry(1), sample_entry(2)])
-                .expect("batch is valid");
+        let batch = StoreBatch::new(
+            "round-trip",
+            [sample_entry(0), sample_entry(1), sample_entry(2)],
+        )
+        .expect("batch is valid");
         let record = persisted_batch(&batch);
         let written: Result<Option<PersistedBatch>, surrealdb::Error> = database
             .upsert((TABLE_BATCH, batch.id()))
@@ -886,13 +890,17 @@ mod tests {
             .await;
         assert!(written.is_ok(), "batch record upserts");
 
-        let stored: Option<PersistedBatch> =
-            database.select((TABLE_BATCH, "round-trip")).await.expect("reads back");
+        let stored: Option<PersistedBatch> = database
+            .select((TABLE_BATCH, "round-trip"))
+            .await
+            .expect("reads back");
         let stored = stored.expect("record exists");
         assert_eq!(stored.batch_id, "round-trip");
         assert_eq!(stored.entries.len(), 3);
-        let missing: Option<PersistedBatch> =
-            database.select((TABLE_BATCH, "absent")).await.expect("missing reads");
+        let missing: Option<PersistedBatch> = database
+            .select((TABLE_BATCH, "absent"))
+            .await
+            .expect("missing reads");
         assert!(missing.is_none());
 
         assert!(batch_id_is_valid("ordinary-batch"));

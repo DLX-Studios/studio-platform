@@ -24,10 +24,12 @@
 
 use std::collections::BTreeMap;
 
-use studio_protocol::{GuestMessage, HostEvent, MountTree, NavigationCommand, NodeKind, PROTOCOL_VERSION, UiNode};
 use serde_json::Value;
+use studio_protocol::{
+    GuestMessage, HostEvent, MountTree, NavigationCommand, NodeKind, PROTOCOL_VERSION, UiNode,
+};
 
-use crate::ir::{IrNavigationOperation, IrProperty, IrNode, StudioIrModule};
+use crate::ir::{IrNavigationOperation, IrNode, IrProperty, StudioIrModule};
 
 /// The artifacts of one lowering: generated AssemblyScript plus the mount
 /// payload it embeds.
@@ -78,10 +80,7 @@ pub fn emit(module: &StudioIrModule) -> EmittedModule {
     source.push_str("export function studio_event(pointer: i32, length: i32): i32 {\n");
     source.push_str("  const event = String.UTF8.decodeUnsafe(pointer, length, false);\n");
     for action in &module.actions {
-        let trigger = format!(
-            "\"node_id\":\"{}\"",
-            escape_json(&action.trigger_node_id)
-        );
+        let trigger = format!("\"node_id\":\"{}\"", escape_json(&action.trigger_node_id));
         let event_match = format!("\"event\":\"{}\"", action.trigger_event.as_str());
         source.push_str(&format!(
             "  if (event.includes(\"{}\") && event.includes(\"{}\")) {{\n",
@@ -111,17 +110,12 @@ pub fn emit(module: &StudioIrModule) -> EmittedModule {
 /// # Errors
 ///
 /// Returns an error message when `event_json` is not a valid host UI event.
-pub fn simulate_event(
-    module: &StudioIrModule,
-    event_json: &str,
-) -> Result<Option<String>, String> {
+pub fn simulate_event(module: &StudioIrModule, event_json: &str) -> Result<Option<String>, String> {
     let Ok(HostEvent::Ui(event)) = serde_json::from_str::<HostEvent>(event_json) else {
         return Err("event_json is not a serialized host UI event".to_owned());
     };
     for action in &module.actions {
-        if action.trigger_node_id == event.node_id
-            && action.trigger_event.as_str() == event.event
-        {
+        if action.trigger_node_id == event.node_id && action.trigger_event.as_str() == event.event {
             return Ok(Some(navigate_message(&action.operation)));
         }
     }
@@ -180,8 +174,7 @@ fn ui_node(node: &IrNode) -> UiNode {
 fn node_kind(kind: &str) -> NodeKind {
     // Lowering already admitted only catalog kinds; the fallback keeps the
     // emitter total without panicking on hand-built IR.
-    serde_json::from_str::<NodeKind>(&format!("\"{kind}\""))
-        .unwrap_or(NodeKind::Empty)
+    serde_json::from_str::<NodeKind>(&format!("\"{kind}\"")).unwrap_or(NodeKind::Empty)
 }
 
 fn property_value(property: &IrProperty) -> Value {
