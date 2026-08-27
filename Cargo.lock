@@ -8143,6 +8143,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "studio-design",
+ "studio-package",
  "studio-security",
  "surrealdb",
  "tempfile",
@@ -8190,6 +8191,18 @@ dependencies = [
  "studio-security",
  "thiserror 2.0.20",
  "zip",
+]
+
+[[package]]
+name = "studio-update-channel"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek 3.0.0",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "studio-package",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

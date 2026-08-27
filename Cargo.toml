@@ -21,6 +21,7 @@ members = [
     "crates/studio-language-server",
     "crates/studio-testkit",
     "crates/studio-ui",
+    "crates/studio-update-channel",
     "crates/studio-wasm",
 ]
 exclude = [
