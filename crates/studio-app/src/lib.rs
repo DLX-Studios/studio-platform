@@ -1,6 +1,7 @@
 //! Studio's Wayland-only native shell and host-owned foundation surfaces.
 
 mod action_dispatch;
+pub mod agent_conversation;
 pub mod cli;
 mod confirmation_surface;
 mod diagnostic;
