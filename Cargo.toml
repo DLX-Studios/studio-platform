@@ -6,6 +6,7 @@ members = [
     "crates/studio-cli",
     "crates/studio-components",
     "crates/studio-design",
+    "crates/studio-flagship",
     "crates/studio-host",
     "crates/studio-navigation",
     "crates/studio-package",

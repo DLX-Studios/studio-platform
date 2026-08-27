@@ -6166,6 +6166,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-flagship"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "studio-actions",
+ "studio-design",
+ "studio-security",
+]
+
+[[package]]
 name = "studio-host"
 version = "0.1.0"
 dependencies = [
