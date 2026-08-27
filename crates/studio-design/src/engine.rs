@@ -6,6 +6,7 @@ use crate::{
     command::{
         AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
     },
+    manipulation::{CANVAS_RECT_PROPERTY, CanvasRect},
     model::{
         Actor, DeletionTombstone, DesignNode, DesignNodeSource, DesignerDiagnostic,
         DiagnosticSeverity, InteractionAction, NodeId, NodeParent, OperationId, ProjectId,
@@ -544,7 +545,79 @@ fn apply_command(
             value,
         } => set_property(snapshot, node_id, property, value.as_ref()),
         Command::RenameNode { node_id, name } => rename_node(snapshot, node_id, name),
+        Command::SetCanvasRect { node_id, rect } => set_canvas_rect(snapshot, node_id, rect),
+        Command::ClearCanvasRect { node_id } => clear_canvas_rect(snapshot, node_id),
     }
+}
+
+fn set_canvas_rect(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    rect: &CanvasRect,
+) -> Result<Command, DesignerDiagnostic> {
+    let value = rect.to_property_value().ok_or_else(|| {
+        node_diagnostic(
+            "DESIGN_CANVAS_RECT_INVALID",
+            "canvas geometry must contain finite coordinates and non-negative dimensions",
+            node_id,
+        )
+    })?;
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node.properties.get(CANVAS_RECT_PROPERTY).cloned();
+    if let Some(prior) = &prior
+        && CanvasRect::from_property_value(prior).is_none()
+    {
+        return Err(node_diagnostic(
+            "DESIGN_CANVAS_RECT_INVALID",
+            "the existing canvas geometry is malformed",
+            node_id,
+        ));
+    }
+    node.properties
+        .insert(CANVAS_RECT_PROPERTY.to_owned(), value);
+    Ok(
+        match prior.and_then(|value| CanvasRect::from_property_value(&value)) {
+            Some(rect) => Command::SetCanvasRect {
+                node_id: node_id.clone(),
+                rect,
+            },
+            None => Command::ClearCanvasRect {
+                node_id: node_id.clone(),
+            },
+        },
+    )
+}
+
+fn clear_canvas_rect(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+) -> Result<Command, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node.properties.remove(CANVAS_RECT_PROPERTY);
+    let Some(prior) = prior else {
+        return Ok(Command::ClearCanvasRect {
+            node_id: node_id.clone(),
+        });
+    };
+    let rect = CanvasRect::from_property_value(&prior).ok_or_else(|| {
+        node_diagnostic(
+            "DESIGN_CANVAS_RECT_INVALID",
+            "the existing canvas geometry is malformed",
+            node_id,
+        )
+    })?;
+    Ok(Command::SetCanvasRect {
+        node_id: node_id.clone(),
+        rect,
+    })
 }
 
 fn insert_node(

@@ -8,6 +8,7 @@
 
 pub mod command;
 mod engine;
+pub mod manipulation;
 pub mod model;
 pub mod persistence;
 pub mod session;
@@ -16,6 +17,14 @@ pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
 pub use engine::DefaultDesignerSession;
+pub use manipulation::{
+    CANVAS_RECT_PROPERTY, CanvasAlignment, CanvasDistribution, CanvasGeometry, CanvasPoint,
+    CanvasRect, CanvasSize, GestureContext, GuideAxis, GuideKind, HierarchyEdit, HierarchyNode,
+    HierarchySnapshot, HitTestEntry, HitTestIndex, ManipulationError, ResizeHandle, SnapConfig,
+    SnapGuide, SnapResult, align_batch, alignment_targets, delete_batch, distribute_batch,
+    distribution_targets, drag_batch, duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch,
+    nudge_batch, reorder_batch, reparent_batch, resize_batch, resize_rect, restore_batch,
+};
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
