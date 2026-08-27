@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::manipulation::CanvasRect;
 use crate::model::{
     Actor, BindingId, BindingPath, CollectionId, ContentBinding, ContentCollection,
     ContentCollectionSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
@@ -327,6 +328,15 @@ pub enum Command {
     RemoveForm {
         form_id: FormId,
     },
+    /// Set the editor canvas frame for a node.
+    SetCanvasRect {
+        node_id: NodeId,
+        rect: CanvasRect,
+    },
+    /// Remove the editor canvas frame for a node.
+    ClearCanvasRect {
+        node_id: NodeId,
+    },
 }
 
 impl Command {
@@ -349,8 +359,6 @@ impl Command {
             layout,
         }
     }
-}
-
 /// A target parent and ordered child position.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

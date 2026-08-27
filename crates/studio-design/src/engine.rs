@@ -14,6 +14,7 @@ use crate::{
     command::{
         AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
     },
+    manipulation::{CANVAS_RECT_PROPERTY, CanvasRect},
     model::{
         Actor, Alignment, BindingId, BindingPath, CollectionId, ContentBinding, ContentCollection,
         ContentCollectionSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
@@ -877,6 +878,8 @@ fn apply_command(
         Command::RemoveBinding { binding_id } => remove_binding(snapshot, binding_id),
         Command::UpsertForm { form } => upsert_form(snapshot, form),
         Command::RemoveForm { form_id } => remove_form(snapshot, form_id),
+        Command::SetCanvasRect { node_id, rect } => set_canvas_rect(snapshot, node_id, rect),
+        Command::ClearCanvasRect { node_id } => clear_canvas_rect(snapshot, node_id),
     }
 }
 
@@ -1015,6 +1018,114 @@ fn set_plugin(
 }
 
 fn insert_node(
+    snapshot: &mut StudioDesignSnapshot,
+    placement: &ParentPlacement,
+    node: &DesignNode,
+) -> Result<Command, DesignerDiagnostic> {
+    if snapshot.design.nodes.contains_key(&node.id) {
+        return Err(node_diagnostic(
+            "DESIGN_NODE_EXISTS",
+            "the inserted node identity already exists",
+            &node.id,
+        ));
+    }
+    if !node.children.is_empty() {
+        return Err(node_diagnostic(
+            "DESIGN_INSERT_CHILDREN",
+            "insert_node accepts one childless node; insert descendants in the same batch",
+            &node.id,
+        ));
+    }
+    let reclaim = reclaimable_tombstone(snapshot, node);
+    if id_is_tombstoned(snapshot, &node.id) && reclaim.is_none() {
+        return Err(node_diagnostic(
+            "DESIGN_ID_TOMBSTONED",
+            "the inserted identity belongs to a different deletion tombstone",
+            &node.id,
+        ));
+    }
+    insert_child(&mut snapshot.design, placement, node.id.clone())?;
+    snapshot
+        .design
+        .parents
+        .insert(node.id.clone(), placement.parent.clone());
+    snapshot.design.nodes.insert(node.id.clone(), node.clone());
+    if let Some(root_id) = reclaim {
+        snapshot.tombstones.remove(&root_id);
+    }
+    Ok(Command::DeleteNode {
+        node_id: node.id.clone(),
+    })
+}
+
+fn set_canvas_rect(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    rect: &CanvasRect,
+) -> Result<Command, DesignerDiagnostic> {
+    let value = rect.to_property_value().ok_or_else(|| {
+        node_diagnostic(
+            "DESIGN_CANVAS_RECT_INVALID",
+            "canvas geometry must contain finite coordinates and non-negative dimensions",
+            node_id,
+        )
+    })?;
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node.properties.get(CANVAS_RECT_PROPERTY).cloned();
+    if let Some(prior) = &prior
+        && CanvasRect::from_property_value(prior).is_none()
+    {
+        return Err(node_diagnostic(
+            "DESIGN_CANVAS_RECT_INVALID",
+            "the existing canvas geometry is malformed",
+            node_id,
+        ));
+    }
+    node.properties
+        .insert(CANVAS_RECT_PROPERTY.to_owned(), value);
+    Ok(match prior.and_then(|value| CanvasRect::from_property_value(&value)) {
+        Some(rect) => Command::SetCanvasRect {
+            node_id: node_id.clone(),
+            rect,
+        },
+        None => Command::ClearCanvasRect {
+            node_id: node_id.clone(),
+        },
+    })
+}
+
+fn clear_canvas_rect(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+) -> Result<Command, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node.properties.remove(CANVAS_RECT_PROPERTY);
+    let Some(prior) = prior else {
+        return Ok(Command::ClearCanvasRect {
+            node_id: node_id.clone(),
+        });
+    };
+    let rect = CanvasRect::from_property_value(&prior).ok_or_else(|| {
+        node_diagnostic(
+            "DESIGN_CANVAS_RECT_INVALID",
+            "the existing canvas geometry is malformed",
+            node_id,
+        )
+    })?;
+    Ok(Command::SetCanvasRect {
+        node_id: node_id.clone(),
+        rect,
+    })
+}
+
 fn create_token(
     snapshot: &mut StudioDesignSnapshot,
     token: &crate::DesignToken,

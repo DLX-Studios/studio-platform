@@ -12,6 +12,7 @@ pub mod command;
 pub mod content;
 mod engine;
 pub mod mcp;
+pub mod manipulation;
 pub mod model;
 pub mod navigation;
 pub mod persistence;
@@ -41,6 +42,14 @@ pub use command::{
 pub use content::*;
 pub use engine::{DefaultDesignerSession, validate_layout};
 pub use mcp::{McpClient, McpClientError};
+pub use manipulation::{
+    CANVAS_RECT_PROPERTY, CanvasAlignment, CanvasDistribution, CanvasGeometry, CanvasPoint,
+    CanvasRect, CanvasSize, GestureContext, GuideAxis, GuideKind, HierarchyEdit, HierarchyNode,
+    HierarchySnapshot, HitTestEntry, HitTestIndex, ManipulationError, ResizeHandle, SnapConfig,
+    SnapGuide, SnapResult, align_batch, alignment_targets, delete_batch, distribute_batch,
+    distribution_targets, drag_batch, duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch,
+    nudge_batch, reorder_batch, reparent_batch, resize_batch, resize_rect, restore_batch,
+};
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, Alignment, BindingId,
     BindingPath, BindingSource, BorderToken, CollectionId, CollectionPreview, ColorValue,
