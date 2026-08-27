@@ -8,7 +8,7 @@
 use std::{env, path::PathBuf};
 
 use serde_json::json;
-use studio_host::{Durability, EmbeddedLocalStore, StoreBatch, StoreBatchEntry};
+use studio_host::{Durability, EmbeddedLocalStore, LocalStore, StoreBatch, StoreBatchEntry};
 
 const PAUSE_MARKER_FILE: &str = ".studio-localstore-test-paused";
 const DURABLE_BATCH_ID: &str = "durable-before-termination";

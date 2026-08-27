@@ -59,7 +59,7 @@ pub enum ApplicationEnvironment {
 }
 
 impl ApplicationEnvironment {
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Development => "development",
             Self::Staging => "staging",

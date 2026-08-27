@@ -745,12 +745,9 @@ impl EmbeddedLocalStore {
         // UNVERIFIED(runtime): killing the process while this client-side
         // transaction is open must leave no visible record; the kill-recovery
         // harness asserts exactly that.
-        let transaction = match self.database.clone().begin().await {
-            Ok(transaction) => transaction,
-            Err(_) => {
-                let _ = std::fs::write(marker, b"begin-failed");
-                return;
-            }
+        let Ok(transaction) = self.database.clone().begin().await else {
+            let _ = std::fs::write(marker, b"begin-failed");
+            return;
         };
         let record = persisted_batch(batch);
         let written: Result<Option<PersistedBatch>, surrealdb::Error> = transaction

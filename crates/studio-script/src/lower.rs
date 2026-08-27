@@ -27,9 +27,7 @@
 use std::collections::BTreeSet;
 
 use studio_protocol::NodeKind;
-use studio_script::{
-    AttributeValue, Diagnostic, Element, Location, Node, Severity, Span, StudioDocument,
-};
+use crate::{AttributeValue, Diagnostic, Element, Location, Node, Severity, Span, StudioDocument};
 
 use crate::ir::{IrElement, IrNavigationAction, IrNavigationOperation, IrProperty, IrScreen, IrText, IrNode, IrTriggerEvent};
 
@@ -97,7 +95,7 @@ pub fn lower_document(
 
     let mut ids = BTreeSet::new();
     for root in &document.nodes {
-        collect_ids(root, &mut ids);
+        collect_ids_from_element(root, &mut ids);
     }
 
     for root in &document.nodes {
@@ -125,10 +123,14 @@ pub fn lower_document(
 
 fn collect_ids(node: &Node, ids: &mut BTreeSet<String>) {
     if let Node::Element(element) = node {
-        ids.insert(element.id.clone());
-        for child in &element.children {
-            collect_ids(child, ids);
-        }
+        collect_ids_from_element(element, ids);
+    }
+}
+
+fn collect_ids_from_element(element: &Element, ids: &mut BTreeSet<String>) {
+    ids.insert(element.id.clone());
+    for child in &element.children {
+        collect_ids(child, ids);
     }
 }
 
