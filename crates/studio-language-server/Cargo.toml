@@ -1,0 +1,19 @@
+[package]
+name = "studio-language-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Headless Studio Script language server"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+studio-script = { path = "../studio-script" }
+
+[[bin]]
+name = "studio-language-server"
+path = "src/bin/studio-language-server.rs"
+
+[lints]
+workspace = true

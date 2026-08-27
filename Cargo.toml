@@ -11,6 +11,7 @@ members = [
     "crates/studio-protocol",
     "crates/studio-security",
     "crates/studio-script",
+    "crates/studio-language-server",
     "crates/studio-testkit",
     "crates/studio-ui",
     "crates/studio-wasm",
