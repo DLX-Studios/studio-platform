@@ -11,6 +11,7 @@ use studio_design::{
     DesignNode, DesignerQuery, DesignerQueryResult, DesignerSession, HistoryOperation, NodeId,
     NodeKind, NodeParent, OperationId, ProjectId, PropertyValue, RevisionId,
     STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, StudioDesign, UndoGroupId,
+    WORKSPACE_STATE_SCHEMA_VERSION, WorkspacePersistence, WorkspaceRecord, WorkspaceState,
 };
 use studio_host::{Durability, EmbeddedLocalStore, LocalStore, LocalStoreDesignerPersistence};
 use tokio::runtime::Builder;
@@ -240,5 +241,61 @@ fn forced_termination_recovers_the_last_accepted_designer_revision() {
                 Err(_) => panic!("the recovered session owns the only adapter"),
             };
             store.close().await.expect("recovered store closes");
+        });
+}
+
+#[test]
+fn real_local_store_persists_focus_and_workbench_panel_geometry() {
+    let directory = tempfile::tempdir().expect("temporary RocksDB directory");
+    Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime starts")
+        .block_on(async {
+            let store = EmbeddedLocalStore::open(directory.path(), Durability::Every)
+                .await
+                .expect("LocalStore opens");
+            let persistence =
+                LocalStoreDesignerPersistence::new(store).expect("durable store is admitted");
+            let mut state = WorkspaceState::new();
+            state.workbench.set_geometry(
+                studio_design::PanelId::Inspector,
+                studio_design::PanelGeometry::new(32, 48, 600, 720),
+            );
+            let record = WorkspaceRecord {
+                schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
+                project_id: project_id(),
+                state,
+            };
+            persistence.save(&record).await.expect("workspace saves");
+            let store = persistence
+                .try_into_store()
+                .ok()
+                .expect("adapter owns the only store handle");
+            store.close().await.expect("first store closes");
+
+            let store = EmbeddedLocalStore::open(directory.path(), Durability::Every)
+                .await
+                .expect("LocalStore reopens");
+            let persistence =
+                LocalStoreDesignerPersistence::new(store).expect("reopened store is admitted");
+            let reopened = persistence
+                .load(&project_id())
+                .await
+                .expect("workspace loads")
+                .expect("workspace record exists");
+            assert_eq!(
+                reopened
+                    .state
+                    .workbench
+                    .panel(studio_design::PanelId::Inspector)
+                    .geometry,
+                studio_design::PanelGeometry::new(32, 48, 600, 720)
+            );
+            let store = persistence
+                .try_into_store()
+                .ok()
+                .expect("reopened adapter owns the only store handle");
+            store.close().await.expect("reopened store closes");
         });
 }

@@ -15,6 +15,7 @@ pub mod persistence;
 pub mod projection;
 pub mod responsive;
 pub mod session;
+pub mod workspace;
 
 pub use agent::{
     AgentBatch, AgentBatchOutcome, AgentBatchResult, AgentCancellation, AgentChannel,
@@ -63,8 +64,15 @@ pub use responsive::{
     ResponsiveValue, Viewport, compare_profiles, inspect_node, resolve_node, select_variant,
 };
 pub use session::{
-    BatchConflict, CanvasStateSnapshot, CommandOutcome, CommandReceipt, DesignerQuery,
-    DesignerQueryResult, DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate,
-    SessionError, SessionStateSnapshot, ToolKind,
+    AgentRun, AgentRunStatus, BatchConflict, CanvasStateSnapshot, CanvasTransform, CommandOutcome,
+    CommandReceipt, DesignerQuery, DesignerQueryResult, DesignerSession, HistoryOperation,
+    HistorySnapshot, SessionContextUpdate, SessionError, SessionStateSnapshot, ToolKind,
+    UnsavedWork,
 };
 pub use studio_protocol::NodeKind;
+pub use workspace::{
+    CommandDescriptor, EditorView, InMemoryWorkspacePersistence, PanelArrangement, PanelGeometry,
+    PanelId, PanelState, ViewSwitchSnapshot, WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceCommand,
+    WorkspaceController, WorkspaceError, WorkspacePersistence, WorkspaceRecord, WorkspaceState,
+    command_registry, find_commands,
+};

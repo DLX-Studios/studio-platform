@@ -190,6 +190,12 @@ pub struct SessionStateSnapshot {
     pub active_screen_id: Option<crate::ScreenId>,
     pub device_profile: Option<String>,
     pub tool: ToolKind,
+    #[serde(default)]
+    pub canvas_transform: CanvasTransform,
+    #[serde(default)]
+    pub runs: Vec<AgentRun>,
+    #[serde(default)]
+    pub unsaved_work: UnsavedWork,
     pub panel_state: BTreeMap<String, bool>,
     pub history_cursor: usize,
     pub canvas: CanvasStateSnapshot,
@@ -222,8 +228,74 @@ pub struct SessionContextUpdate {
     pub active_screen_id: Option<Option<crate::ScreenId>>,
     pub device_profile: Option<Option<String>>,
     pub tool: Option<ToolKind>,
+    pub canvas_transform: Option<CanvasTransform>,
+    pub runs: Option<Vec<AgentRun>>,
+    pub unsaved_work: Option<UnsavedWork>,
     pub panel_state: Option<BTreeMap<String, bool>>,
     pub canvas: Option<CanvasStateSnapshot>,
+}
+
+/// Deterministic canvas pan and zoom state shared by every editor view.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasTransform {
+    /// Zoom in thousandths (1000 is 100%).
+    pub zoom_milli: u32,
+    /// Horizontal canvas translation in workspace pixels.
+    pub offset_x: i32,
+    /// Vertical canvas translation in workspace pixels.
+    pub offset_y: i32,
+}
+
+impl CanvasTransform {
+    /// The standard 100% transform.
+    pub const IDENTITY: Self = Self {
+        zoom_milli: 1_000,
+        offset_x: 0,
+        offset_y: 0,
+    };
+}
+
+impl Default for CanvasTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+/// Lifecycle state of an agent operation visible in the activity surface.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunStatus {
+    /// The operation is still producing progress or commands.
+    Running,
+    /// The operation completed successfully.
+    Completed,
+    /// The operation stopped with a failure diagnostic.
+    Failed,
+    /// The operation was cancelled by the user.
+    Cancelled,
+}
+
+/// Safe, session-owned activity metadata for one agent operation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRun {
+    /// Operation identity shared with receipts and history.
+    pub operation_id: OperationId,
+    /// Current lifecycle state.
+    pub status: AgentRunStatus,
+    /// Coarse progress percentage, bounded to 0..=100 by callers.
+    pub progress_percent: u8,
+}
+
+/// Unsaved authoring work that must survive presentation changes.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnsavedWork {
+    /// Whether there is work not yet committed as a Designer command.
+    pub dirty: bool,
+    /// Optional stable source/buffer identity for the dirty work.
+    pub buffer_id: Option<String>,
 }
 
 /// Closed set of primary authoring tools.
