@@ -8102,6 +8102,17 @@ name = "studio-navigation"
 version = "0.1.0"
 
 [[package]]
+name = "studio-net"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "studio-security",
+ "zeroize",
+]
+
+[[package]]
 name = "studio-package"
 version = "0.1.0"
 dependencies = [
