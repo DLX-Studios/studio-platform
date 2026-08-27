@@ -6,6 +6,7 @@
 //! model is deliberately independent of GPUI, storage engines, cloud
 //! transports, and Runtime UI trees.
 
+pub mod agent;
 pub mod command;
 mod engine;
 pub mod model;
@@ -14,6 +15,14 @@ pub mod projection;
 pub mod responsive;
 pub mod session;
 
+pub use agent::{
+    AgentBatch, AgentBatchOutcome, AgentBatchResult, AgentCancellation, AgentChannel,
+    AgentCheckFeedback, AgentChecker, AgentCommandBatch, AgentCommandSchema, AgentConflict,
+    AgentEvent, AgentEventSink, AgentProgress, AgentProjectSummary, AgentReadError,
+    AgentReadResult, AgentReadScope, AgentRunError, AgentRunId, AgentRunRequest, AgentRunSummary,
+    AgentSchemaSnapshot, AgentScope, AgentSubtreeSnapshot, InvalidAgentRunId, LiveAgentChannel,
+    NoopAgentChecker, NoopAgentEventSink,
+};
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
