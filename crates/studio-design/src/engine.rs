@@ -8,9 +8,10 @@ use crate::{
     },
     model::{
         Actor, DeletionTombstone, DesignNode, DesignNodeSource, DesignerDiagnostic,
-        DiagnosticSeverity, InteractionAction, NodeId, NodeParent, OperationId, ProjectId,
-        PropertyValue, RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION,
-        SelectionSnapshot, StudioDesign, StudioDesignSnapshot, TombstoneReference, UndoGroupId,
+        DiagnosticSeverity, InspectedTokenValue, InteractionAction, NodeId, NodeParent,
+        OperationId, ProjectId, PropertyValue, RevisionId, RevisionMetadata, RevisionReason,
+        STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot, StudioDesign, StudioDesignSnapshot,
+        TokenId, TokenKind, TokenOverride, TokenUsage, TokenValue, TombstoneReference, UndoGroupId,
     },
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
     session::{
@@ -374,6 +375,18 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
             DesignerQuery::Node { node_id } => {
                 DesignerQueryResult::Node(self.state.current.design.nodes.get(&node_id).cloned())
             }
+            DesignerQuery::Tokens => DesignerQueryResult::Tokens(
+                self.state.current.design.tokens.values().cloned().collect(),
+            ),
+            DesignerQuery::Token { token_id } => {
+                DesignerQueryResult::Token(self.state.current.design.tokens.get(&token_id).cloned())
+            }
+            DesignerQuery::TokenUsages { token_id } => {
+                DesignerQueryResult::TokenUsages(token_usages(&self.state.current, &token_id))
+            }
+            DesignerQuery::NodeTokenValues { node_id } => DesignerQueryResult::NodeTokenValues(
+                inspected_token_values(&self.state.current, &node_id),
+            ),
             DesignerQuery::Diagnostics => {
                 DesignerQueryResult::Diagnostics(self.state.diagnostics.clone())
             }
@@ -502,6 +515,12 @@ fn failed_precondition(design: &StudioDesign, conditions: &[CommandPrecondition]
             .nodes
             .get(node_id)
             .is_none_or(|node| node.properties.get(property) != value.as_ref()),
+        CommandPrecondition::TokenExists { token_id } => !design.tokens.contains_key(token_id),
+        CommandPrecondition::TokenMissing { token_id } => design.tokens.contains_key(token_id),
+        CommandPrecondition::TokenValueEquals { token_id, value } => design
+            .tokens
+            .get(token_id)
+            .is_none_or(|token| token.value != *value),
     })
 }
 
@@ -544,7 +563,555 @@ fn apply_command(
             value,
         } => set_property(snapshot, node_id, property, value.as_ref()),
         Command::RenameNode { node_id, name } => rename_node(snapshot, node_id, name),
+        Command::CreateToken { token } => create_token(snapshot, token),
+        Command::EditToken { token_id, value } => edit_token(snapshot, token_id, value),
+        Command::ApplyToken {
+            node_id,
+            property,
+            token_id,
+        } => apply_token(snapshot, node_id, property, token_id),
+        Command::OverrideToken {
+            node_id,
+            property,
+            value,
+        } => override_token(snapshot, node_id, property, value),
+        Command::ClearTokenOverride { node_id, property } => {
+            clear_token_override(snapshot, node_id, property)
+        }
+        Command::RenameToken { token_id, name } => rename_token(snapshot, token_id, name),
+        Command::DeleteToken { token_id, confirm } => delete_token(snapshot, token_id, *confirm),
+        Command::SetTokenOverride {
+            node_id,
+            property,
+            value,
+        } => set_token_override(snapshot, node_id, property, value.as_ref()),
+        Command::RestoreTokenApplication {
+            node_id,
+            property,
+            property_value,
+            override_value,
+        } => restore_token_application(
+            snapshot,
+            node_id,
+            property,
+            property_value.as_ref(),
+            override_value.as_ref(),
+        ),
     }
+}
+
+fn create_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token: &crate::DesignToken,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_token(token)?;
+    if snapshot.design.tokens.contains_key(&token.id) {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_EXISTS",
+            format!("token identity {} already exists", token.id),
+            None,
+        ));
+    }
+    snapshot
+        .design
+        .tokens
+        .insert(token.id.clone(), token.clone());
+    Ok(Command::DeleteToken {
+        token_id: token.id.clone(),
+        confirm: true,
+    })
+}
+
+fn edit_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token_id: &TokenId,
+    value: &TokenValue,
+) -> Result<Command, DesignerDiagnostic> {
+    let token = snapshot
+        .design
+        .tokens
+        .get_mut(token_id)
+        .ok_or_else(|| token_missing(token_id))?;
+    validate_token_value(token.kind, value)?;
+    let prior = std::mem::replace(&mut token.value, value.clone());
+    Ok(Command::EditToken {
+        token_id: token_id.clone(),
+        value: prior,
+    })
+}
+
+fn apply_token(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+    token_id: &TokenId,
+) -> Result<Command, DesignerDiagnostic> {
+    if !valid_field_name(property) {
+        return Err(node_diagnostic(
+            "DESIGN_PROPERTY_INVALID",
+            "a property name must contain 1..=128 safe bytes",
+            node_id,
+        ));
+    }
+    if !snapshot.design.tokens.contains_key(token_id) {
+        return Err(token_missing(token_id));
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node
+        .properties
+        .insert(property.to_owned(), PropertyValue::Token(token_id.clone()));
+    let prior_override = node.token_overrides.remove(property);
+    Ok(Command::RestoreTokenApplication {
+        node_id: node_id.clone(),
+        property: property.to_owned(),
+        property_value: prior,
+        override_value: prior_override,
+    })
+}
+
+fn override_token(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+    value: &TokenValue,
+) -> Result<Command, DesignerDiagnostic> {
+    let token_id = bound_token_id(snapshot, node_id, property)?;
+    let token = snapshot
+        .design
+        .tokens
+        .get(&token_id)
+        .ok_or_else(|| token_missing(&token_id))?;
+    validate_token_value(token.kind, value)?;
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .expect("binding was validated");
+    let prior = node.token_overrides.insert(
+        property.to_owned(),
+        TokenOverride {
+            token_id,
+            value: value.clone(),
+        },
+    );
+    Ok(match prior {
+        Some(value) => Command::SetTokenOverride {
+            node_id: node_id.clone(),
+            property: property.to_owned(),
+            value: Some(value),
+        },
+        None => Command::ClearTokenOverride {
+            node_id: node_id.clone(),
+            property: property.to_owned(),
+        },
+    })
+}
+
+fn clear_token_override(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+) -> Result<Command, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node.token_overrides.remove(property).ok_or_else(|| {
+        node_diagnostic(
+            "DESIGN_TOKEN_OVERRIDE_MISSING",
+            "the property has no local token override",
+            node_id,
+        )
+    })?;
+    Ok(Command::SetTokenOverride {
+        node_id: node_id.clone(),
+        property: property.to_owned(),
+        value: Some(prior),
+    })
+}
+
+fn set_token_override(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+    value: Option<&TokenOverride>,
+) -> Result<Command, DesignerDiagnostic> {
+    let current_binding = bound_token_id(snapshot, node_id, property)?;
+    if let Some(value) = value {
+        if value.token_id != current_binding {
+            return Err(node_diagnostic(
+                "DESIGN_TOKEN_OVERRIDE_BINDING",
+                "a local override must retain the property's current token binding",
+                node_id,
+            ));
+        }
+        let token = snapshot
+            .design
+            .tokens
+            .get(&value.token_id)
+            .ok_or_else(|| token_missing(&value.token_id))?;
+        validate_token_value(token.kind, &value.value)?;
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .expect("binding was validated");
+    let prior = match value {
+        Some(value) => node
+            .token_overrides
+            .insert(property.to_owned(), value.clone()),
+        None => node.token_overrides.remove(property),
+    };
+    Ok(Command::SetTokenOverride {
+        node_id: node_id.clone(),
+        property: property.to_owned(),
+        value: prior,
+    })
+}
+
+fn restore_token_application(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+    property_value: Option<&PropertyValue>,
+    override_value: Option<&TokenOverride>,
+) -> Result<Command, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior_property = match property_value {
+        Some(value) => node.properties.insert(property.to_owned(), value.clone()),
+        None => node.properties.remove(property),
+    };
+    let prior_override = match override_value {
+        Some(value) => node
+            .token_overrides
+            .insert(property.to_owned(), value.clone()),
+        None => node.token_overrides.remove(property),
+    };
+    Ok(Command::RestoreTokenApplication {
+        node_id: node_id.clone(),
+        property: property.to_owned(),
+        property_value: prior_property,
+        override_value: prior_override,
+    })
+}
+
+fn rename_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token_id: &TokenId,
+    name: &str,
+) -> Result<Command, DesignerDiagnostic> {
+    if name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_NAME_INVALID",
+            "a token name must contain 1..=256 safe bytes",
+            None,
+        ));
+    }
+    let token = snapshot
+        .design
+        .tokens
+        .get_mut(token_id)
+        .ok_or_else(|| token_missing(token_id))?;
+    let prior = std::mem::replace(&mut token.name, name.to_owned());
+    Ok(Command::RenameToken {
+        token_id: token_id.clone(),
+        name: prior,
+    })
+}
+
+fn delete_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token_id: &TokenId,
+    confirm: bool,
+) -> Result<Command, DesignerDiagnostic> {
+    if !snapshot.design.tokens.contains_key(token_id) {
+        return Err(token_missing(token_id));
+    }
+    let usages = token_usages(snapshot, token_id);
+    if !usages.is_empty() && !confirm {
+        let listed = usages
+            .iter()
+            .map(|usage| format!("{}:{}", usage.owner, usage.property))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(diagnostic(
+            "DESIGN_TOKEN_DELETE_CONFIRMATION_REQUIRED",
+            format!("token {token_id} is used by {listed}; confirm deletion to continue"),
+            None,
+        ));
+    }
+    let token = snapshot
+        .design
+        .tokens
+        .remove(token_id)
+        .expect("existence was checked");
+    Ok(Command::CreateToken {
+        token: Box::new(token),
+    })
+}
+
+fn bound_token_id(
+    snapshot: &StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+) -> Result<TokenId, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    match node.properties.get(property) {
+        Some(PropertyValue::Token(token_id)) => Ok(token_id.clone()),
+        _ => Err(node_diagnostic(
+            "DESIGN_TOKEN_BINDING_REQUIRED",
+            "the property must be bound to a token before it can be overridden",
+            node_id,
+        )),
+    }
+}
+
+fn validate_token(token: &crate::DesignToken) -> Result<(), DesignerDiagnostic> {
+    if token.schema_version != STUDIO_DESIGN_SCHEMA_VERSION {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_INVALID",
+            "a token schema version is unsupported",
+            None,
+        ));
+    }
+    if token.name.trim().is_empty()
+        || token.name.len() > 256
+        || token.name.chars().any(char::is_control)
+    {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_NAME_INVALID",
+            "a token name must contain 1..=256 safe bytes",
+            None,
+        ));
+    }
+    validate_token_value(token.kind, &token.value)
+}
+
+fn validate_token_value(kind: TokenKind, value: &TokenValue) -> Result<(), DesignerDiagnostic> {
+    let compatible = match kind {
+        TokenKind::Color => matches!(value, TokenValue::Color(_)),
+        TokenKind::Typography => matches!(value, TokenValue::Typography(_)),
+        TokenKind::Spacing | TokenKind::Radius | TokenKind::Length => {
+            matches!(value, TokenValue::Length(_))
+        }
+        TokenKind::Border => matches!(value, TokenValue::Border(_)),
+        TokenKind::Shadow => matches!(value, TokenValue::Shadow(_)),
+        TokenKind::Motion => matches!(value, TokenValue::Motion(_)),
+        TokenKind::Number => matches!(value, TokenValue::Number(_)),
+        TokenKind::String => matches!(value, TokenValue::String(_)),
+    };
+    compatible.then_some(()).ok_or_else(|| {
+        diagnostic(
+            "DESIGN_TOKEN_VALUE_KIND_MISMATCH",
+            "the token value does not match the token kind",
+            None,
+        )
+    })
+}
+
+fn token_missing(token_id: &TokenId) -> DesignerDiagnostic {
+    diagnostic(
+        "DESIGN_TOKEN_MISSING",
+        format!("the command references unknown token {token_id}"),
+        None,
+    )
+}
+
+fn token_usages(snapshot: &StudioDesignSnapshot, token_id: &TokenId) -> Vec<TokenUsage> {
+    let mut usages = Vec::new();
+    for (node_id, node) in &snapshot.design.nodes {
+        for (property, value) in &node.properties {
+            collect_token_usages(
+                value,
+                token_id,
+                format!("node:{node_id}"),
+                property,
+                Some(node_id),
+                node.token_overrides
+                    .get(property)
+                    .map(|override_value| override_value.value.clone()),
+                &mut usages,
+            );
+        }
+        collect_paint_usage(
+            node.style.background.as_ref(),
+            token_id,
+            node_id,
+            "style.background",
+            &mut usages,
+        );
+        collect_paint_usage(
+            node.style.foreground.as_ref(),
+            token_id,
+            node_id,
+            "style.foreground",
+            &mut usages,
+        );
+        collect_paint_usage(
+            node.style.border_color.as_ref(),
+            token_id,
+            node_id,
+            "style.border_color",
+            &mut usages,
+        );
+        if let DesignNodeSource::CompositionInstance {
+            inputs,
+            admitted_overrides,
+            ..
+        } = &node.source
+        {
+            for (property, value) in inputs {
+                collect_token_usages(
+                    value,
+                    token_id,
+                    format!("node:{node_id}.inputs"),
+                    property,
+                    Some(node_id),
+                    None,
+                    &mut usages,
+                );
+            }
+            for (property, value) in admitted_overrides {
+                collect_token_usages(
+                    value,
+                    token_id,
+                    format!("node:{node_id}.admitted_overrides"),
+                    property,
+                    Some(node_id),
+                    None,
+                    &mut usages,
+                );
+            }
+        }
+        for (variant_id, responsive) in &node.responsive_overrides {
+            for (property, value) in &responsive.properties {
+                collect_token_usages(
+                    value,
+                    token_id,
+                    format!("node:{node_id}.responsive:{variant_id}"),
+                    property,
+                    Some(node_id),
+                    None,
+                    &mut usages,
+                );
+            }
+        }
+    }
+    for (interaction_id, interaction) in &snapshot.design.interactions {
+        if let InteractionAction::SetProperty {
+            node_id,
+            property,
+            value,
+        } = &interaction.action
+        {
+            collect_token_usages(
+                value,
+                token_id,
+                format!("interaction:{interaction_id}"),
+                property,
+                Some(node_id),
+                None,
+                &mut usages,
+            );
+        }
+    }
+    usages
+}
+
+fn collect_token_usages(
+    value: &PropertyValue,
+    token_id: &TokenId,
+    owner: String,
+    property: &str,
+    node_id: Option<&NodeId>,
+    local_override: Option<TokenValue>,
+    usages: &mut Vec<TokenUsage>,
+) {
+    match value {
+        PropertyValue::Token(found) if found == token_id => usages.push(TokenUsage {
+            token_id: token_id.clone(),
+            owner,
+            property: property.to_owned(),
+            node_id: node_id.cloned(),
+            local_override,
+        }),
+        PropertyValue::List(values) => {
+            for (index, value) in values.iter().enumerate() {
+                collect_token_usages(
+                    value,
+                    token_id,
+                    owner.clone(),
+                    &format!("{property}[{index}]"),
+                    node_id,
+                    None,
+                    usages,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_paint_usage(
+    paint: Option<&crate::Paint>,
+    token_id: &TokenId,
+    node_id: &NodeId,
+    property: &str,
+    usages: &mut Vec<TokenUsage>,
+) {
+    if matches!(paint, Some(crate::Paint::Token(found)) if found == token_id) {
+        usages.push(TokenUsage {
+            token_id: token_id.clone(),
+            owner: format!("node:{node_id}"),
+            property: property.to_owned(),
+            node_id: Some(node_id.clone()),
+            local_override: None,
+        });
+    }
+}
+
+fn inspected_token_values(
+    snapshot: &StudioDesignSnapshot,
+    node_id: &NodeId,
+) -> Vec<InspectedTokenValue> {
+    let Some(node) = snapshot.design.nodes.get(node_id) else {
+        return Vec::new();
+    };
+    node.properties
+        .iter()
+        .filter_map(|(property, value)| {
+            let PropertyValue::Token(token_id) = value else {
+                return None;
+            };
+            Some(InspectedTokenValue {
+                property: property.clone(),
+                token_id: token_id.clone(),
+                shared_value: snapshot
+                    .design
+                    .tokens
+                    .get(token_id)
+                    .map(|token| token.value.clone()),
+                local_value: node
+                    .token_overrides
+                    .get(property)
+                    .map(|override_value| override_value.value.clone()),
+            })
+        })
+        .collect()
 }
 
 fn insert_node(
@@ -1227,7 +1794,7 @@ fn finalize_inverse_tombstones(commands: &mut [Command], revision: RevisionId) {
 }
 
 fn reference_diagnostics(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnostic> {
-    snapshot
+    let mut diagnostics = snapshot
         .tombstones
         .values()
         .flat_map(|tombstone| &tombstone.references)
@@ -1241,7 +1808,34 @@ fn reference_diagnostics(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnos
             node_id: Some(reference.target_node_id.clone()),
             interaction_id: None,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let token_ids = snapshot
+        .design
+        .nodes
+        .values()
+        .flat_map(|node| node.properties.values())
+        .filter_map(|value| match value {
+            PropertyValue::Token(token_id) => Some(token_id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for token_id in token_ids {
+        if !snapshot.design.tokens.contains_key(token_id) {
+            for usage in token_usages(snapshot, token_id) {
+                diagnostics.push(DesignerDiagnostic {
+                    code: "DESIGN_TOKEN_REFERENCE_MISSING".to_owned(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!(
+                        "{} still references deleted token {} through {}",
+                        usage.owner, token_id, usage.property
+                    ),
+                    node_id: usage.node_id,
+                    interaction_id: None,
+                });
+            }
+        }
+    }
+    diagnostics
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1385,10 +1979,16 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
         }
     }
     for (token_id, token) in &design.tokens {
-        if token.schema_version != STUDIO_DESIGN_SCHEMA_VERSION || token.id != *token_id {
+        if token.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+            || token.id != *token_id
+            || token.name.trim().is_empty()
+            || token.name.len() > 256
+            || token.name.chars().any(char::is_control)
+            || validate_token_value(token.kind, &token.value).is_err()
+        {
             diagnostics.push(diagnostic(
                 "DESIGN_TOKEN_INVALID",
-                "a token identity or schema version is invalid",
+                "a token identity, name, schema version, or typed value is invalid",
                 None,
             ));
         }

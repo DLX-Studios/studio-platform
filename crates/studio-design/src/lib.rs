@@ -17,15 +17,17 @@ pub use command::{
 };
 pub use engine::DefaultDesignerSession;
 pub use model::{
-    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
-    CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
-    DesignerDiagnostic, DiagnosticSeverity, Interaction, InteractionAction, InteractionEvent,
-    InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit, LibraryAssetId,
-    NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId, PropertyValue,
-    ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId, ReusableComposition,
-    RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId,
-    SelectionSnapshot, SlotDefinition, StudioDesign, StudioDesignSnapshot, StyleProperties,
-    TokenId, TokenKind, TokenValue, TombstoneReference, UndoGroupId, ValueKind,
+    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath,
+    BorderToken, ColorValue, CompositionId, CompositionInput, DeletionTombstone, DesignNode,
+    DesignNodeSource, DesignToken, DesignerDiagnostic, DiagnosticSeverity, InspectedTokenValue,
+    Interaction, InteractionAction, InteractionEvent, InteractionId, InteractionSource,
+    LayoutProperties, Length, LengthUnit, LibraryAssetId, MotionToken, NavigationMode, NodeId,
+    NodeParent, OperationId, Paint, ProjectId, PropertyValue, ResponsiveNodeOverride,
+    ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, RevisionMetadata,
+    RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, ShadowToken,
+    SlotDefinition, StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind,
+    TokenOverride, TokenUsage, TokenValue, TombstoneReference, TypographyToken, UndoGroupId,
+    ValueKind,
 };
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,

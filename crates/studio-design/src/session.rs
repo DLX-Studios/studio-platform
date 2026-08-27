@@ -12,8 +12,8 @@ use thiserror::Error;
 use crate::{
     command::{CommandBatch, HistoryEntry},
     model::{
-        Actor, DesignerDiagnostic, NodeId, OperationId, ProjectId, RevisionId, SelectionSnapshot,
-        StudioDesignSnapshot, UndoGroupId,
+        Actor, DesignerDiagnostic, InspectedTokenValue, NodeId, OperationId, ProjectId, RevisionId,
+        SelectionSnapshot, StudioDesignSnapshot, TokenId, TokenUsage, UndoGroupId,
     },
     persistence::{PersistenceError, SessionFuture},
 };
@@ -42,12 +42,17 @@ pub trait DesignerSession: Send {
 pub enum DesignerQuery {
     Snapshot,
     Node { node_id: NodeId },
+    Tokens,
+    Token { token_id: TokenId },
+    TokenUsages { token_id: TokenId },
+    NodeTokenValues { node_id: NodeId },
     Diagnostics,
     History,
     SessionState,
 }
 
 /// Owned immutable result of one typed query.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(
     tag = "type",
@@ -58,6 +63,10 @@ pub enum DesignerQuery {
 pub enum DesignerQueryResult {
     Snapshot(StudioDesignSnapshot),
     Node(Option<crate::DesignNode>),
+    Tokens(Vec<crate::DesignToken>),
+    Token(Option<crate::DesignToken>),
+    TokenUsages(Vec<TokenUsage>),
+    NodeTokenValues(Vec<InspectedTokenValue>),
     Diagnostics(Vec<DesignerDiagnostic>),
     History(HistorySnapshot),
     SessionState(SessionStateSnapshot),
