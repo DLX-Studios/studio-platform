@@ -12,17 +12,17 @@
 
 use std::collections::BTreeSet;
 
-use schemars::JsonSchema;
+use schemars::JsonSchema as SchemarsJsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use studio_security::ProtectedSecretKey;
 
 use crate::error::{BrokerError, BrokerErrorCode};
 use crate::limits::{BrokerLimits, DeclaredLimits, EffectiveLimits};
-use crate::schema::JsonSchema;
+use crate::schema::JsonSchema as BoundedSchema;
 
 /// Closed HTTP method catalog admitted by route-group declarations.
-#[derive(Clone, Copy, Debug, Eq, Hash, JsonSchema, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, SchemarsJsonSchema, PartialEq, Deserialize, Serialize)]
 pub enum HttpMethod {
     /// GET.
     #[serde(rename = "GET")]
@@ -118,8 +118,8 @@ impl Origin {
     #[must_use]
     pub fn display(&self) -> String {
         match self.port {
-            Some(port) => format!("{}://{self.host}:{port}", self.scheme),
-            None => format!("{}://{self.host}", self.scheme),
+            Some(port) => format!("{}://{}:{port}", self.scheme, self.host),
+            None => format!("{}://{}", self.scheme, self.host),
         }
     }
 }
@@ -156,8 +156,9 @@ impl PathPattern {
     /// Returns [`BrokerErrorCode::DeclarationInvalid`] for malformed segments or misplaced
     /// remainder wildcards.
     pub fn parse(pattern: &str) -> Result<Self, BrokerError> {
-        let invalid =
-            || BrokerError::with_detail(BrokerErrorCode::DeclarationInvalid, "invalid path pattern");
+        let invalid = || {
+            BrokerError::with_detail(BrokerErrorCode::DeclarationInvalid, "invalid path pattern")
+        };
         if pattern.is_empty() || !pattern.starts_with('/') || pattern.contains("//") {
             return Err(invalid());
         }
@@ -214,8 +215,7 @@ fn matches_from(pattern: &[PathSegment], request: &[&str]) -> bool {
                 && matches_from(rest, &request[1..])
         }
         PathSegment::Literal(literal) => {
-            request.first().is_some_and(|head| head == literal)
-                && matches_from(rest, &request[1..])
+            request.first().is_some_and(|head| head == literal) && matches_from(rest, &request[1..])
         }
     }
 }
@@ -227,7 +227,7 @@ fn matches_from(pattern: &[PathSegment], request: &[&str]) -> bool {
 /// [`BrokerErrorCode::OauthSessionUnavailable`] rather than falling back to generic network
 /// behavior. `namedSecret` names a package-declared protected value injected strictly at send
 /// time through [`studio_security::BrokerSecretInjector`].
-#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, SchemarsJsonSchema, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "source", rename_all_fields = "camelCase")]
 pub enum CredentialSource {
     /// No credential material is attached.
@@ -253,7 +253,7 @@ pub enum CredentialSource {
 }
 
 /// Declared streaming behavior for server-sent-event routes.
-#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, SchemarsJsonSchema, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StreamingDeclaration {
     /// Bounded schema every validated chunk event satisfies before guest visibility.
@@ -271,7 +271,7 @@ pub struct StreamingDeclaration {
 /// A group admits requests whose normalized origin, method, and path all fall inside its lists,
 /// whose headers stay within `allowedHeaders`, whose body satisfies `requestSchema`, and whose
 /// responses satisfy `responseSchema` before any guest visibility.
-#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, SchemarsJsonSchema, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RouteGroupDeclaration {
     /// Stable group identifier referenced by SDK helpers and diagnostics.
@@ -322,9 +322,9 @@ pub struct CompiledRouteGroup {
     paths: Vec<PathPattern>,
     allowed_headers: BTreeSet<String>,
     credential: CompiledCredential,
-    request_schema: Option<JsonSchema>,
-    response_schema: Option<JsonSchema>,
-    chunk_schema: Option<JsonSchema>,
+    request_schema: Option<BoundedSchema>,
+    response_schema: Option<BoundedSchema>,
+    chunk_schema: Option<BoundedSchema>,
     retry_policy: RetryPolicy,
     limits: EffectiveLimits,
 }
@@ -332,8 +332,14 @@ pub struct CompiledRouteGroup {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CompiledCredential {
     Public,
-    OauthProviderSession { provider: String },
-    NamedSecret { key: ProtectedSecretKey, header: String, prefix: Option<String> },
+    OauthProviderSession {
+        provider: String,
+    },
+    NamedSecret {
+        key: ProtectedSecretKey,
+        header: String,
+        prefix: Option<String>,
+    },
 }
 
 impl CompiledRouteGroup {
@@ -375,7 +381,7 @@ impl CompiledRouteGroup {
 
     /// Chunk-event schema for streaming groups.
     #[must_use]
-    pub fn chunk_schema(&self) -> Option<&JsonSchema> {
+    pub fn chunk_schema(&self) -> Option<&BoundedSchema> {
         self.chunk_schema.as_ref()
     }
 
@@ -393,13 +399,13 @@ impl CompiledRouteGroup {
 
     /// Request-body schema, if declared.
     #[must_use]
-    pub fn request_schema(&self) -> Option<&JsonSchema> {
+    pub fn request_schema(&self) -> Option<&BoundedSchema> {
         self.request_schema.as_ref()
     }
 
     /// Response-body schema, if declared.
     #[must_use]
-    pub fn response_schema(&self) -> Option<&JsonSchema> {
+    pub fn response_schema(&self) -> Option<&BoundedSchema> {
         self.response_schema.as_ref()
     }
 
@@ -457,12 +463,10 @@ impl RouteGroupDeclaration {
     ///
     /// Returns [`BrokerErrorCode::DeclarationInvalid`] for any malformed identity, origin,
     /// path, header, credential, schema, streaming, or limit input.
-    pub fn compile(
-        &self,
-        ceilings: &BrokerLimits,
-    ) -> Result<CompiledRouteGroup, BrokerError> {
-        let invalid =
-            |detail: &'static str| BrokerError::with_detail(BrokerErrorCode::DeclarationInvalid, detail.to_owned());
+    pub fn compile(&self, ceilings: &BrokerLimits) -> Result<CompiledRouteGroup, BrokerError> {
+        let invalid = |detail: &'static str| {
+            BrokerError::with_detail(BrokerErrorCode::DeclarationInvalid, detail.to_owned())
+        };
         if !valid_group_id(&self.id) {
             return Err(invalid("invalid route group id"));
         }
@@ -508,11 +512,15 @@ impl RouteGroupDeclaration {
                     provider: provider.clone(),
                 }
             }
-            CredentialSource::NamedSecret { name, header, prefix } => {
-                let Ok(key) = ProtectedSecretKey::new(name.clone(), format!(
-                    "REST broker credential for route group {}",
-                    self.id
-                )) else {
+            CredentialSource::NamedSecret {
+                name,
+                header,
+                prefix,
+            } => {
+                let Ok(key) = ProtectedSecretKey::new(
+                    name.clone(),
+                    format!("REST broker credential for route group {}", self.id),
+                ) else {
                     return Err(invalid("invalid named secret reference"));
                 };
                 if !valid_header_name(header) {
@@ -533,14 +541,18 @@ impl RouteGroupDeclaration {
             }
         };
         let request_schema = match &self.request_schema {
-            Some(value) => Some(JsonSchema::new(value.clone()).map_err(map_schema_error)?),
+            Some(value) => Some(BoundedSchema::new(value.clone()).map_err(map_schema_error)?),
             None => None,
         };
         let response_schema = match (&self.response_schema, &self.streaming) {
             (Some(_), Some(_)) => {
-                return Err(invalid("streaming groups declare a chunk schema, not a response schema"));
+                return Err(invalid(
+                    "streaming groups declare a chunk schema, not a response schema",
+                ));
             }
-            (Some(value), None) => Some(JsonSchema::new(value.clone()).map_err(map_schema_error)?),
+            (Some(value), None) => {
+                Some(BoundedSchema::new(value.clone()).map_err(map_schema_error)?)
+            }
             (None, _) => None,
         };
         let (chunk_schema, retry_policy) = match &self.streaming {
@@ -549,7 +561,10 @@ impl RouteGroupDeclaration {
                     return Err(invalid("streaming routes must declare GET only"));
                 }
                 (
-                    Some(JsonSchema::new(streaming.chunk_schema.clone()).map_err(map_schema_error)?),
+                    Some(
+                        BoundedSchema::new(streaming.chunk_schema.clone())
+                            .map_err(map_schema_error)?,
+                    ),
                     RetryPolicy {
                         max_reconnects: streaming.reconnects.unwrap_or(3),
                         base_delay: std::time::Duration::from_millis(
@@ -614,8 +629,20 @@ pub fn valid_header_name(name: &str) -> bool {
             byte.is_ascii_alphanumeric()
                 || matches!(
                     byte,
-                    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.'
-                        | b'^' | b'_' | b'`' | b'|' | b'~'
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
                 )
         })
 }

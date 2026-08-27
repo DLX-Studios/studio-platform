@@ -14,7 +14,7 @@
 //! 3. Credential injection against a staging-only named secret.
 
 #![cfg(feature = "integration-real")]
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, dead_code)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -64,25 +64,26 @@ fn connect_and_send(request: &OutgoingRequest) -> Result<TcpStream, TransportErr
         .split_once("://")
         .map_or(request.url.as_str(), |(_scheme, rest)| rest);
     let (authority, path) = match rest.split_once('/') {
-        Some((authority, remainder)) => {
-            (authority.to_owned(), format!("/{remainder}"))
-        }
+        Some((authority, remainder)) => (authority.to_owned(), format!("/{remainder}")),
         None => (rest.to_owned(), String::from("/")),
     };
     let (host, port) = match authority.rsplit_once(':') {
         Some((host, port)) => (
             host.to_owned(),
-            port.parse().map_err(|_| TransportError::ConnectionFailure)?,
+            port.parse()
+                .map_err(|_| TransportError::ConnectionFailure)?,
         ),
         None => (authority.clone(), 443),
     };
-    let mut stream = TcpStream::connect((host.as_str(), port))
-        .map_err(|_| TransportError::ConnectionFailure)?;
+    let mut stream =
+        TcpStream::connect((host.as_str(), port)).map_err(|_| TransportError::ConnectionFailure)?;
     stream
         .set_read_timeout(Some(request.timeout))
         .map_err(|_| TransportError::ConnectionFailure)?;
-    let mut http =
-        format!("{} {path} HTTP/1.1\r\nHost: {authority}\r\n", request.method.as_str());
+    let mut http = format!(
+        "{} {path} HTTP/1.1\r\nHost: {authority}\r\n",
+        request.method.as_str()
+    );
     for (name, value) in &request.headers {
         http.push_str(&format!("{name}: {value}\r\n"));
     }

@@ -1,7 +1,7 @@
 //! Response pipeline: malformed or schema-violating responses are rejected before guest
 //! visibility; declared and transport bounds are enforced.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, dead_code)]
 
 mod common;
 
@@ -88,7 +88,9 @@ fn route_without_response_schema_accepts_any_valid_json() {
     let mut group = json_api_group();
     group.response_schema = None;
     let fixture = broker(&[group]);
-    fixture.transport.respond(200, "application/json", "[1,2,3]");
+    fixture
+        .transport
+        .respond(200, "application/json", "[1,2,3]");
     let response = fixture
         .broker
         .execute(get_items_request("/v1/items"))

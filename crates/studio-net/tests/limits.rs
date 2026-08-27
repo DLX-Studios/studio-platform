@@ -1,15 +1,13 @@
 //! Limits enforcement: sliding-window rates, request bounds/schema, timeout mapping, and the
 //! OAuth session seam's fail-closed default.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, dead_code)]
 
 mod common;
 
 use std::sync::Arc;
 
-use common::{
-    broker, broker_with_limits, code_of, get_items_request, json_api_group, ORIGIN,
-};
+use common::{ORIGIN, broker, broker_with_limits, code_of, get_items_request, json_api_group};
 use serde_json::json;
 use studio_net::declaration::{CredentialSource, HttpMethod, RouteGroupDeclaration};
 use studio_net::error::BrokerErrorCode;
@@ -89,10 +87,12 @@ fn valid_request_body_passes_and_rides_the_send() {
     assert_eq!(response.status(), 201);
     let request = &fixture.transport.recorded_requests()[0];
     assert!(request.body.is_some());
-    assert!(request
-        .headers
-        .iter()
-        .any(|(name, value)| name == "content-type" && value == "application/json"));
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "content-type" && value == "application/json")
+    );
 }
 
 #[test]
@@ -109,7 +109,9 @@ fn transport_timeout_maps_to_stable_code() {
 #[test]
 fn transport_failure_maps_to_stable_code() {
     let fixture = broker(&[json_api_group()]);
-    fixture.transport.fail_exchange(TransportError::ConnectionFailure);
+    fixture
+        .transport
+        .fail_exchange(TransportError::ConnectionFailure);
     let error = fixture
         .broker
         .execute(get_items_request("/v1/items"))

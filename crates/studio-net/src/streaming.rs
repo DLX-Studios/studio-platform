@@ -92,7 +92,7 @@ impl StreamChannel {
             state = self
                 .signal
                 .wait_timeout(state, Duration::from_millis(250))
-                .map_or_else(std::sync::PoisonError::into_inner, |(guard, _result)| guard);
+                .map_or_else(|poison| poison.into_inner().0, |(guard, _result)| guard);
         }
     }
 
@@ -102,7 +102,9 @@ impl StreamChannel {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ChannelState> {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -118,24 +120,27 @@ pub(crate) fn spawn_stream(
     let worker_channel = Arc::clone(&channel);
     let limits = *group.limits();
     let policy = group.retry_policy();
+    let channel_for_handle = Arc::clone(&channel);
     std::thread::Builder::new()
         .name("studio-net-stream".to_owned())
         .spawn(move || {
+            let pump_channel = Arc::clone(&worker_channel);
+            let close_channel = Arc::clone(&worker_channel);
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 pump(
                     transport,
                     group,
                     outgoing,
-                    worker_channel,
+                    pump_channel,
                     token,
                     filter,
                     limits,
                     policy,
                 );
             }));
-            worker_channel.close();
+            close_channel.close();
         })
-        .map(|_join| crate::guest::StreamHandle::new(channel))
+        .map(|_join| crate::guest::StreamHandle::new(channel_for_handle))
         .unwrap_or_else(|_| {
             // Thread spawn failure fails closed: no stream exists, so no events flow.
             channel.push(StreamEvent::Failed(BrokerError::new(
@@ -148,6 +153,7 @@ pub(crate) fn spawn_stream(
 
 #[allow(
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     reason = "the pump interleaves bounds, cancellation, framing, and reconnect policy in one auditable loop"
 )]
 fn pump(
@@ -177,7 +183,16 @@ fn pump(
         }
         match transport.open_stream(clone_outgoing(&outgoing)) {
             Err(error) => {
-                if !retry_or_fail(&channel, &token, &policy, &mut attempt, &mut backoff, &error, started, limits.stream_max_duration) {
+                if !retry_or_fail(
+                    &channel,
+                    &token,
+                    &policy,
+                    &mut attempt,
+                    &mut backoff,
+                    &error,
+                    started,
+                    limits.stream_max_duration,
+                ) {
                     return;
                 }
             }
@@ -198,7 +213,16 @@ fn pump(
                 ) {
                     ConnectionEnd::Completed | ConnectionEnd::Stop => return,
                     ConnectionEnd::Retryable(error) => {
-                        if !retry_or_fail(&channel, &token, &policy, &mut attempt, &mut backoff, &error, started, limits.stream_max_duration) {
+                        if !retry_or_fail(
+                            &channel,
+                            &token,
+                            &policy,
+                            &mut attempt,
+                            &mut backoff,
+                            &error,
+                            started,
+                            limits.stream_max_duration,
+                        ) {
                             return;
                         }
                     }
@@ -219,7 +243,9 @@ fn channel_exhausted(
         return true;
     }
     if started.elapsed() >= max_duration {
-        channel.push(StreamEvent::Failed(BrokerError::new(BrokerErrorCode::Timeout)));
+        channel.push(StreamEvent::Failed(BrokerError::new(
+            BrokerErrorCode::Timeout,
+        )));
         return true;
     }
     false
@@ -227,7 +253,7 @@ fn channel_exhausted(
 
 /// Decide whether another host-owned reconnect fits the policy; emit the terminal failure
 /// otherwise. Returns `false` when the pump must stop.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn retry_or_fail(
     channel: &StreamChannel,
     token: &CancellationToken,
@@ -282,7 +308,9 @@ fn read_connection(
             return ConnectionEnd::Stop;
         }
         if started.elapsed() >= limits.stream_max_duration {
-            channel.push(StreamEvent::Failed(BrokerError::new(BrokerErrorCode::Timeout)));
+            channel.push(StreamEvent::Failed(BrokerError::new(
+                BrokerErrorCode::Timeout,
+            )));
             return ConnectionEnd::Stop;
         }
         match stream.read_chunk() {
@@ -324,6 +352,9 @@ fn read_connection(
                     if let Some(id) = parsed.id {
                         *last_event_id = Some(id);
                     }
+                    if parsed.data.is_empty() {
+                        continue;
+                    }
                     events += 1;
                     if events > limits.max_stream_events {
                         channel.push(StreamEvent::Failed(BrokerError::with_detail(
@@ -362,7 +393,9 @@ fn read_connection(
 
 fn deliver_chunk(schema: &JsonSchema, raw: &str) -> Result<Value, ChunkFailure> {
     let value: Value = serde_json::from_str(raw).map_err(|_| ChunkFailure::Malformed)?;
-    schema.validate(&value).map_err(|_| ChunkFailure::Mismatch)?;
+    schema
+        .validate(&value)
+        .map_err(|_| ChunkFailure::Mismatch)?;
     Ok(value)
 }
 
@@ -380,6 +413,7 @@ fn chunk_contains_registered_material(
         .unwrap_or(true)
 }
 
+#[derive(Clone, Copy)]
 enum ChunkFailure {
     Malformed,
     Mismatch,
@@ -405,7 +439,7 @@ fn sanitize_detail(filter: &Arc<Mutex<SensitiveValueFilter>>, text: &str) -> Str
     filter
         .lock()
         .map(|filter| filter.sanitize(text))
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(|poison| poison.into_inner().sanitize(text))
 }
 
 fn map_transport_error(error: TransportError) -> BrokerError {
@@ -459,20 +493,19 @@ fn parse_sse_frame(frame: &[u8]) -> Option<SseFrame> {
         };
         match field {
             "data" => data_lines.push(value),
-            "id" => {
-                if !value.is_empty()
-                    && value.len() <= 256
-                    && value.bytes().all(|byte| byte.is_ascii_graphic())
-                {
-                    id = Some(value.to_owned());
-                }
+            "id" if !value.is_empty()
+                && value.len() <= 256
+                && value.bytes().all(|byte| byte.is_ascii_graphic()) =>
+            {
+                id = Some(value.to_owned());
             }
+            "id" => {}
             // `event:` typing is declared host-side; server `retry:` hints never override the
             // signed host-owned reconnect policy.
             _ => {}
         }
     }
-    if data_lines.is_empty() {
+    if data_lines.is_empty() && id.is_none() {
         return None;
     }
     Some(SseFrame {

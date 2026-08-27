@@ -1,11 +1,11 @@
 //! Admission denial matrix: undeclared origins, paths, methods, and headers are denied with
 //! stable codes before any transport activity.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, dead_code)]
 
 mod common;
 
-use common::{broker, code_of, get_items_request, json_api_group, ORIGIN};
+use common::{ORIGIN, broker, code_of, get_items_request, json_api_group};
 use studio_net::declaration::HttpMethod;
 use studio_net::error::BrokerErrorCode;
 use studio_net::guest::BrokerRequest;
@@ -136,12 +136,10 @@ fn explicit_default_port_normalizes_away() {
         .expect_err("explicit default port differs from omitted port");
     assert_eq!(code_of(&error), BrokerErrorCode::OriginNotDeclared);
 
-    fixture.transport.respond(200, "application/json", r#"{"id":"a","name":"b"}"#);
-    let request = BrokerRequest::new(
-        format!("{ORIGIN}:443"),
-        HttpMethod::Get,
-        "/v1/items",
-    );
+    fixture
+        .transport
+        .respond(200, "application/json", r#"{"id":"a","name":"b"}"#);
+    let request = BrokerRequest::new(format!("{ORIGIN}:443"), HttpMethod::Get, "/v1/items");
     fixture
         .broker
         .execute(request)

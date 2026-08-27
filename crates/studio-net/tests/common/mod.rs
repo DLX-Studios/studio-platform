@@ -3,13 +3,13 @@
 //! Everything here runs without network, vaults, or wall-clock sensitivity: the transport is a
 //! scripted fake and the credential backend is an in-memory map.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, dead_code)]
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use studio_net::broker::RestBroker;
 use studio_net::declaration::{CredentialSource, HttpMethod, RouteGroupDeclaration};
 use studio_net::error::{BrokerError, BrokerErrorCode};
@@ -19,9 +19,9 @@ use studio_net::transport::{
     ByteStream, HttpTransport, IncomingResponse, OutgoingRequest, TransportError,
 };
 use studio_security::{
-    ApplicationEnvironment, CredentialBackend, CredentialBackendError, CredentialBytes,
-    CredentialLocator, PluginPrincipal, ProtectedSecretKey, ProtectedSecretStore, SecretInput,
-    TrustMode,
+    ApplicationEnvironment, BrokerCredentialSink, BrokerSecretInjector, CredentialBackend,
+    CredentialBackendError, CredentialBytes, CredentialLocator, PluginPrincipal,
+    ProtectedSecretError, ProtectedSecretKey, ProtectedSecretStore, SecretInput, TrustMode,
 };
 
 pub const ORIGIN: &str = "https://api.example.test";
@@ -89,11 +89,14 @@ pub struct ScriptedTransport {
 
 impl ScriptedTransport {
     pub fn respond(&self, status: u16, media_type: &str, body: &str) {
-        self.exchanges.lock().unwrap().push_back(Ok(IncomingResponse {
-            status,
-            media_type: Some(media_type.to_owned()),
-            body: body.as_bytes().to_vec(),
-        }));
+        self.exchanges
+            .lock()
+            .unwrap()
+            .push_back(Ok(IncomingResponse {
+                status,
+                media_type: Some(media_type.to_owned()),
+                body: body.as_bytes().to_vec(),
+            }));
     }
 
     pub fn fail_exchange(&self, error: TransportError) {
@@ -179,10 +182,7 @@ fn broker_with_limits_impl<'store>(
 ) -> Fixture<'store> {
     assert!(limits.validate().is_ok(), "fixture limits must be valid");
     let transport = Arc::new(ScriptedTransport::default());
-    let mut broker = RestBroker::new(
-        Arc::clone(&transport) as Arc<dyn HttpTransport>,
-        limits,
-    );
+    let mut broker = RestBroker::new(Arc::clone(&transport) as Arc<dyn HttpTransport>, limits);
     for group in groups {
         broker
             .declare_group(group)
@@ -208,9 +208,9 @@ pub fn json_api_group() -> RouteGroupDeclaration {
         credential: CredentialSource::Public,
         request_schema: None,
         response_schema: Some(json!({
-            "type": "object",
-            "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
-            "required": ["id", "name"],
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+        "required": ["id", "name"],
         })),
         streaming: None,
         limits: DeclaredLimits::default(),
@@ -227,14 +227,14 @@ pub fn post_items_group() -> RouteGroupDeclaration {
         allowed_headers: vec![String::from("x-request-id")],
         credential: CredentialSource::Public,
         request_schema: Some(json!({
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
         })),
         response_schema: Some(json!({
-            "type": "object",
-            "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
-            "required": ["id", "name"],
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+        "required": ["id", "name"],
         })),
         streaming: None,
         limits: DeclaredLimits::default(),
@@ -253,9 +253,9 @@ pub fn sse_group() -> RouteGroupDeclaration {
         response_schema: None,
         streaming: Some(studio_net::declaration::StreamingDeclaration {
             chunk_schema: json!({
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
             }),
             reconnects: Some(1),
             retry_base_delay_ms: Some(50),
@@ -273,24 +273,54 @@ pub fn code_of(error: &BrokerError) -> BrokerErrorCode {
 }
 
 /// Configured protected secret backed by [`FakeBackend`].
-///
-/// Keep the returned fixture alive for the lifetime of the injection handle.
 pub struct SecretFixture {
+    pub backend: FakeBackend,
     pub store: ProtectedSecretStore<FakeBackend>,
     pub key: ProtectedSecretKey,
 }
 
-impl SecretFixture {
-    pub fn injection_handle(
+/// Owned test injector that does not borrow a temporary `ApplicationSecretStore`.
+pub struct OwnedTestInjector {
+    store: ProtectedSecretStore<FakeBackend>,
+    declarations: std::collections::HashSet<ProtectedSecretKey>,
+}
+
+impl studio_net::credential::NamedSecretInjector for OwnedTestInjector {
+    fn inject_named_secret(
         &self,
-        names: &[ProtectedSecretKey],
-    ) -> studio_security::BrokerSecretInjectionHandle<'_, FakeBackend> {
-        self.store.broker_injection_handle(names.iter().cloned())
+        key: &ProtectedSecretKey,
+        sink: &mut dyn BrokerCredentialSink,
+    ) -> Result<(), ProtectedSecretError> {
+        let principal = PluginPrincipal::new_verified(
+            "publisher.example",
+            "signing-key-1",
+            "com.example.app",
+            [1_u8; 32],
+            [2_u8; 16],
+            TrustMode::Production,
+        )
+        .expect("principal");
+        let application = self
+            .store
+            .for_application(&principal, ApplicationEnvironment::Development)
+            .expect("partition");
+        let handle = application.broker_injection_handle(self.declarations.clone().into_iter());
+        handle.inject_at_send_time(key, sink)
+    }
+}
+
+impl SecretFixture {
+    pub fn injection_handle(&self, names: &[ProtectedSecretKey]) -> OwnedTestInjector {
+        OwnedTestInjector {
+            store: ProtectedSecretStore::new(self.backend.clone()),
+            declarations: names.iter().cloned().collect(),
+        }
     }
 }
 
 pub fn secret_fixture(name: &str, value: &str) -> SecretFixture {
-    let store = ProtectedSecretStore::new(FakeBackend::default());
+    let backend = FakeBackend::default();
+    let store = ProtectedSecretStore::new(backend.clone());
     let principal = PluginPrincipal::new_verified(
         "publisher.example",
         "signing-key-1",
@@ -303,13 +333,25 @@ pub fn secret_fixture(name: &str, value: &str) -> SecretFixture {
     let application = store
         .for_application(&principal, ApplicationEnvironment::Development)
         .expect("partition");
-    let key =
-        ProtectedSecretKey::new(name, format!("REST credential for route group using {name}"))
-            .expect("key");
+    // Purpose must match `RouteGroupDeclaration::compile` for named-secret
+    // groups (id `secret-api`) so broker injection locators align.
+    let purpose = if name == "payments.key" {
+        String::from("REST broker credential for route group secret-api")
+    } else {
+        format!("REST credential for route group using {name}")
+    };
+    let key = ProtectedSecretKey::new(name, purpose).expect("key");
     application
-        .configure(&key, SecretInput::new(value.as_bytes().to_vec()).expect("secret input"))
+        .configure(
+            &key,
+            SecretInput::new(value.as_bytes().to_vec()).expect("secret input"),
+        )
         .expect("configure");
-    SecretFixture { store, key }
+    SecretFixture {
+        backend,
+        store,
+        key,
+    }
 }
 
 pub fn named_secret_group(header: &str, prefix: Option<&str>) -> RouteGroupDeclaration {

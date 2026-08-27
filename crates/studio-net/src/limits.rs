@@ -133,7 +133,10 @@ impl EffectiveLimits {
     ///
     /// Returns [`BrokerErrorCode::DeclarationInvalid`] when a declared value exceeds its host
     /// ceiling or is zero.
-    pub fn resolve(declared: &DeclaredLimits, ceilings: &BrokerLimits) -> Result<Self, BrokerError> {
+    pub fn resolve(
+        declared: &DeclaredLimits,
+        ceilings: &BrokerLimits,
+    ) -> Result<Self, BrokerError> {
         let resolved = Self {
             max_request_bytes: declared
                 .max_request_bytes
@@ -148,7 +151,9 @@ impl EffectiveLimits {
                 .max_requests_per_window
                 .unwrap_or(ceilings.max_requests_per_window),
             rate_window: ceilings.rate_window,
-            max_stream_bytes: declared.max_stream_bytes.unwrap_or(ceilings.max_stream_bytes),
+            max_stream_bytes: declared
+                .max_stream_bytes
+                .unwrap_or(ceilings.max_stream_bytes),
             max_stream_events: declared
                 .max_stream_events
                 .unwrap_or(ceilings.max_stream_events),
@@ -170,7 +175,8 @@ impl EffectiveLimits {
                 "declared limit exceeds host ceiling".to_owned(),
             ));
         }
-        resolved.validate()
+        resolved.validate()?;
+        Ok(resolved)
     }
 
     /// Validate coherence of the resolved set.

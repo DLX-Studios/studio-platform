@@ -1,11 +1,11 @@
 //! Declaration admission validation: closed wire shape, bounded schema keywords, ceiling
 //! enforcement, and streaming rules are all rejected before any broker exists.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, dead_code)]
 
 mod common;
 
-use common::{json_api_group, ORIGIN};
+use common::{ORIGIN, json_api_group};
 use studio_net::declaration::{CredentialSource, HttpMethod, RouteGroupDeclaration};
 use studio_net::error::BrokerErrorCode;
 use studio_net::limits::{BrokerLimits, DeclaredLimits};
@@ -25,12 +25,12 @@ fn valid_declaration_compiles() {
 #[test]
 fn declarations_reject_unknown_wire_fields() {
     let raw = serde_json::json!({
-        "id": "group",
-        "origins": ["https://api.example.test"],
-        "methods": ["GET"],
-        "paths": ["/v1/items"],
-        "credential": {"source": "public"},
-        "surpriseField": true,
+    "id": "group",
+    "origins": ["https://api.example.test"],
+    "methods": ["GET"],
+    "paths": ["/v1/items"],
+    "credential": {"source": "public"},
+    "surpriseField": true,
     });
     assert!(serde_json::from_value::<RouteGroupDeclaration>(raw).is_err());
 }
@@ -38,19 +38,18 @@ fn declarations_reject_unknown_wire_fields() {
 #[test]
 fn declarations_parse_closed_credential_sources() {
     let raw = serde_json::json!({
-        "id": "group",
-        "origins": ["https://api.example.test"],
-        "methods": ["GET"],
-        "paths": ["/v1/private"],
-        "credential": {
-            "source": "namedSecret",
-            "name": "payments.key",
-            "header": "authorization",
-            "prefix": "Bearer ",
-        },
+    "id": "group",
+    "origins": ["https://api.example.test"],
+    "methods": ["GET"],
+    "paths": ["/v1/private"],
+    "credential": {
+    "source": "namedSecret",
+    "name": "payments.key",
+    "header": "authorization",
+    "prefix": "Bearer ",
+    },
     });
-    let parsed: RouteGroupDeclaration =
-        serde_json::from_value(raw).expect("named secret parses");
+    let parsed: RouteGroupDeclaration = serde_json::from_value(raw).expect("named secret parses");
     assert_eq!(
         parsed.credential,
         CredentialSource::NamedSecret {
@@ -65,10 +64,10 @@ fn declarations_parse_closed_credential_sources() {
 fn unknown_schema_keywords_are_rejected_at_compile() {
     let mut group = json_api_group();
     group.response_schema = Some(serde_json::json!({
-        "type": "object",
-        "properties": {"id": {"type": "string"}},
-        "required": ["id"],
-        "patternProperties": {".*": {}},
+    "type": "object",
+    "properties": {"id": {"type": "string"}},
+    "required": ["id"],
+    "patternProperties": {".*": {}},
     }));
     assert_eq!(compile(&group), Err(BrokerErrorCode::DeclarationInvalid));
 }
@@ -77,9 +76,9 @@ fn unknown_schema_keywords_are_rejected_at_compile() {
 fn required_entries_must_reference_declared_properties() {
     let mut group = json_api_group();
     group.response_schema = Some(serde_json::json!({
-        "type": "object",
-        "properties": {"id": {"type": "string"}},
-        "required": ["ghost"],
+    "type": "object",
+    "properties": {"id": {"type": "string"}},
+    "required": ["ghost"],
     }));
     assert_eq!(compile(&group), Err(BrokerErrorCode::DeclarationInvalid));
 }
@@ -129,9 +128,9 @@ fn duplicate_origins_and_invalid_ids_are_rejected() {
 fn common_sse() -> studio_net::declaration::StreamingDeclaration {
     studio_net::declaration::StreamingDeclaration {
         chunk_schema: serde_json::json!({
-            "type": "object",
-            "properties": {"text": {"type": "string"}},
-            "required": ["text"],
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
         }),
         reconnects: Some(1),
         retry_base_delay_ms: Some(50),

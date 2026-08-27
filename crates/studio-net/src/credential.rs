@@ -11,8 +11,8 @@
 use std::sync::{Arc, Mutex};
 
 use studio_security::{
-    BrokerCredentialError, BrokerCredentialSink, ProtectedSecretErrorCode, ProtectedSecretKey,
-    ProtectedSecretError, SensitiveValueFilter,
+    BrokerCredentialError, BrokerCredentialSink, ProtectedSecretError, ProtectedSecretErrorCode,
+    ProtectedSecretKey, SensitiveValueFilter,
 };
 
 use crate::declaration::CompiledRouteGroup;
@@ -95,7 +95,7 @@ impl<'sink> HeaderInjectionSink<'sink> {
 impl BrokerCredentialSink for HeaderInjectionSink<'_> {
     fn inject(&mut self, secret: &[u8]) -> Result<(), BrokerCredentialError> {
         let value = std::str::from_utf8(secret).map_err(|_| BrokerCredentialError)?;
-        if let Ok(filter) = self.filter.lock() {
+        if let Ok(mut filter) = self.filter.lock() {
             let _ = filter.register_secret(secret);
         }
         let composed = match &self.prefix {

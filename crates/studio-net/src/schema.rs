@@ -135,7 +135,7 @@ fn check_schema_node(node: &Value, path: &str) -> Result<(), SchemaError> {
     }
     for key in ["minimum", "maximum"] {
         if let Some(bound) = object.get(key)
-            && bound.as_f64().map_or(true, |number| number.is_nan())
+            && bound.as_f64().is_none_or(|number| number.is_nan())
         {
             return Err(err(path, format!("`{key}` must be a finite number")));
         }
@@ -177,6 +177,19 @@ fn check_schema_node(node: &Value, path: &str) -> Result<(), SchemaError> {
     Ok(())
 }
 
+fn type_matches(kind: &str, value: &Value) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
 fn validate_node(schema: &Value, value: &Value, path: &str) -> Result<(), SchemaError> {
     let Some(object) = schema.as_object() else {
         return Err(err(path, "internal schema corruption"));
@@ -195,7 +208,28 @@ fn validate_node(schema: &Value, value: &Value, path: &str) -> Result<(), Schema
         Value::Object(fields) => validate_object(object, fields, path)?,
         Value::Array(items) => validate_array(object, items, path)?,
         Value::String(text) => validate_string(object, text.chars().count(), path)?,
+        Value::Number(number) => validate_number(object, number, path)?,
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_number(
+    schema: &serde_json::Map<String, Value>,
+    number: &serde_json::Number,
+    path: &str,
+) -> Result<(), SchemaError> {
+    if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
+        let actual = number.as_f64().unwrap_or(f64::NAN);
+        if actual.is_nan() || actual < minimum {
+            return Err(err(path, format!("violates `minimum` bound of {minimum}")));
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+        let actual = number.as_f64().unwrap_or(f64::NAN);
+        if actual.is_nan() || actual > maximum {
+            return Err(err(path, format!("violates `maximum` bound of {maximum}")));
+        }
     }
     Ok(())
 }
@@ -233,10 +267,10 @@ fn validate_array(
     path: &str,
 ) -> Result<(), SchemaError> {
     apply_count_bound(schema, "minItems", items.len(), path, |bound, actual| {
-        actual < bound
+        (actual as u64) < bound
     })?;
     apply_count_bound(schema, "maxItems", items.len(), path, |bound, actual| {
-        actual > bound
+        (actual as u64) > bound
     })?;
     if let Some(item_schema) = schema.get("items") {
         for (index, item) in items.iter().enumerate() {
@@ -252,10 +286,10 @@ fn validate_string(
     path: &str,
 ) -> Result<(), SchemaError> {
     apply_count_bound(schema, "minLength", length, path, |bound, actual| {
-        actual < bound
+        (actual as u64) < bound
     })?;
     apply_count_bound(schema, "maxLength", length, path, |bound, actual| {
-        actual > bound
+        (actual as u64) > bound
     })?;
     Ok(())
 }
@@ -270,10 +304,7 @@ fn apply_count_bound(
     if let Some(bound) = schema.get(keyword).and_then(Value::as_u64)
         && violates(bound, actual)
     {
-        return Err(err(
-            path,
-            format!("violates `{keyword}` bound of {bound}"),
-        ));
+        return Err(err(path, format!("violates `{keyword}` bound of {bound}")));
     }
     Ok(())
 }

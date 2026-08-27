@@ -113,16 +113,16 @@ impl BrokerError {
 
     /// Construct an error whose detail was already sanitized by the caller.
     #[must_use]
-    pub const fn with_detail(code: BrokerErrorCode, detail: String) -> Self {
+    pub fn with_detail(code: BrokerErrorCode, detail: impl Into<String>) -> Self {
         Self {
             code,
-            detail: Some(detail),
+            detail: Some(detail.into()),
         }
     }
 
     /// Stable code suitable for guest action results.
     #[must_use]
-    pub const fn code(self) -> BrokerErrorCode {
+    pub fn code(&self) -> BrokerErrorCode {
         self.code
     }
 

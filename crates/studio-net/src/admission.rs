@@ -54,9 +54,7 @@ pub fn admit<'a>(
     if path_matched.is_empty() {
         return Err(BrokerError::new(BrokerErrorCode::MethodNotAllowed));
     }
-    let group = path_matched
-        .first()
-        .expect("non-empty after retain above");
+    let group = path_matched.first().expect("non-empty after retain above");
     for name in request_header_names {
         let lowercase = name.to_ascii_lowercase();
         if !group.allowed_headers().contains(&lowercase) {

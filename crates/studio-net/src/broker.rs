@@ -54,7 +54,10 @@ impl std::fmt::Debug for RestBroker<'_> {
 impl<'store> RestBroker<'store> {
     /// Create a broker over one transport and explicit host ceilings.
     #[must_use]
-    pub fn new(transport: Arc<dyn crate::transport::HttpTransport>, ceilings: BrokerLimits) -> Self {
+    pub fn new(
+        transport: Arc<dyn crate::transport::HttpTransport>,
+        ceilings: BrokerLimits,
+    ) -> Self {
         Self {
             groups: Vec::new(),
             transport,
@@ -72,7 +75,10 @@ impl<'store> RestBroker<'store> {
     ///
     /// Returns [`BrokerErrorCode::DeclarationInvalid`] for any malformed input or duplicate
     /// group identifier.
-    pub fn declare_group(&mut self, declaration: &RouteGroupDeclaration) -> Result<(), BrokerError> {
+    pub fn declare_group(
+        &mut self,
+        declaration: &RouteGroupDeclaration,
+    ) -> Result<(), BrokerError> {
         let compiled = declaration.compile(&self.ceilings)?;
         if self.groups.iter().any(|group| group.id() == compiled.id()) {
             return Err(BrokerError::with_detail(
@@ -118,7 +124,11 @@ impl<'store> RestBroker<'store> {
             return Err(BrokerError::new(BrokerErrorCode::RouteIsStreaming));
         }
         let limits = *group.limits();
-        self.check_rate(group.id(), limits.max_requests_per_window, limits.rate_window)?;
+        self.check_rate(
+            group.id(),
+            limits.max_requests_per_window,
+            limits.rate_window,
+        )?;
         let body_bytes = self.prepare_body(
             request.body.as_ref(),
             group.request_schema(),
@@ -126,7 +136,10 @@ impl<'store> RestBroker<'store> {
         )?;
         let mut headers = guest_headers(&request);
         if !body_bytes.is_empty() {
-            headers.push((String::from("content-type"), String::from("application/json")));
+            headers.push((
+                String::from("content-type"),
+                String::from("application/json"),
+            ));
         }
         credential::resolve(
             group,
@@ -143,12 +156,19 @@ impl<'store> RestBroker<'store> {
         )?;
         let outgoing = crate::transport::OutgoingRequest {
             method: request.method,
-            url: build_url(request.origin.trim_end_matches('/'), &request.path, request.query.as_deref()),
+            url: build_url(
+                request.origin.trim_end_matches('/'),
+                &request.path,
+                request.query.as_deref(),
+            ),
             headers,
             body: (!body_bytes.is_empty()).then_some(body_bytes),
             timeout: limits.timeout,
         };
-        let response = self.transport.execute(outgoing).map_err(map_transport_error)?;
+        let response = self
+            .transport
+            .execute(outgoing)
+            .map_err(map_transport_error)?;
         if !(200..=299).contains(&response.status) {
             return Err(BrokerError::with_detail(
                 BrokerErrorCode::UpstreamRejected,
@@ -158,8 +178,7 @@ impl<'store> RestBroker<'store> {
         if response.body.len() > limits.max_response_bytes {
             return Err(BrokerError::new(BrokerErrorCode::ResponseTooLarge));
         }
-        let body =
-            self.validate_response_body(&response.body, group.response_schema())?;
+        let body = self.validate_response_body(&response.body, group.response_schema())?;
         Ok(TypedResponse::new(response.status, body))
     }
 
@@ -180,12 +199,13 @@ impl<'store> RestBroker<'store> {
             ));
         }
         let limits = *group.limits();
-        self.check_rate(group.id(), limits.max_requests_per_window, limits.rate_window)?;
+        self.check_rate(
+            group.id(),
+            limits.max_requests_per_window,
+            limits.rate_window,
+        )?;
         let mut headers = guest_headers(&request);
-        headers.push((
-            String::from("accept"),
-            String::from("text/event-stream"),
-        ));
+        headers.push((String::from("accept"), String::from("text/event-stream")));
         credential::resolve(
             group,
             self.injector
@@ -201,7 +221,11 @@ impl<'store> RestBroker<'store> {
         )?;
         let outgoing = crate::transport::OutgoingRequest {
             method: request.method,
-            url: build_url(request.origin.trim_end_matches('/'), &request.path, request.query.as_deref()),
+            url: build_url(
+                request.origin.trim_end_matches('/'),
+                &request.path,
+                request.query.as_deref(),
+            ),
             headers,
             body: None,
             timeout: limits.stream_idle_timeout,
@@ -214,10 +238,7 @@ impl<'store> RestBroker<'store> {
         ))
     }
 
-    fn admit_request(
-        &self,
-        request: &BrokerRequest,
-    ) -> Result<&CompiledRouteGroup, BrokerError> {
+    fn admit_request(&self, request: &BrokerRequest) -> Result<&CompiledRouteGroup, BrokerError> {
         let header_names: Vec<String> = request
             .headers
             .iter()
@@ -332,7 +353,7 @@ impl<'store> RestBroker<'store> {
         self.filter
             .lock()
             .map(|filter| filter.sanitize(text))
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(|poison| poison.into_inner().sanitize(text))
     }
 }
 
