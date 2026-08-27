@@ -36,6 +36,14 @@ pub mod schema;
 pub mod streaming;
 pub mod transport;
 pub mod webhook;
+pub mod websocket;
 
 pub use error::{BrokerError, BrokerErrorCode};
-pub use guest::{GuestRestApi, StreamEvent, StreamHandle, TypedResponse};
+pub use guest::{GuestRestApi, StreamHandle, StreamEvent, TypedResponse};
+pub use websocket::{
+    CompiledWebSocketDeclaration, GuestWebSocketApi, OpaqueSessionId, SessionBroker, SessionEvent,
+    SessionHandle, SessionId, WebSocketBroker, WebSocketBrokerLimits, WebSocketConnectRequest,
+    WebSocketConnection, WebSocketDeclaration, WebSocketDeclaredLimits, WebSocketEffectiveLimits,
+    WebSocketEvent, WebSocketGuestApi, WebSocketLimits, WebSocketOpenRequest, WebSocketSession,
+    WebSocketTransport, WebSocketTransportError,
+};

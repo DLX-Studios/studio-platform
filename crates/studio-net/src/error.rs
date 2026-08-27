@@ -74,6 +74,22 @@ pub enum BrokerErrorCode {
     WebhookExpired,
     /// The host listener failed without exposing provider details.
     WebhookListenerFailure,
+    /// The WebSocket endpoint is not covered by a signed declaration.
+    WebSocketEndpointNotDeclared,
+    /// The requested WebSocket subprotocol is not declared for the endpoint.
+    WebSocketSubprotocolNotAllowed,
+    /// The WebSocket message failed the declared inbound or outbound schema.
+    WebSocketMessageSchemaInvalid,
+    /// A WebSocket message exceeded the effective per-message byte bound.
+    WebSocketMessageTooLarge,
+    /// The WebSocket session's message allowance was exhausted.
+    WebSocketRateLimited,
+    /// The requested WebSocket session does not exist in the host registry.
+    WebSocketSessionNotFound,
+    /// The WebSocket session is already closed.
+    WebSocketSessionClosed,
+    /// A WebSocket declaration or endpoint is malformed.
+    WebSocketDeclarationInvalid,
 }
 
 impl BrokerErrorCode {
@@ -113,6 +129,14 @@ impl BrokerErrorCode {
             Self::WebhookRateLimited => "webhook.request.rate_limited",
             Self::WebhookExpired => "webhook.declaration.expired",
             Self::WebhookListenerFailure => "webhook.listener.failure",
+            Self::WebSocketEndpointNotDeclared => "net.websocket.endpoint_not_declared",
+            Self::WebSocketSubprotocolNotAllowed => "net.websocket.subprotocol_not_allowed",
+            Self::WebSocketMessageSchemaInvalid => "net.websocket.message_schema_invalid",
+            Self::WebSocketMessageTooLarge => "net.websocket.message_too_large",
+            Self::WebSocketRateLimited => "net.websocket.rate_limited",
+            Self::WebSocketSessionNotFound => "net.websocket.session_not_found",
+            Self::WebSocketSessionClosed => "net.websocket.session_closed",
+            Self::WebSocketDeclarationInvalid => "net.websocket.declaration_invalid",
         }
     }
 }
