@@ -11,6 +11,7 @@ pub mod host;
 pub mod plugin_surface;
 mod preferences;
 mod print_preview;
+pub mod project_dashboard;
 mod router;
 mod shutdown;
 
