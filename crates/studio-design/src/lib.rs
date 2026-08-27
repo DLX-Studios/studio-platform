@@ -10,6 +10,7 @@ pub mod command;
 mod engine;
 pub mod model;
 pub mod persistence;
+pub mod recovery;
 pub mod session;
 
 pub use command::{
@@ -30,6 +31,13 @@ pub use model::{
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
     PersistenceError, PersistenceErrorCode, SessionFuture,
+};
+pub use recovery::{
+    ConflictCenter, ConflictIntent, ConflictPersistence, ConflictRecord, ConflictStatus,
+    InMemoryConflictPersistence, InMemoryRecoveryPersistence, JournalEntry, LogicalSnapshot,
+    RecoveryBundle, RecoveryCenter, RecoveryPersistence, RecoveryRecord, RecoveryState,
+    ResolutionChoice, ResolutionPlan, ResilienceError,
+    RESILIENCE_SCHEMA_VERSION,
 };
 pub use session::{
     BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,

@@ -4,8 +4,9 @@ use std::{fmt::Write as _, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use studio_design::{
-    DesignerPersistence, DesignerTransaction, DurableDesignerState, PersistenceError,
-    PersistenceErrorCode, ProjectId, STUDIO_DESIGN_SCHEMA_VERSION, SessionFuture,
+    ConflictPersistence, ConflictRecord, DesignerPersistence, DesignerTransaction,
+    DurableDesignerState, PersistenceError, PersistenceErrorCode, ProjectId, RecoveryPersistence,
+    RecoveryRecord, RESILIENCE_SCHEMA_VERSION, STUDIO_DESIGN_SCHEMA_VERSION, SessionFuture,
 };
 
 use crate::local_store::{
@@ -14,6 +15,9 @@ use crate::local_store::{
 };
 
 const ADAPTER_SCHEMA_VERSION: u16 = 1;
+
+const CONFLICT_RECORDS_BATCH_PREFIX: &str = "designer-conflicts-";
+const RECOVERY_RECORDS_BATCH_PREFIX: &str = "designer-recovery-";
 
 /// `LocalStore`-backed implementation of the domain-owned persistence contract.
 ///
@@ -65,6 +69,24 @@ struct PersistedDesignerEnvelope {
     adapter_schema_version: u16,
     project_id: ProjectId,
     transaction: DesignerTransaction,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedConflictEnvelope {
+    adapter_schema_version: u16,
+    resilience_schema_version: u16,
+    project_id: ProjectId,
+    records: Vec<ConflictRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedRecoveryEnvelope {
+    adapter_schema_version: u16,
+    resilience_schema_version: u16,
+    project_id: ProjectId,
+    records: Vec<RecoveryRecord>,
 }
 
 impl DesignerPersistence for LocalStoreDesignerPersistence {
@@ -144,13 +166,170 @@ impl DesignerPersistence for LocalStoreDesignerPersistence {
     }
 }
 
+impl ConflictPersistence for LocalStoreDesignerPersistence {
+    fn load_conflicts<'a>(
+        &'a self,
+        project_id: &'a ProjectId,
+    ) -> SessionFuture<'a, Result<Vec<ConflictRecord>, PersistenceError>> {
+        Box::pin(async move {
+            let entries = self
+                .store
+                .batch_entries(&resilience_batch_id(CONFLICT_RECORDS_BATCH_PREFIX, project_id))
+                .await
+                .map_err(map_store_error)?;
+            if entries.is_empty() {
+                return Ok(Vec::new());
+            }
+            let [entry] = entries.as_slice() else {
+                return Err(corrupt_record());
+            };
+            if entry.ordinal != 0 {
+                return Err(corrupt_record());
+            }
+            let envelope: PersistedConflictEnvelope =
+                serde_json::from_value(entry.payload.clone()).map_err(|_| corrupt_record())?;
+            validate_conflict_envelope(envelope)
+        })
+    }
+
+    fn save_conflicts<'a>(
+        &'a self,
+        project_id: &'a ProjectId,
+        records: &'a [ConflictRecord],
+    ) -> SessionFuture<'a, Result<(), PersistenceError>> {
+        Box::pin(async move {
+            if records.iter().any(|record| {
+                record.schema_version != RESILIENCE_SCHEMA_VERSION
+                    || record.project_id != *project_id
+            }) {
+                return Err(rejected_record("conflict records contain inconsistent metadata"));
+            }
+            let payload = serde_json::to_value(PersistedConflictEnvelope {
+                adapter_schema_version: ADAPTER_SCHEMA_VERSION,
+                resilience_schema_version: RESILIENCE_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                records: records.to_vec(),
+            })
+            .map_err(|_| rejected_record("conflict records could not be encoded"))?;
+            let batch = StoreBatch::new(
+                resilience_batch_id(CONFLICT_RECORDS_BATCH_PREFIX, project_id),
+                [StoreBatchEntry { ordinal: 0, payload }],
+            )
+            .map_err(map_store_error)?;
+            self.store
+                .write_batch(&batch)
+                .await
+                .map_err(map_store_error)
+        })
+    }
+}
+
+impl RecoveryPersistence for LocalStoreDesignerPersistence {
+    fn load_recovery<'a>(
+        &'a self,
+        project_id: &'a ProjectId,
+    ) -> SessionFuture<'a, Result<Vec<RecoveryRecord>, PersistenceError>> {
+        Box::pin(async move {
+            let entries = self
+                .store
+                .batch_entries(&resilience_batch_id(RECOVERY_RECORDS_BATCH_PREFIX, project_id))
+                .await
+                .map_err(map_store_error)?;
+            if entries.is_empty() {
+                return Ok(Vec::new());
+            }
+            let [entry] = entries.as_slice() else {
+                return Err(corrupt_record());
+            };
+            if entry.ordinal != 0 {
+                return Err(corrupt_record());
+            }
+            let envelope: PersistedRecoveryEnvelope =
+                serde_json::from_value(entry.payload.clone()).map_err(|_| corrupt_record())?;
+            validate_recovery_envelope(envelope)
+        })
+    }
+
+    fn save_recovery<'a>(
+        &'a self,
+        project_id: &'a ProjectId,
+        records: &'a [RecoveryRecord],
+    ) -> SessionFuture<'a, Result<(), PersistenceError>> {
+        Box::pin(async move {
+            if records.iter().any(|record| {
+                record.schema_version != RESILIENCE_SCHEMA_VERSION
+                    || record.project_id != *project_id
+            }) {
+                return Err(rejected_record("recovery records contain inconsistent metadata"));
+            }
+            let payload = serde_json::to_value(PersistedRecoveryEnvelope {
+                adapter_schema_version: ADAPTER_SCHEMA_VERSION,
+                resilience_schema_version: RESILIENCE_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                records: records.to_vec(),
+            })
+            .map_err(|_| rejected_record("recovery records could not be encoded"))?;
+            let batch = StoreBatch::new(
+                resilience_batch_id(RECOVERY_RECORDS_BATCH_PREFIX, project_id),
+                [StoreBatchEntry { ordinal: 0, payload }],
+            )
+            .map_err(map_store_error)?;
+            self.store
+                .write_batch(&batch)
+                .await
+                .map_err(map_store_error)
+        })
+    }
+}
+
 fn project_batch_id(project_id: &ProjectId) -> String {
-    let mut batch_id = String::with_capacity(18 + project_id.as_str().len() * 2);
-    batch_id.push_str("designer-project-");
+    resilience_batch_id("designer-project-", project_id)
+}
+
+fn resilience_batch_id(prefix: &str, project_id: &ProjectId) -> String {
+    let mut batch_id = String::with_capacity(prefix.len() + project_id.as_str().len() * 2);
+    batch_id.push_str(prefix);
     for byte in project_id.as_str().bytes() {
         write!(&mut batch_id, "{byte:02x}").expect("writing to a String cannot fail");
     }
     batch_id
+}
+
+fn validate_conflict_envelope(
+    envelope: PersistedConflictEnvelope,
+) -> Result<Vec<ConflictRecord>, PersistenceError> {
+    if envelope.adapter_schema_version != ADAPTER_SCHEMA_VERSION
+        || envelope.resilience_schema_version != RESILIENCE_SCHEMA_VERSION
+        || envelope.records.iter().any(|record| {
+            record.schema_version != RESILIENCE_SCHEMA_VERSION
+                || record.project_id != envelope.project_id
+        })
+    {
+        return Err(incompatible_record());
+    }
+    Ok(envelope.records)
+}
+
+fn validate_recovery_envelope(
+    envelope: PersistedRecoveryEnvelope,
+) -> Result<Vec<RecoveryRecord>, PersistenceError> {
+    if envelope.adapter_schema_version != ADAPTER_SCHEMA_VERSION
+        || envelope.resilience_schema_version != RESILIENCE_SCHEMA_VERSION
+        || envelope.records.iter().any(|record| {
+            record.schema_version != RESILIENCE_SCHEMA_VERSION
+                || record.project_id != envelope.project_id
+        })
+    {
+        return Err(incompatible_record());
+    }
+    Ok(envelope.records)
+}
+
+fn rejected_record(message: &str) -> PersistenceError {
+    PersistenceError {
+        code: PersistenceErrorCode::Rejected,
+        message: message.to_owned(),
+    }
 }
 
 fn map_store_error(error: LocalStoreError) -> PersistenceError {

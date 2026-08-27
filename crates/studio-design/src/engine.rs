@@ -12,6 +12,7 @@ use crate::{
         PropertyValue, RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION,
         SelectionSnapshot, StudioDesign, StudioDesignSnapshot, TombstoneReference, UndoGroupId,
     },
+    recovery::RecoveryBundle,
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
     session::{
         BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
@@ -114,6 +115,67 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             tool: ToolKind::default(),
             panel_state: BTreeMap::new(),
         })
+    }
+
+    /// Rebuild a session from a logical snapshot and ordered operation journal.
+    ///
+    /// The snapshot is committed as the recovery base, then each journal batch
+    /// is submitted through the same validation and persistence path as an
+    /// ordinary edit.  A journal mismatch therefore leaves no partially
+    /// restored session visible to the caller.
+    pub async fn restore_from_recovery(
+        persistence: P,
+        bundle: &RecoveryBundle,
+    ) -> Result<Self, SessionError> {
+        bundle
+            .validate()
+            .map_err(|error| SessionError::InvalidState(error.to_string()))?;
+        let base_snapshot = bundle.snapshot.revision.clone();
+        let diagnostics = validate_design(&base_snapshot.design);
+        if !diagnostics.is_empty() {
+            return Err(SessionError::InvalidState(join_diagnostics(&diagnostics)));
+        }
+        let state = DurableDesignerState {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            current: base_snapshot.clone(),
+            revisions: vec![base_snapshot.clone()],
+            receipts: Vec::new(),
+            history: Vec::new(),
+            history_cursor: 0,
+            diagnostics: Vec::new(),
+        };
+        let transaction = transaction_for(&state);
+        persistence.commit(&transaction).await?;
+        let mut session = Self {
+            persistence,
+            state,
+            selection: SelectionSnapshot::default(),
+            active_screen_id: session_active_screen(&base_snapshot),
+            device_profile: None,
+            tool: ToolKind::default(),
+            panel_state: BTreeMap::new(),
+        };
+        for entry in &bundle.journal {
+            let outcome = session.submit_batch(entry.batch.clone()).await;
+            match outcome {
+                CommandOutcome::Accepted(receipt)
+                    if receipt.committed_revision == entry.committed_revision => {}
+                CommandOutcome::Accepted(_) => {
+                    return Err(SessionError::InvalidState(
+                        "recovery journal revision does not match replay".to_owned(),
+                    ));
+                }
+                CommandOutcome::Rejected(_) | CommandOutcome::Conflict(_) => {
+                    return Err(SessionError::InvalidState(
+                        "recovery journal operation could not be replayed".to_owned(),
+                    ));
+                }
+                CommandOutcome::PersistenceFailed(error) => {
+                    return Err(SessionError::Persistence(error));
+                }
+            }
+        }
+        Ok(session)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -424,6 +486,10 @@ fn transaction_for(state: &DurableDesignerState) -> DesignerTransaction {
         sequence: state.current.revision.id.get(),
         state: state.clone(),
     }
+}
+
+fn session_active_screen(snapshot: &StudioDesignSnapshot) -> Option<crate::ScreenId> {
+    snapshot.design.screen_order.first().cloned()
 }
 
 fn validate_durable_state(

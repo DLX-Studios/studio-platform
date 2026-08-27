@@ -10,6 +10,7 @@ pub mod host;
 pub mod plugin_surface;
 mod preferences;
 mod print_preview;
+pub mod resilience;
 mod router;
 mod shutdown;
 
@@ -23,5 +24,6 @@ pub use failure_surface::{FailureSurface, PluginRecovery, RecoveryError, Restart
 pub use host::StudioHost;
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;
+pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
 pub use router::CheckoutRouter;
 pub use shutdown::{ShutdownCoordinator, ShutdownReport, ShutdownStep};
