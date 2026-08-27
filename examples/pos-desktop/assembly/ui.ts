@@ -17,26 +17,28 @@ function badgeNode(id: string, label: string, available: bool): string {
 function tagNode(id: string, label: string, variant: string = "default"): string {
   return ['{"id":"', id, '","kind":"tag","props":{"label":"', esc(label), '","variant":"', variant, '"},"children":[]}'].join("");
 }
-function buttonNode(id: string, label: string, variant: string = ""): string {
+function buttonNode(id: string, label: string, variant: string = "", fullWidth: bool = false): string {
   const v = variant.length == 0 ? "" : ',"variant":"' + variant + '"';
-  return ['{"id":"', id, '","kind":"button","props":{"label":"', esc(label), '"', v, ',"enabled":true,"on_pressed":"', id, '_pressed"},"children":[]}'].join("");
+  const width = fullWidth ? ',"width":"full"' : "";
+  return ['{"id":"', id, '","kind":"button","props":{"label":"', esc(label), '"', v, width, ',"enabled":true,"on_pressed":"', id, '_pressed"},"children":[]}'].join("");
 }
 function disabledButtonNode(id: string, label: string): string {
-  return ['{"id":"', id, '","kind":"button","props":{"label":"', esc(label), '","enabled":false,"on_pressed":"', id, '_pressed"},"children":[]}'].join("");
+  return ['{"id":"', id, '","kind":"button","props":{"label":"', esc(label), '","width":"full","enabled":false,"on_pressed":"', id, '_pressed"},"children":[]}'].join("");
 }
-function imageNode(id: string, asset: string, alt: string): string {
-  return ['{"id":"', id, '","kind":"image","props":{"asset":"', esc(asset), '","alt":"', esc(alt), '"},"children":[]}'].join("");
+function imageNode(id: string, asset: string, alt: string, width: i32 = 0, height: i32 = 0): string {
+  const dimensions = width > 0 && height > 0 ? ',"width":' + width.toString() + ',"height":' + height.toString() : "";
+  return ['{"id":"', id, '","kind":"image","props":{"asset":"', esc(asset), '","alt":"', esc(alt), '"', dimensions, '},"children":[]}'].join("");
 }
 
 function productCard(id: string, name: string, price: string, asset: string, available: bool): string {
   const badge = badgeNode(id + "-avail", available ? "● Available" : "● Not Available", available);
-  const btn = available ? buttonNode("add-" + id, "Add to Cart") : disabledButtonNode("add-" + id, "Not Available");
+  const btn = available ? buttonNode("add-" + id, "Add to Cart", "", true) : disabledButtonNode("add-" + id, "Not Available");
   return [
     '{"id":"', id, '-card","kind":"card","props":{"padding":8,"visible":true},"children":[',
     '{"id":"', id, '-col","kind":"column","props":{"gap":8},"children":[',
-    imageNode(id + "-img", asset, name), ',',
+    imageNode(id + "-img", asset, name, 0, 128), ',',
     badge, ',',
-    '{"id":"', id, '-meta","kind":"row","props":{"gap":8},"children":[',
+    '{"id":"', id, '-meta","kind":"row","props":{"gap":8,"alignment":"space_between"},"children":[',
     textNode(id + "-name", name, "label"), ',',
     textNode(id + "-price", price, "label"),
     ']},',
@@ -49,7 +51,7 @@ function cartLine(id: string, name: string, price: string, asset: string, note: 
   return [
     '{"id":"', id, '-line","kind":"card","props":{"padding":8,"visible":', initial > 0 ? "true" : "false", '},"children":[',
     '{"id":"', id, '-line-row","kind":"row","props":{"gap":10},"children":[',
-    imageNode(id + "-cart-img", asset, name), ',',
+    imageNode(id + "-cart-img", asset, name, 72, 72), ',',
     '{"id":"', id, '-line-copy","kind":"column","props":{"gap":3,"flex":1},"children":[',
     '{"id":"', id, '-line-title","kind":"row","props":{"gap":4},"children":[',
     textNode(id + "-line-name", name, "label"), ',',
@@ -97,7 +99,7 @@ export function mountDesktop(): string {
     ']},',
 
     // Main row — sidebar fixed 220, catalog flex, order 390 (foundation handles)
-    '{"id":"main-row","kind":"row","props":{"gap":0},"children":[',
+    '{"id":"main-row","kind":"row","props":{"gap":0,"flex":1},"children":[',
 
     // Sidebar — fixed 240 per Pospay, left nav
     '{"id":"nav","kind":"sidebar","props":{"items":["Dashboard","Menu Order","Analytics","Withdrawal","Manage Table","Manage Dish","Manage Payment"]},"children":[',
@@ -111,7 +113,7 @@ export function mountDesktop(): string {
     ']},',
 
     // Catalog pane — Pospay close
-    '{"id":"catalog-pane","kind":"box","props":{"padding":16},"children":[',
+    '{"id":"catalog-pane","kind":"box","props":{"padding":16,"flex":1},"children":[',
     '{"id":"catalog-col","kind":"column","props":{"gap":12},"children":[',
 
     '{"id":"toolbar","kind":"row","props":{"gap":12},"children":[',
@@ -129,23 +131,23 @@ export function mountDesktop(): string {
     ']},',
 
     // Order pane — fixed 390, order-content for stretch handling
-    '{"id":"order-pane","kind":"box","props":{"padding":16,"background":"surface_variant"},"children":[',
-    '{"id":"order-content","kind":"column","props":{"gap":12},"children":[',
-    '{"id":"order-head","kind":"row","props":{"gap":8},"children":[',
+    '{"id":"order-pane","kind":"box","props":{"padding":16,"background":"surface_variant","width":390,"shrink":true},"children":[',
+    '{"id":"order-content","kind":"column","props":{"gap":12,"alignment":"space_between"},"children":[',
+    '{"id":"order-head","kind":"row","props":{"gap":8,"alignment":"space_between"},"children":[',
     textNode("order-title", "Order Summary", "label") + ',',
     textNode("order-no", "#B12309", "caption"),
     ']},',
     '{"id":"cart-lines","kind":"list_view","props":{"axis":"vertical","gap":8},"children":[' + lines + ']},',
     // Fixed footer — order-summary flex_shrink_0 in foundation
-    '{"id":"order-summary","kind":"box","props":{"padding":12},"children":[',
+    '{"id":"order-summary","kind":"box","props":{"padding":12,"shrink":true},"children":[',
     '{"id":"summary-col","kind":"column","props":{"gap":8},"children":[',
-    '{"id":"subtotal-row","kind":"row","props":{"gap":8},"children":[' + textNode("subtotal-label", "Subtotal", "caption") + ',' + textNode("subtotal", "$56,37", "caption") + ']},',
-    '{"id":"taxes-row","kind":"row","props":{"gap":8},"children":[' + textNode("taxes-label", "Taxes", "caption") + ',' + textNode("tax", "$5,63", "caption") + ']},',
-    '{"id":"discount-row","kind":"row","props":{"gap":8},"children":[' + textNode("discount-label", "Discount", "caption") + ',' + textNode("discount-amount", "-$5,63", "caption") + ']},',
-    '{"id":"total-row","kind":"row","props":{"gap":8},"children":[' + textNode("total-label", "Total Payment", "label") + ',' + textNode("total", "$56,37", "headline") + ']},',
+    '{"id":"subtotal-row","kind":"row","props":{"gap":8,"alignment":"space_between"},"children":[' + textNode("subtotal-label", "Subtotal", "caption") + ',' + textNode("subtotal", "$56.37", "caption") + ']},',
+    '{"id":"taxes-row","kind":"row","props":{"gap":8,"alignment":"space_between"},"children":[' + textNode("taxes-label", "Taxes", "caption") + ',' + textNode("tax", "$5.63", "caption") + ']},',
+    '{"id":"discount-row","kind":"row","props":{"gap":8,"alignment":"space_between"},"children":[' + textNode("discount-label", "Discount", "caption") + ',' + textNode("discount-amount", "-$5.63", "caption") + ']},',
+    '{"id":"total-row","kind":"row","props":{"gap":8,"alignment":"space_between"},"children":[' + textNode("total-label", "Total Payment", "label") + ',' + textNode("total", "$56.37", "headline") + ']},',
     '{"id":"sep2","kind":"separator","props":{},"children":[]},',
-    '{"id":"order-type","kind":"native_select","props":{"value":"Dine-in","options":["Dine-in","Takeaway","Delivery"]},"children":[]},',
-    '{"id":"select-table","kind":"native_select","props":{"value":"A-12B","options":["A-12B","A-13B","B-01"]},"children":[]},',
+    '{"id":"order-type","kind":"select","props":{"label":"Order type","value":"Dine-in","options":["Dine-in","Takeaway","Delivery"],"enabled":true},"children":[]},',
+    '{"id":"select-table","kind":"select","props":{"label":"Table","value":"A-12B","options":["A-12B","A-13B","B-01"],"enabled":true},"children":[]},',
     buttonNode("discount-btn", "10% Discount") + ',',
     buttonNode("confirm", "Confirm Payment", "primary"),
     ']}',

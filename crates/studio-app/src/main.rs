@@ -21,7 +21,6 @@ fn has_wayland_endpoint(display: Option<&OsStr>, socket: Option<&OsStr>) -> bool
 fn run(application: Application, plugin_surface: Option<PluginSurface>) {
     application.run(move |cx: &mut App| {
         gpui_component::init(cx);
-        // The desktop business shell follows the light Pospay reference palette.
         Theme::change(ThemeMode::Light, None, cx);
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(

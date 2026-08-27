@@ -2,8 +2,9 @@
 
 use serde_json::json;
 use studio_components::{
-    component_readiness, ComponentCatalog, DispatchErrorCode, HostEventDispatcher, InputAction,
-    NativeLayer, RuntimeControl, COMPONENT_RENDERER_READINESS,
+    COMPONENT_RENDERER_READINESS, ComponentCatalog, DispatchErrorCode, HostEventDispatcher,
+    InputAction, NativeLayer, RuntimeControl, certify_renderer_readiness, component_readiness,
+    uncertified_renderer_kinds,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;
@@ -211,6 +212,14 @@ fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
         assert!(!readiness.semantically_rendered, "{kind:?}");
         assert!(!readiness.verified, "{kind:?}");
     }
+}
+
+#[test]
+fn release_certification_rejects_unrendered_catalog_kinds() {
+    let missing = certify_renderer_readiness().expect_err("deferred kinds must block release");
+    assert_eq!(missing, uncertified_renderer_kinds());
+    assert!(missing.contains(&NodeKind::TimePicker));
+    assert!(missing.contains(&NodeKind::Chart));
 }
 
 #[test]
