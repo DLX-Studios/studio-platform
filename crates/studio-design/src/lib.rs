@@ -11,9 +11,11 @@ pub mod command;
 pub mod content;
 mod engine;
 pub mod model;
+pub mod navigation;
 pub mod persistence;
 pub mod projection;
 pub mod responsive;
+pub mod prototype;
 pub mod session;
 pub mod workspace;
 
@@ -48,6 +50,11 @@ pub use model::{
     StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenOverride,
     TokenUsage, TokenValue, TombstoneReference, TypographyToken, UndoGroupId, ValueKind,
 };
+pub use navigation::{
+    CODE_INTERACTION_CYCLE, CODE_INTERACTION_SOURCE_MISSING, CODE_INTERACTION_TARGET_MISSING,
+    CODE_ROUTE_DUPLICATE, CODE_ROUTE_INVALID, EventInspectorEntry, InteractionGraph,
+    InteractionInspectorEntry, NavigationEdge, NavigationGraph, NavigationScreen,
+};
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
     PersistenceError, PersistenceErrorCode, SessionFuture,
@@ -62,6 +69,10 @@ pub use responsive::{
     BreakpointProvenance, CompareReport, DeviceInput, DeviceProfile, DeviceProfileMatrix, Insets,
     Orientation, ProfileDifference, PropertyPath, PropertyProvenance, ResolvedNode, ResolvedValue,
     ResponsiveValue, Viewport, compare_profiles, inspect_node, resolve_node, select_variant,
+};
+pub use prototype::{
+    PrototypeDispatch, PrototypeEffect, PrototypeError, PrototypeEvent, PrototypeSession,
+    PrototypeStateSnapshot, PrototypeTraceEntry,
 };
 pub use session::{
     AgentRun, AgentRunStatus, BatchConflict, CanvasStateSnapshot, CanvasTransform, CommandOutcome,

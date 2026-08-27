@@ -27,6 +27,9 @@ use crate::{
         StyleProperties, TokenId, TokenKind, TokenOverride, TokenUsage, TokenValue,
         TombstoneReference, UndoGroupId, ValueKind,
     },
+    navigation::{
+        CODE_INTERACTION_CYCLE, CODE_ROUTE_DUPLICATE, CODE_ROUTE_INVALID, valid_route,
+    },
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
     session::{
         BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
@@ -620,7 +623,7 @@ fn validate_durable_state(
             "durable revision/history metadata is inconsistent".to_owned(),
         ));
     }
-    let diagnostics = validate_design(&state.current.design);
+    let diagnostics = validate_snapshot(&state.current);
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -3714,7 +3717,12 @@ fn reference_diagnostics(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnos
 
 #[allow(clippy::too_many_lines)]
 fn validate_snapshot(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnostic> {
-    let mut diagnostics = validate_design(&snapshot.design);
+    let deleted = snapshot
+        .tombstones
+        .values()
+        .flat_map(|tombstone| tombstone.nodes.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut diagnostics = validate_design_with_tombstones(&snapshot.design, &deleted);
     let dangling_interactions = snapshot
         .tombstones
         .values()
@@ -3734,6 +3742,14 @@ fn validate_snapshot(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnostic>
 }
 
 fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
+    validate_design_with_tombstones(design, &BTreeSet::new())
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_design_with_tombstones(
+    design: &StudioDesign,
+    _allowed_missing_nodes: &BTreeSet<NodeId>,
+) -> Vec<DesignerDiagnostic> {
     let mut diagnostics = Vec::new();
     if design.schema_version != STUDIO_DESIGN_SCHEMA_VERSION {
         diagnostics.push(diagnostic(
@@ -3767,10 +3783,39 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
         ));
     }
     diagnostics.extend(validate_layout(design));
+    let mut routes = BTreeMap::new();
     for (screen_id, screen) in &design.screens {
+        if !valid_route(&screen.route) {
+            diagnostics.push(DesignerDiagnostic {
+                code: CODE_ROUTE_INVALID.to_owned(),
+                severity: DiagnosticSeverity::Error,
+                message: format!("screen {screen_id} declares an invalid route"),
+                node_id: Some(screen.root_node_id.clone()),
+                interaction_id: None,
+                collection_id: None,
+                binding_id: None,
+                form_id: None,
+                record_id: None,
+            });
+        }
+        if let Some(previous) = routes.insert(screen.route.clone(), screen_id.clone()) {
+            diagnostics.push(DesignerDiagnostic {
+                code: CODE_ROUTE_DUPLICATE.to_owned(),
+                severity: DiagnosticSeverity::Error,
+                message: format!(
+                    "screens {previous} and {screen_id} both declare route {}",
+                    screen.route
+                ),
+                node_id: Some(screen.root_node_id.clone()),
+                interaction_id: None,
+                collection_id: None,
+                binding_id: None,
+                form_id: None,
+                record_id: None,
+            });
+        }
         if screen.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
             || screen.id != *screen_id
-            || !screen.route.starts_with('/')
             || !design.nodes.contains_key(&screen.root_node_id)
             || design.parents.get(&screen.root_node_id)
                 != Some(&NodeParent::Screen {
@@ -3964,6 +4009,13 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
             diagnostics.push(error);
         }
     }
+    diagnostics.extend(
+        crate::navigation::InteractionGraph::from_design(design)
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == CODE_INTERACTION_CYCLE)
+            .cloned(),
+    );
     for (collection_id, collection) in &design.collections {
         if collection.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
             || collection.id != *collection_id
