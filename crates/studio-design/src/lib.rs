@@ -16,19 +16,18 @@ pub mod session;
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
-pub use engine::DefaultDesignerSession;
+pub use engine::{DefaultDesignerSession, validate_layout};
 pub use model::{
-    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
+    AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, Alignment, BindingPath, ColorValue,
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
     DesignerDiagnostic, DiagnosticSeverity, InputEnvironment, Interaction, InteractionAction,
     InteractionEvent, InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit,
     InvalidIdentity,
-    LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId,
-    PropertyValue, ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId,
+    LayoutPosition, LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint,
+    Placement, ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId,
     ReusableComposition, RevisionId, RevisionMetadata, RevisionReason,
     STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, SlotDefinition,
     StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenValue,
-    TombstoneReference, TypographyToken, UndoGroupId, ValueKind,
 };
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,

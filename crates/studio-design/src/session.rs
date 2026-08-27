@@ -41,14 +41,24 @@ pub trait DesignerSession: Send {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DesignerQuery {
     Snapshot,
-    Node { node_id: NodeId },
+    Node {
+        node_id: NodeId,
+    },
+    NodeForProfile {
+        node_id: NodeId,
+        profile: Option<String>,
+    },
     Diagnostics,
+    DiagnosticsForNode {
+        node_id: NodeId,
+    },
     History,
     SessionState,
 }
 
 /// Owned immutable result of one typed query.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(
     tag = "type",
     content = "value",

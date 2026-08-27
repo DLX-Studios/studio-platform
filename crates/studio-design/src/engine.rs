@@ -3,16 +3,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
+    NodeKind,
     command::{
         AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
     },
     model::{
-        Actor, BindingPath, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
-        DesignerDiagnostic, DiagnosticSeverity, Interaction, InteractionAction, InteractionId,
-        NodeId, NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride,
-        ResponsiveVariant, RevisionId, RevisionMetadata, RevisionReason,
-        STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot, StudioDesign, StudioDesignSnapshot,
-        TokenId, TombstoneReference, UndoGroupId, ValueKind,
+        Actor, Alignment, BindingPath, DeletionTombstone, DesignNode, DesignNodeSource,
+        DesignToken, DesignerDiagnostic, DiagnosticSeverity, Interaction, InteractionAction,
+        InteractionId, LayoutProperties, Length, LengthUnit, NodeId, NodeParent, OperationId,
+        Placement, ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant, RevisionId,
+        RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot,
+        StudioDesign, StudioDesignSnapshot, TokenId, TombstoneReference, UndoGroupId, ValueKind,
     },
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
     session::{
@@ -31,6 +32,7 @@ pub struct DefaultDesignerSession<P> {
     device_profile: Option<String>,
     tool: ToolKind,
     panel_state: BTreeMap<String, bool>,
+    last_diagnostics: Vec<DesignerDiagnostic>,
 }
 
 impl<P: DesignerPersistence> DefaultDesignerSession<P> {
@@ -91,6 +93,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             device_profile: None,
             tool: ToolKind::default(),
             panel_state: BTreeMap::new(),
+            last_diagnostics: Vec::new(),
         })
     }
 
@@ -115,6 +118,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             device_profile: None,
             tool: ToolKind::default(),
             panel_state: BTreeMap::new(),
+            last_diagnostics: Vec::new(),
         })
     }
 
@@ -138,7 +142,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
         }
         let batch_diagnostics = validate_batch_shape(&batch, &self.state.current.design);
         if !batch_diagnostics.is_empty() {
-            return CommandOutcome::Rejected(batch_diagnostics);
+            return self.reject(batch_diagnostics);
         }
         if let Some(index) = failed_precondition(&self.state.current.design, &batch.preconditions) {
             return CommandOutcome::Conflict(precondition_conflict(
@@ -151,14 +155,14 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
         let mut snapshot = self.state.current.clone();
         let mut inverse_commands = match apply_commands(&mut snapshot, &batch.commands) {
             Ok(commands) => commands,
-            Err(diagnostics) => return CommandOutcome::Rejected(diagnostics),
+            Err(diagnostics) => return self.reject(diagnostics),
         };
         let diagnostics = validate_snapshot(&snapshot);
         if !diagnostics.is_empty() {
-            return CommandOutcome::Rejected(diagnostics);
+            return self.reject(diagnostics);
         }
         let Some(committed_revision) = current_revision.checked_next() else {
-            return CommandOutcome::Rejected(vec![diagnostic(
+            return self.reject(vec![diagnostic(
                 "DESIGN_REVISION_EXHAUSTED",
                 "the project revision sequence is exhausted",
                 None,
@@ -245,7 +249,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             } else {
                 "redo"
             };
-            return CommandOutcome::Rejected(vec![diagnostic(
+            return self.reject(vec![diagnostic(
                 "DESIGN_HISTORY_UNAVAILABLE",
                 format!("there is no named command group to {action}"),
                 None,
@@ -275,7 +279,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
                     commands.extend(batch.batch.commands.clone());
                     if let Err(diagnostics) = apply_commands(&mut projected, &batch.batch.commands)
                     {
-                        return CommandOutcome::Rejected(diagnostics);
+                        return self.reject(diagnostics);
                     }
                 }
                 commands
@@ -285,14 +289,14 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
 
         let mut snapshot = self.state.current.clone();
         if let Err(diagnostics) = apply_commands(&mut snapshot, &commands) {
-            return CommandOutcome::Rejected(diagnostics);
+            return self.reject(diagnostics);
         }
         let diagnostics = validate_snapshot(&snapshot);
         if !diagnostics.is_empty() {
-            return CommandOutcome::Rejected(diagnostics);
+            return self.reject(diagnostics);
         }
         let Some(committed_revision) = current_revision.checked_next() else {
-            return CommandOutcome::Rejected(vec![diagnostic(
+            return self.reject(vec![diagnostic(
                 "DESIGN_REVISION_EXHAUSTED",
                 "the project revision sequence is exhausted",
                 None,
@@ -341,6 +345,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             return CommandOutcome::PersistenceFailed(error);
         }
         self.state = candidate;
+        self.last_diagnostics.clear();
         self.selection
             .node_ids
             .retain(|node_id| self.state.current.design.nodes.contains_key(node_id));
@@ -367,6 +372,20 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             history_cursor: self.state.history_cursor,
         }
     }
+
+    fn reject(&mut self, diagnostics: Vec<DesignerDiagnostic>) -> CommandOutcome {
+        self.last_diagnostics.clone_from(&diagnostics);
+        CommandOutcome::Rejected(diagnostics)
+    }
+
+    fn diagnostics(&self) -> Vec<DesignerDiagnostic> {
+        self.state
+            .diagnostics
+            .iter()
+            .cloned()
+            .chain(self.last_diagnostics.iter().cloned())
+            .collect()
+    }
 }
 
 impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
@@ -376,9 +395,20 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
             DesignerQuery::Node { node_id } => {
                 DesignerQueryResult::Node(self.state.current.design.nodes.get(&node_id).cloned())
             }
-            DesignerQuery::Diagnostics => {
-                DesignerQueryResult::Diagnostics(self.state.diagnostics.clone())
-            }
+            DesignerQuery::NodeForProfile { node_id, profile } => DesignerQueryResult::Node(
+                self.state
+                    .current
+                    .design
+                    .node_for_profile(&node_id, profile.as_deref()),
+            ),
+            DesignerQuery::Diagnostics => DesignerQueryResult::Diagnostics(self.diagnostics()),
+            DesignerQuery::DiagnosticsForNode { node_id } => DesignerQueryResult::Diagnostics(
+                self.diagnostics()
+                    .iter()
+                    .filter(|diagnostic| diagnostic.node_id.as_ref() == Some(&node_id))
+                    .cloned()
+                    .collect(),
+            ),
             DesignerQuery::History => DesignerQueryResult::History(HistorySnapshot {
                 entries: self.state.history.clone(),
                 cursor: self.state.history_cursor,
@@ -545,6 +575,16 @@ fn apply_command(
             property,
             value,
         } => set_property(snapshot, node_id, property, value.as_ref()),
+        Command::SetLayout { node_id, layout } => set_layout(snapshot, node_id, layout),
+        Command::SetResponsiveLayout {
+            node_id,
+            variant_id,
+            layout,
+        } => set_responsive_layout(snapshot, node_id, variant_id, layout),
+        Command::RemoveResponsiveLayout {
+            node_id,
+            variant_id,
+        } => remove_responsive_layout(snapshot, node_id, variant_id),
         Command::RenameNode { node_id, name } => rename_node(snapshot, node_id, name),
         Command::DefineResponsiveVariant { variant } => {
             define_responsive_variant(snapshot, variant)
@@ -943,6 +983,13 @@ fn set_property(
             node_id,
         ));
     }
+    if is_typed_layout_property(property) {
+        return Err(node_diagnostic(
+            "DESIGN_LAYOUT_TYPED_REQUIRED",
+            "layout fields must be edited through a typed layout command",
+            node_id,
+        ));
+    }
     let node = snapshot
         .design
         .nodes
@@ -956,6 +1003,91 @@ fn set_property(
         node_id: node_id.clone(),
         property: property.to_owned(),
         value: prior,
+    })
+}
+
+fn set_layout(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    layout: &LayoutProperties,
+) -> Result<Command, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = std::mem::replace(&mut node.layout, layout.clone());
+    Ok(Command::SetLayout {
+        node_id: node_id.clone(),
+        layout: prior,
+    })
+}
+
+fn set_responsive_layout(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    variant_id: &crate::ResponsiveVariantId,
+    layout: &LayoutProperties,
+) -> Result<Command, DesignerDiagnostic> {
+    if !snapshot.design.responsive_variants.contains_key(variant_id) {
+        return Err(node_diagnostic(
+            "DESIGN_RESPONSIVE_VARIANT_MISSING",
+            "the responsive layout references an unknown device profile",
+            node_id,
+        ));
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node
+        .responsive_overrides
+        .get(variant_id)
+        .map(|value| value.layout.clone());
+    node.responsive_overrides
+        .entry(variant_id.clone())
+        .or_insert_with(|| crate::ResponsiveNodeOverride {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            properties: BTreeMap::new(),
+            layout: LayoutProperties::default(),
+            style: crate::StyleProperties::default(),
+        })
+        .layout = layout.clone();
+    Ok(match prior {
+        Some(prior) => Command::SetResponsiveLayout {
+            node_id: node_id.clone(),
+            variant_id: variant_id.clone(),
+            layout: prior,
+        },
+        None => Command::RemoveResponsiveLayout {
+            node_id: node_id.clone(),
+            variant_id: variant_id.clone(),
+        },
+    })
+}
+
+fn remove_responsive_layout(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    variant_id: &crate::ResponsiveVariantId,
+) -> Result<Command, DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let Some(override_value) = node.responsive_overrides.remove(variant_id) else {
+        return Err(node_diagnostic(
+            "DESIGN_RESPONSIVE_LAYOUT_MISSING",
+            "the responsive layout override does not exist",
+            node_id,
+        ));
+    };
+    Ok(Command::SetResponsiveLayout {
+        node_id: node_id.clone(),
+        variant_id: variant_id.clone(),
+        layout: override_value.layout,
     })
 }
 
@@ -2395,6 +2527,7 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
             None,
         ));
     }
+    diagnostics.extend(validate_layout(design));
     for (screen_id, screen) in &design.screens {
         if screen.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
             || screen.id != *screen_id
@@ -2584,6 +2717,318 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
         }
     }
     diagnostics
+}
+
+/// Validate layout, sizing, constraints, and overlay placement semantics.
+///
+/// This is public so inspector and canvas code can explain a rejected edit
+/// before submitting a batch. Diagnostics are ordered by stable node identity
+/// and always carry the affected node for selection/focus routing.
+#[must_use]
+pub fn validate_layout(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (node_id, node) in &design.nodes {
+        diagnostics.extend(validate_layout_for_node(design, node_id, node));
+        for (variant_id, override_value) in &node.responsive_overrides {
+            if design.responsive_variants.contains_key(variant_id) {
+                diagnostics.extend(validate_layout_for_node(
+                    design,
+                    node_id,
+                    &DesignNode {
+                        layout: override_value.layout.clone(),
+                        ..node.clone()
+                    },
+                ));
+            }
+        }
+    }
+    diagnostics
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_layout_for_node(
+    design: &StudioDesign,
+    node_id: &NodeId,
+    node: &DesignNode,
+) -> Vec<DesignerDiagnostic> {
+    let layout = &node.layout;
+    let mut diagnostics = Vec::new();
+    if layout.schema_version != STUDIO_DESIGN_SCHEMA_VERSION {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_SCHEMA_INVALID",
+            "the layout schema version is unsupported",
+            node_id,
+        ));
+    }
+    if let Some(position) = &layout.position
+        && position.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_POSITION_SCHEMA_INVALID",
+            "the positioned layout schema version is unsupported",
+            node_id,
+        ));
+    }
+
+    for (name, value, allow_auto) in [
+        ("width", &layout.width, true),
+        ("height", &layout.height, true),
+        ("min_width", &layout.min_width, false),
+        ("max_width", &layout.max_width, false),
+        ("min_height", &layout.min_height, false),
+        ("max_height", &layout.max_height, false),
+        ("gap", &layout.gap, false),
+        ("row_gap", &layout.row_gap, false),
+        ("column_gap", &layout.column_gap, false),
+        ("padding", &layout.padding, false),
+    ] {
+        if let Some(value) = value
+            && (!valid_length(value, allow_auto, true)
+                || (allow_auto && value.unit == LengthUnit::Auto && value.value.trim() != "auto"))
+        {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_LAYOUT_LENGTH_INVALID",
+                format!("{name} must be a finite, non-negative length with a supported unit"),
+                node_id,
+            ));
+        }
+    }
+    if let Some(position) = &layout.position {
+        for value in [
+            &position.top,
+            &position.right,
+            &position.bottom,
+            &position.left,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !valid_length(value, false, false) {
+                diagnostics.push(node_diagnostic(
+                    "DESIGN_LAYOUT_POSITION_INVALID",
+                    "overlay edges must be finite lengths with a supported unit",
+                    node_id,
+                ));
+                break;
+            }
+        }
+    }
+    for (minimum, maximum, name) in [
+        (&layout.min_width, &layout.max_width, "width"),
+        (&layout.min_height, &layout.max_height, "height"),
+    ] {
+        if let (Some(minimum), Some(maximum)) = (minimum, maximum)
+            && minimum.unit == maximum.unit
+            && valid_length(minimum, false, true)
+            && valid_length(maximum, false, true)
+            && parse_length(minimum)
+                .zip(parse_length(maximum))
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+        {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_LAYOUT_CONSTRAINT_INVALID",
+                format!("minimum {name} must not exceed maximum {name}"),
+                node_id,
+            ));
+        }
+    }
+    if let (Some(size), Some(minimum), Some(maximum)) =
+        (&layout.width, &layout.min_width, &layout.max_width)
+    {
+        if size.unit == minimum.unit
+            && parse_length(size)
+                .zip(parse_length(minimum))
+                .is_some_and(|(size, minimum)| size < minimum)
+        {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_LAYOUT_CONSTRAINT_INVALID",
+                "width is below its minimum constraint",
+                node_id,
+            ));
+        }
+        if size.unit == maximum.unit
+            && parse_length(size)
+                .zip(parse_length(maximum))
+                .is_some_and(|(size, maximum)| size > maximum)
+        {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_LAYOUT_CONSTRAINT_INVALID",
+                "width exceeds its maximum constraint",
+                node_id,
+            ));
+        }
+    }
+    if let (Some(size), Some(minimum), Some(maximum)) =
+        (&layout.height, &layout.min_height, &layout.max_height)
+    {
+        if size.unit == minimum.unit
+            && parse_length(size)
+                .zip(parse_length(minimum))
+                .is_some_and(|(size, minimum)| size < minimum)
+        {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_LAYOUT_CONSTRAINT_INVALID",
+                "height is below its minimum constraint",
+                node_id,
+            ));
+        }
+        if size.unit == maximum.unit
+            && parse_length(size)
+                .zip(parse_length(maximum))
+                .is_some_and(|(size, maximum)| size > maximum)
+        {
+            diagnostics.push(node_diagnostic(
+                "DESIGN_LAYOUT_CONSTRAINT_INVALID",
+                "height exceeds its maximum constraint",
+                node_id,
+            ));
+        }
+    }
+
+    let is_container = matches!(
+        node_kind(node),
+        Some(NodeKind::Box | NodeKind::Row | NodeKind::Column | NodeKind::Stack | NodeKind::Grid)
+    );
+    if (layout.gap.is_some() || layout.row_gap.is_some() || layout.column_gap.is_some())
+        && !is_container
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_CONTAINER_INVALID",
+            "gaps may only be authored on a layout container",
+            node_id,
+        ));
+    }
+    if (layout.row_gap.is_some() || layout.column_gap.is_some())
+        && node_kind(node) != Some(NodeKind::Grid)
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_GRID_INVALID",
+            "row_gap and column_gap require a Grid container",
+            node_id,
+        ));
+    }
+    if layout
+        .grid_columns
+        .is_some_and(|columns| !(1..=64).contains(&columns))
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_GRID_INVALID",
+            "grid_columns must be between 1 and 64",
+            node_id,
+        ));
+    }
+    if layout.grid_columns.is_some() && node_kind(node) != Some(NodeKind::Grid) {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_GRID_INVALID",
+            "grid_columns requires a Grid container",
+            node_id,
+        ));
+    }
+    if layout.alignment.is_some() && !is_container {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_CONTAINER_INVALID",
+            "alignment may only be authored on a layout container",
+            node_id,
+        ));
+    }
+    if layout.alignment == Some(Alignment::SpaceBetween)
+        && !matches!(node_kind(node), Some(NodeKind::Row | NodeKind::Column))
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_ALIGNMENT_INVALID",
+            "space_between alignment requires a Row or Column container",
+            node_id,
+        ));
+    }
+
+    let parent_kind = parent_kind(design, node_id);
+    if matches!(
+        layout.placement,
+        Some(Placement::Overlay | Placement::Absolute)
+    ) && parent_kind != Some(NodeKind::Stack)
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_OVERLAY_PARENT_INVALID",
+            "overlay and absolute placement require a Stack parent",
+            node_id,
+        ));
+    }
+    if layout.position.is_some()
+        && !matches!(
+            layout.placement,
+            Some(Placement::Overlay | Placement::Absolute)
+        )
+    {
+        diagnostics.push(node_diagnostic(
+            "DESIGN_LAYOUT_POSITION_INVALID",
+            "position edges require overlay or absolute placement",
+            node_id,
+        ));
+    }
+    diagnostics
+}
+
+fn node_kind(node: &DesignNode) -> Option<NodeKind> {
+    match &node.source {
+        DesignNodeSource::Primitive { kind } => Some(*kind),
+        DesignNodeSource::CompositionInstance { .. } => None,
+    }
+}
+
+fn parent_kind(design: &StudioDesign, node_id: &NodeId) -> Option<NodeKind> {
+    let NodeParent::Node { node_id: parent_id } = design.parents.get(node_id)? else {
+        return None;
+    };
+    design.nodes.get(parent_id).and_then(node_kind)
+}
+
+fn valid_length(length: &Length, allow_auto: bool, nonnegative: bool) -> bool {
+    if length.value.trim().is_empty()
+        || length.value.chars().any(char::is_control)
+        || (!allow_auto && length.unit == LengthUnit::Auto)
+    {
+        return false;
+    }
+    if length.unit == LengthUnit::Auto {
+        return allow_auto && length.value.trim() == "auto";
+    }
+    let Some(value) = parse_length(length) else {
+        return false;
+    };
+    !nonnegative || value >= 0.0
+}
+
+fn parse_length(length: &Length) -> Option<f64> {
+    length
+        .value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+fn is_typed_layout_property(property: &str) -> bool {
+    matches!(
+        property,
+        "width"
+            | "height"
+            | "min_width"
+            | "max_width"
+            | "min_height"
+            | "max_height"
+            | "gap"
+            | "row_gap"
+            | "column_gap"
+            | "padding"
+            | "placement"
+            | "position"
+            | "alignment"
+            | "grid_columns"
+            | "top"
+            | "right"
+            | "bottom"
+            | "left"
+    )
 }
 
 fn parent_chain_cycles(design: &StudioDesign, start: &NodeId) -> bool {

@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Actor, BindingPath, DeletionTombstone, DesignNode, DesignToken, Interaction, NodeId,
-    NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant,
-    ReusableComposition, RevisionId, TokenId, UndoGroupId,
+    Actor, BindingPath, DeletionTombstone, DesignNode, DesignToken, Interaction, LayoutProperties,
+    NodeId, NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride,
+    ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, TokenId, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -85,6 +85,19 @@ pub enum Command {
         node_id: NodeId,
         property: String,
         value: Option<PropertyValue>,
+    },
+    SetLayout {
+        node_id: NodeId,
+        layout: LayoutProperties,
+    },
+    SetResponsiveLayout {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        layout: LayoutProperties,
+    },
+    RemoveResponsiveLayout {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
     },
     RenameNode {
         node_id: NodeId,
@@ -176,6 +189,28 @@ pub enum Command {
         input: String,
         value: Option<PropertyValue>,
     },
+}
+
+impl Command {
+    /// Build a typed base-layout edit for an inspector or canvas handle.
+    #[must_use]
+    pub fn set_layout(node_id: NodeId, layout: LayoutProperties) -> Self {
+        Self::SetLayout { node_id, layout }
+    }
+
+    /// Build a typed breakpoint-layout edit for an inspector or canvas handle.
+    #[must_use]
+    pub fn set_responsive_layout(
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        layout: LayoutProperties,
+    ) -> Self {
+        Self::SetResponsiveLayout {
+            node_id,
+            variant_id,
+            layout,
+        }
+    }
 }
 
 /// A target parent and ordered child position.
