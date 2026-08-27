@@ -10,17 +10,13 @@
   "capabilities": [],
   "limits": { "memoryMiB": 16, "eventFuel": 1000000 },
   "assets": ["assets/github.svg"],
-  "secrets": [
-    { "name": "github.oauth.client_secret", "purpose": "GitHub OAuth client configuration" }
-  ],
   "integrations": [
     {
       "id": "github",
       "version": "1.0.0",
       "config": {
         "clientId": "REPLACE_WITH_GITHUB_CLIENT_ID",
-        "clientSecretName": "github.oauth.client_secret",
-        "scopes": ["read:user", "user:email", "repo"]
+        "scopes": ["read:user", "user:email"]
       }
     }
   ],

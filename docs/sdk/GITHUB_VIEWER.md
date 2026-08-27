@@ -1,8 +1,9 @@
 # GitHub viewer proof application
 
 The checked-in `examples/github-viewer` package is the smallest signed Runtime launch target for
-the provider-plugin path. Its manifest pins the `github` integration descriptor, names the OAuth
-client secret without containing its value, and signs three REST route groups:
+the provider-plugin path. Its manifest pins the `github` integration descriptor and signs three
+REST route groups. The viewer uses a public OAuth client with host-owned S256 PKCE; it requests
+only `read:user` and `user:email` and never declares or stores a client secret:
 
 | route group | method | path | credential |
 | --- | --- | --- | --- |
@@ -12,8 +13,10 @@ client secret without containing its value, and signs three REST route groups:
 
 `crates/studio-github` is the host-neutral typed SDK. `GithubClient` accepts only the restricted
 `GuestRestApi`; it cannot receive an OAuth token. `GithubViewer` models the deterministic journey:
-sign-in request, authenticated repository list, and repository detail. Browser handoff, callback
-capture, token storage, and send-time credential injection remain host responsibilities.
+sign-in request, authenticated repository list, and repository detail. `GithubGuestEvent` and
+`GithubHostEvent` are the closed event contract for those transitions; their payloads contain only
+approved profile/repository projections. Browser handoff, callback capture, token storage, and
+send-time credential injection remain host responsibilities.
 
 `crates/studio-ai` and `sdk/ai` establish the provider-neutral OpenAI-compatible request and
 validated SSE chunk shape. The current broker's streaming contract is GET-only, so the AI route is
@@ -29,8 +32,25 @@ cargo run -p studio-app -- --dev examples/github-viewer/build/github-viewer.stud
 ```
 
 Before a production launch, replace the manifest's example client id through the release
-configuration workflow and provision `github.oauth.client_secret` through protected host storage.
-The manifest never carries that secret.
+configuration workflow and register the matching GitHub OAuth callback policy. The host binds a
+fresh `127.0.0.1` loopback port for each sign-in, validates the exact callback path and state, and
+discards malformed, denied, replayed, or scope-mismatched callbacks before token exchange.
+
+## Staging evidence
+
+The deterministic source tests cover PKCE URL construction, least-privilege scope admission,
+strict callback decoding/redirect checks, protected-token expiry, broker route admission, and the
+typed profile/repository transitions. A live staging run must be performed with a disposable GitHub
+OAuth app and recorded with:
+
+```text
+STUDIO_GITHUB_CLIENT_ID=... \
+STUDIO_GITHUB_STAGING=1 \
+<host launch command>
+```
+
+The evidence record should include only status codes and safe `oauth.*`/`net.*` result codes—never
+authorization URLs, callback query values, access tokens, refresh tokens, or raw upstream bodies.
 
 ## Adding a second provider
 
