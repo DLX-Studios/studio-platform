@@ -1,0 +1,18 @@
+[package]
+name = "studio-flagship"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic restaurant operations demo and release evidence harness"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+studio-actions = { path = "../studio-actions" }
+studio-design = { path = "../studio-design" }
+studio-security = { path = "../studio-security" }
+
+[lints]
+workspace = true
