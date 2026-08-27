@@ -6,6 +6,8 @@
 
 /// Host-mediated application data namespaces and typed collection helpers.
 pub mod application_data;
+/// Host-owned application users, credentials, roles, and row-scoped authorization.
+pub mod rbac;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
 
@@ -14,6 +16,13 @@ pub use application_data::{
     ApplicationDataGuestApi, ApplicationDataHandle, ApplicationDataHost, ApplicationDataNamespace,
     CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
     ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
+};
+pub use rbac::{
+    ApplicationAuditEvent, ApplicationAuditEventKind, ApplicationAuditOutcome,
+    ApplicationAuditSink, ApplicationRbacHandle, ApplicationRbacSettings, ApplicationSession,
+    AuthorizationTarget, AuthorizedApplicationDataHandle, CollectionGrant, CredentialInput,
+    CredentialKind, DataOperation, RbacError, RbacErrorCode, RoleDefinition, RowScope,
+    ThrottlePolicy,
 };
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
