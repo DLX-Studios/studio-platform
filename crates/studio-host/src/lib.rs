@@ -18,6 +18,7 @@ pub mod identity;
 pub mod local_store;
 /// Host-owned center authority, station enrollment, offline replay, and conflicts.
 pub mod topology;
+pub mod migrations;
 
 pub use application_data::{
     APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
@@ -57,4 +58,8 @@ pub use topology::{
     OperationReceipt, PairingToken, PersistentCenter, SharedRecord, Station, StationCache,
     StationId, StationLocalState, StationSettings, StationWriteResult, TopologyError,
     TopologyErrorCode, WriteIntent, WriteOperation,
+};
+pub use migrations::{
+    MigrationError, MigrationErrorCode, MigrationLifecycle, MigrationRunner, MigrationState,
+    MigrationStepError, MigrationRunReport, RecoveryPoint, MIGRATION_STATE_BATCH_ID,
 };

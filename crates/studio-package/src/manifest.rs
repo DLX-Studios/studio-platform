@@ -71,6 +71,9 @@ pub struct ManifestV1 {
     /// Signed host-mediated route groups contributed by enabled integrations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<RouteGroupDeclaration>,
+    /// Signed, forward-only application data migrations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<MigrationDeclaration>,
 }
 
 /// A version-pinned integration enabled by an application package.
@@ -84,6 +87,24 @@ pub struct IntegrationReference {
     /// Public configuration values; secrets remain named declarations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<Value>,
+}
+
+/// One signed, forward-only application data migration.
+///
+/// The executable migration document is an ordinary declared asset. Keeping the asset path in
+/// the signed manifest means [`crate::verify_bundle_signature`] authenticates both the migration
+/// identity and its exact bytes before a host can execute it.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MigrationDeclaration {
+    /// Stable migration identity.
+    pub id: String,
+    /// Schema version accepted by this migration.
+    pub from_version: u32,
+    /// Schema version produced by this migration.
+    pub to_version: u32,
+    /// Declared asset containing the host-defined migration document.
+    pub entry: String,
 }
 
 /// Signed publisher identity.
@@ -199,6 +220,7 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
     validate_secrets(&manifest.secrets)?;
     validate_integrations(&manifest.integrations)?;
     validate_routes(&manifest.routes)?;
+    validate_migrations(&manifest.migrations, &manifest.assets)?;
     let mut capabilities = HashSet::new();
     if manifest
         .capabilities
@@ -246,6 +268,39 @@ fn validate_routes(routes: &[studio_net::declaration::RouteGroupDeclaration]) ->
     Ok(())
 }
 
+fn validate_migrations(
+    migrations: &[MigrationDeclaration],
+    assets: &[String],
+) -> Result<(), ManifestError> {
+    if migrations.len() > 128 {
+        return Err(ManifestError::ManifestInvalid("migrations"));
+    }
+    let mut ids = HashSet::new();
+    let mut versions = HashSet::new();
+    for migration in migrations {
+        if !valid_identifier(&migration.id, 128)
+            || migration.from_version == 0
+            || migration.from_version.checked_add(1) != Some(migration.to_version)
+            || !migration.entry.starts_with("assets/migrations/")
+            || !assets.iter().any(|asset| asset == &migration.entry)
+            || !ids.insert(migration.id.as_str())
+            || !versions.insert((migration.from_version, migration.to_version))
+        {
+            return Err(ManifestError::ManifestInvalid("migrations"));
+        }
+    }
+    if migrations
+        .windows(2)
+        .any(|pair| {
+            pair[0].from_version >= pair[1].from_version
+                || pair[0].to_version != pair[1].from_version
+        })
+    {
+        return Err(ManifestError::ManifestInvalid("migrations"));
+    }
+    Ok(())
+}
+
 fn validate_secrets(secrets: &[SecretDeclaration]) -> Result<(), ManifestError> {
     let mut names = HashSet::new();
     for secret in secrets {
@@ -262,6 +317,17 @@ fn validate_secrets(secrets: &[SecretDeclaration]) -> Result<(), ManifestError> 
 fn valid_secret_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
+        && value.starts_with(|character: char| character.is_ascii_lowercase())
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-' | '_')
+        })
+}
+
+fn valid_identifier(value: &str, maximum_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum_bytes
         && value.starts_with(|character: char| character.is_ascii_lowercase())
         && value.chars().all(|character| {
             character.is_ascii_lowercase()

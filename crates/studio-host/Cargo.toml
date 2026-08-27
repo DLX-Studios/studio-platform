@@ -13,11 +13,13 @@ sha2.workspace = true
 zeroize.workspace = true
 studio-security = { path = "../studio-security" }
 studio-design = { path = "../studio-design" }
+studio-package = { path = "../studio-package" }
 surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-rocksdb"] }
 thiserror.workspace = true
 tokio = { version = "=1.52.1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-mem"] }
 tempfile = "=3.27.0"
 
