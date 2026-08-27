@@ -6,10 +6,19 @@
 
 /// Adapter from the host `LocalStore` to Studio Design persistence records.
 pub mod designer_persistence;
+/// Host-owned, content-addressed Studio Library asset admission and catalog.
+pub mod library_assets;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
 
 pub use designer_persistence::LocalStoreDesignerPersistence;
+pub use library_assets::{
+    AssetAdmission, AssetAdmissionRequest, AssetBlob, AssetFormat, AssetKind, AssetMetadata,
+    LibraryAsset, MediaKind, AssetProvenance,
+    AssetSourceKind, AssetUsage, BlobReference, DeletePolicy, DeleteResult, LibraryAssetError,
+    LibraryAssetStore, LibraryDiagnostic, LibraryDiagnosticCode, LibraryPanelAction,
+    LibraryPanelKey, LibraryPanelState, RuntimeVariant, RuntimeVariantSpec,
+};
 
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,

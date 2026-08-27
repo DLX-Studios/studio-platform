@@ -47,6 +47,20 @@ impl LocalStoreDesignerPersistence {
         })
     }
 
+    /// Wrap a shared durable store so Designer persistence and Library asset
+    /// metadata can use the same host-owned LocalStore without exposing its
+    /// engine to the Designer domain.
+    pub fn new_shared(store: Arc<EmbeddedLocalStore>) -> Result<Self, PersistenceError> {
+        if store.durability() != Durability::Every {
+            return Err(PersistenceError {
+                code: PersistenceErrorCode::Rejected,
+                message: "Designer persistence requires durability for every accepted transaction"
+                    .to_owned(),
+            });
+        }
+        Ok(Self { store })
+    }
+
     /// Recover the owned `LocalStore` after every session and adapter clone is dropped.
     ///
     /// The returned `Err(Self)` retains ownership when another adapter clone
