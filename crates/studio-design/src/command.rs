@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Actor, DeletionTombstone, DesignNode, NodeId, NodeParent, OperationId, ProjectId,
-    PropertyValue, RevisionId, UndoGroupId,
+    Actor, BindingPath, DeletionTombstone, DesignNode, DesignToken, Interaction, NodeId,
+    NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant,
+    ReusableComposition, RevisionId, TokenId, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -53,7 +54,7 @@ pub enum CommandPrecondition {
     },
 }
 
-/// Structural and property-edit commands implemented by ticket 37.
+/// Closed command families for structural editing and semantic design data.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -88,6 +89,92 @@ pub enum Command {
     RenameNode {
         node_id: NodeId,
         name: String,
+    },
+    /// Define a named breakpoint/input profile.
+    DefineResponsiveVariant {
+        variant: ResponsiveVariant,
+    },
+    /// Replace a breakpoint/input profile while retaining its identity.
+    UpdateResponsiveVariant {
+        variant: ResponsiveVariant,
+    },
+    /// Remove a profile that is not referenced by a node override.
+    RemoveResponsiveVariant {
+        variant_id: crate::ResponsiveVariantId,
+    },
+    /// Set or clear a complete base-plus-profile override on one node.
+    SetResponsiveOverride {
+        node_id: NodeId,
+        variant_id: crate::ResponsiveVariantId,
+        value: Option<ResponsiveNodeOverride>,
+    },
+    /// Define a design token with a stable identity.
+    DefineToken {
+        token: DesignToken,
+    },
+    /// Replace a token's value and metadata while retaining its identity.
+    UpdateToken {
+        token: DesignToken,
+    },
+    /// Remove a token after all references have been cleared.
+    RemoveToken {
+        token_id: TokenId,
+    },
+    /// Apply a shared token reference to a node property.
+    ApplyToken {
+        node_id: NodeId,
+        property: String,
+        token_id: TokenId,
+    },
+    /// Set or clear a typed content binding on a node property.
+    SetBinding {
+        node_id: NodeId,
+        property: String,
+        binding: Option<BindingPath>,
+    },
+    /// Add one node-originated interaction to the declarative graph.
+    DefineInteraction {
+        interaction: Interaction,
+    },
+    /// Replace an interaction while retaining its identity.
+    UpdateInteraction {
+        interaction: Interaction,
+    },
+    /// Remove an interaction and its source-node attachment.
+    RemoveInteraction {
+        interaction_id: crate::InteractionId,
+    },
+    /// Register a project-owned reusable composition definition.
+    DefineComposition {
+        composition: ReusableComposition,
+    },
+    /// Replace a composition definition and propagate its version to instances.
+    UpdateComposition {
+        composition: ReusableComposition,
+    },
+    /// Remove a composition definition with no remaining instances.
+    RemoveComposition {
+        composition_id: crate::CompositionId,
+    },
+    /// Create a stable-ID instance of a reusable composition.
+    InstantiateComposition {
+        node_id: NodeId,
+        name: String,
+        parent: ParentPlacement,
+        composition_id: crate::CompositionId,
+        inputs: BTreeMap<String, PropertyValue>,
+    },
+    /// Set or clear one declared composition input on an instance.
+    SetCompositionInput {
+        node_id: NodeId,
+        input: String,
+        value: Option<PropertyValue>,
+    },
+    /// Set or clear one contract-admitted instance override.
+    SetCompositionOverride {
+        node_id: NodeId,
+        input: String,
+        value: Option<PropertyValue>,
     },
 }
 

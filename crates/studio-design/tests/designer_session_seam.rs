@@ -8,13 +8,16 @@ use std::{
 };
 
 use studio_design::{
-    Actor, ActorId, ActorKind, Command, CommandBatch, CommandOutcome, CommandPrecondition,
-    DefaultDesignerSession, DesignNode, DesignerQuery, DesignerQueryResult, DesignerSession,
-    HistoryOperation, InMemoryDesignerPersistence, Interaction, InteractionAction,
-    InteractionEvent, InteractionId, InteractionSource, NodeId, NodeParent, OperationId,
-    ParentPlacement, ProjectId, PropertyValue, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, Screen,
-    ScreenId, SelectionSnapshot, SessionContextUpdate, StudioDesign, StudioDesignSnapshot,
-    UndoGroupId,
+    Actor, ActorId, ActorKind, BindingPath, Command, CommandBatch, CommandOutcome,
+    CommandPrecondition, CompositionId, CompositionInput, DefaultDesignerSession, DesignNode,
+    DesignNodeSource, DesignToken, DesignerQuery, DesignerQueryResult, DesignerSession,
+    HistoryOperation, InMemoryDesignerPersistence, InputEnvironment, Interaction,
+    InteractionAction, InteractionEvent, InteractionId, InteractionSource, LayoutProperties,
+    NodeId, NodeParent, OperationId, ParentPlacement, ProjectId, PropertyValue,
+    ResponsiveNodeOverride, ResponsiveVariant, ReusableComposition, RevisionId,
+    STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, SessionContextUpdate,
+    StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenValue,
+    UndoGroupId, ValueKind,
 };
 use studio_protocol::NodeKind;
 
@@ -635,4 +638,246 @@ fn closed_source_schema_rejects_unknown_fields() {
         .expect("design is an object")
         .insert("future_field".to_owned(), serde_json::json!(true));
     assert!(serde_json::from_value::<StudioDesign>(encoded).is_err());
+}
+
+#[test]
+fn semantic_command_families_round_trip_atomically_and_undo() {
+    block_on(async {
+        let variant_id = studio_design::ResponsiveVariantId::new("phone").unwrap();
+        let token_id = TokenId::new("surface").unwrap();
+        let mut session = created(InMemoryDesignerPersistence::default()).await;
+        let override_value = ResponsiveNodeOverride {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            properties: [(
+                "text".to_owned(),
+                PropertyValue::String("compact".to_owned()),
+            )]
+            .into_iter()
+            .collect(),
+            layout: LayoutProperties::default(),
+            style: StyleProperties::default(),
+        };
+        assert_accepted(
+            session
+                .submit(batch(
+                    RevisionId::INITIAL,
+                    "semantic-families",
+                    "semantic-families",
+                    vec![
+                        Command::DefineResponsiveVariant {
+                            variant: ResponsiveVariant {
+                                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                                id: variant_id.clone(),
+                                name: "Phone".to_owned(),
+                                minimum_width: None,
+                                maximum_width: Some(600),
+                                input: InputEnvironment::Touch,
+                            },
+                        },
+                        Command::DefineToken {
+                            token: DesignToken {
+                                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                                id: token_id.clone(),
+                                name: "Surface".to_owned(),
+                                kind: TokenKind::Color,
+                                value: TokenValue::Color(studio_design::ColorValue::SrgbHex(
+                                    "#ffffff".to_owned(),
+                                )),
+                            },
+                        },
+                        Command::ApplyToken {
+                            node_id: node_id("item"),
+                            property: "background".to_owned(),
+                            token_id,
+                        },
+                        Command::SetBinding {
+                            node_id: node_id("item"),
+                            property: "label".to_owned(),
+                            binding: Some(BindingPath {
+                                collection: "menu".to_owned(),
+                                segments: vec!["title".to_owned()],
+                            }),
+                        },
+                        Command::SetResponsiveOverride {
+                            node_id: node_id("item"),
+                            variant_id,
+                            value: Some(override_value),
+                        },
+                    ],
+                ))
+                .await,
+        );
+        let current = snapshot(&session);
+        assert!(
+            current
+                .design
+                .tokens
+                .contains_key(&TokenId::new("surface").unwrap())
+        );
+        assert!(matches!(
+            current.design.nodes[&node_id("item")]
+                .properties
+                .get("label"),
+            Some(PropertyValue::Binding(_))
+        ));
+        assert!(
+            current.design.nodes[&node_id("item")]
+                .responsive_overrides
+                .contains_key(&studio_design::ResponsiveVariantId::new("phone").unwrap())
+        );
+
+        assert_accepted(
+            session
+                .undo(HistoryOperation {
+                    operation_id: operation_id("undo-semantic-families"),
+                    actor: actor(),
+                    base_revision: RevisionId::new(1),
+                })
+                .await,
+        );
+        let undone = snapshot(&session);
+        assert!(undone.design.tokens.is_empty());
+        assert!(undone.design.nodes[&node_id("item")].properties.is_empty());
+        assert!(
+            undone.design.nodes[&node_id("item")]
+                .responsive_overrides
+                .is_empty()
+        );
+    });
+}
+
+#[test]
+fn interactions_and_compositions_validate_contracts_and_propagate_identity() {
+    block_on(async {
+        let composition_id = CompositionId::new("card").unwrap();
+        let composition_root = node_id("card-root");
+        let mut design = seed_design();
+        design.nodes.insert(
+            composition_root.clone(),
+            DesignNode::primitive(composition_root.clone(), "Card", NodeKind::Card),
+        );
+        design.parents.insert(
+            composition_root.clone(),
+            NodeParent::Composition {
+                composition_id: composition_id.clone(),
+            },
+        );
+        let persistence = InMemoryDesignerPersistence::default();
+        let mut session = DefaultDesignerSession::create(
+            persistence,
+            design,
+            operation_id("semantic-create"),
+            actor(),
+            undo_group_id("create-project"),
+        )
+        .await
+        .expect("project creates");
+        let composition = |version| ReusableComposition {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            id: composition_id.clone(),
+            name: "Card".to_owned(),
+            definition_version: version,
+            root_node_id: composition_root.clone(),
+            inputs: [(
+                "label".to_owned(),
+                CompositionInput {
+                    value_kind: ValueKind::String,
+                    required: true,
+                    default: None,
+                    overridable: true,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            slots: BTreeMap::new(),
+        };
+        let interaction_id = InteractionId::new("tap-card").unwrap();
+        assert_accepted(
+            session
+                .submit(batch(
+                    RevisionId::INITIAL,
+                    "define-semantic",
+                    "define-semantic",
+                    vec![
+                        Command::DefineComposition {
+                            composition: composition(1),
+                        },
+                        Command::InstantiateComposition {
+                            node_id: node_id("card-instance"),
+                            name: "Card instance".to_owned(),
+                            parent: ParentPlacement {
+                                parent: NodeParent::Node {
+                                    node_id: node_id("root"),
+                                },
+                                index: 2,
+                            },
+                            composition_id: composition_id.clone(),
+                            inputs: [(
+                                "label".to_owned(),
+                                PropertyValue::String("Dinner".to_owned()),
+                            )]
+                            .into_iter()
+                            .collect(),
+                        },
+                        Command::DefineInteraction {
+                            interaction: Interaction {
+                                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                                id: interaction_id.clone(),
+                                source: InteractionSource {
+                                    node_id: node_id("card-instance"),
+                                    event: InteractionEvent::Pressed,
+                                },
+                                action: InteractionAction::ToggleVisibility {
+                                    node_id: node_id("card-instance"),
+                                },
+                            },
+                        },
+                    ],
+                ))
+                .await,
+        );
+        assert_accepted(
+            session
+                .submit(batch(
+                    RevisionId::new(1),
+                    "update-semantic",
+                    "update-semantic",
+                    vec![Command::UpdateComposition {
+                        composition: composition(2),
+                    }],
+                ))
+                .await,
+        );
+        let current = snapshot(&session);
+        assert_eq!(
+            current.design.nodes[&node_id("card-instance")].id,
+            node_id("card-instance")
+        );
+        match &current.design.nodes[&node_id("card-instance")].source {
+            DesignNodeSource::CompositionInstance {
+                definition_version, ..
+            } => assert_eq!(*definition_version, 2),
+            other => panic!("expected composition instance, got {other:?}"),
+        }
+        assert!(
+            current.design.nodes[&node_id("card-instance")]
+                .interaction_ids
+                .contains(&interaction_id)
+        );
+
+        let forbidden = session
+            .submit(batch(
+                RevisionId::new(2),
+                "forbidden-override",
+                "forbidden-override",
+                vec![Command::SetCompositionOverride {
+                    node_id: node_id("card-instance"),
+                    input: "missing".to_owned(),
+                    value: Some(PropertyValue::String("nope".to_owned())),
+                }],
+            ))
+            .await;
+        assert!(matches!(forbidden, CommandOutcome::Rejected(_)));
+        assert_eq!(snapshot(&session).revision.id, RevisionId::new(2));
+    });
 }

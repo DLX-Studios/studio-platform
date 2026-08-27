@@ -7,10 +7,12 @@ use crate::{
         AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
     },
     model::{
-        Actor, DeletionTombstone, DesignNode, DesignNodeSource, DesignerDiagnostic,
-        DiagnosticSeverity, InteractionAction, NodeId, NodeParent, OperationId, ProjectId,
-        PropertyValue, RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION,
-        SelectionSnapshot, StudioDesign, StudioDesignSnapshot, TombstoneReference, UndoGroupId,
+        Actor, BindingPath, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
+        DesignerDiagnostic, DiagnosticSeverity, Interaction, InteractionAction, InteractionId,
+        NodeId, NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride,
+        ResponsiveVariant, RevisionId, RevisionMetadata, RevisionReason,
+        STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot, StudioDesign, StudioDesignSnapshot,
+        TokenId, TombstoneReference, UndoGroupId, ValueKind,
     },
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
     session::{
@@ -151,7 +153,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             Ok(commands) => commands,
             Err(diagnostics) => return CommandOutcome::Rejected(diagnostics),
         };
-        let diagnostics = validate_design(&snapshot.design);
+        let diagnostics = validate_snapshot(&snapshot);
         if !diagnostics.is_empty() {
             return CommandOutcome::Rejected(diagnostics);
         }
@@ -285,7 +287,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
         if let Err(diagnostics) = apply_commands(&mut snapshot, &commands) {
             return CommandOutcome::Rejected(diagnostics);
         }
-        let diagnostics = validate_design(&snapshot.design);
+        let diagnostics = validate_snapshot(&snapshot);
         if !diagnostics.is_empty() {
             return CommandOutcome::Rejected(diagnostics);
         }
@@ -544,6 +546,60 @@ fn apply_command(
             value,
         } => set_property(snapshot, node_id, property, value.as_ref()),
         Command::RenameNode { node_id, name } => rename_node(snapshot, node_id, name),
+        Command::DefineResponsiveVariant { variant } => {
+            define_responsive_variant(snapshot, variant)
+        }
+        Command::UpdateResponsiveVariant { variant } => {
+            update_responsive_variant(snapshot, variant)
+        }
+        Command::RemoveResponsiveVariant { variant_id } => {
+            remove_responsive_variant(snapshot, variant_id)
+        }
+        Command::SetResponsiveOverride {
+            node_id,
+            variant_id,
+            value,
+        } => set_responsive_override(snapshot, node_id, variant_id, value.as_ref()),
+        Command::DefineToken { token } => define_token(snapshot, token),
+        Command::UpdateToken { token } => update_token(snapshot, token),
+        Command::RemoveToken { token_id } => remove_token(snapshot, token_id),
+        Command::ApplyToken {
+            node_id,
+            property,
+            token_id,
+        } => apply_token(snapshot, node_id, property, token_id),
+        Command::SetBinding {
+            node_id,
+            property,
+            binding,
+        } => set_binding(snapshot, node_id, property, binding.as_ref()),
+        Command::DefineInteraction { interaction } => define_interaction(snapshot, interaction),
+        Command::UpdateInteraction { interaction } => update_interaction(snapshot, interaction),
+        Command::RemoveInteraction { interaction_id } => {
+            remove_interaction(snapshot, interaction_id)
+        }
+        Command::DefineComposition { composition } => define_composition(snapshot, composition),
+        Command::UpdateComposition { composition } => update_composition(snapshot, composition),
+        Command::RemoveComposition { composition_id } => {
+            remove_composition(snapshot, composition_id)
+        }
+        Command::InstantiateComposition {
+            node_id,
+            name,
+            parent,
+            composition_id,
+            inputs,
+        } => instantiate_composition(snapshot, node_id, name, parent, composition_id, inputs),
+        Command::SetCompositionInput {
+            node_id,
+            input,
+            value,
+        } => set_composition_input(snapshot, node_id, input, value.as_ref(), false),
+        Command::SetCompositionOverride {
+            node_id,
+            input,
+            value,
+        } => set_composition_input(snapshot, node_id, input, value.as_ref(), true),
     }
 }
 
@@ -927,6 +983,1047 @@ fn rename_node(
     })
 }
 
+fn define_responsive_variant(
+    snapshot: &mut StudioDesignSnapshot,
+    variant: &ResponsiveVariant,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_responsive_variant(variant)?;
+    if snapshot
+        .design
+        .responsive_variants
+        .contains_key(&variant.id)
+    {
+        return Err(diagnostic(
+            "DESIGN_RESPONSIVE_EXISTS",
+            "the responsive variant identity already exists",
+            None,
+        ));
+    }
+    snapshot
+        .design
+        .responsive_variants
+        .insert(variant.id.clone(), variant.clone());
+    Ok(Command::RemoveResponsiveVariant {
+        variant_id: variant.id.clone(),
+    })
+}
+
+fn update_responsive_variant(
+    snapshot: &mut StudioDesignSnapshot,
+    variant: &ResponsiveVariant,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_responsive_variant(variant)?;
+    let prior = snapshot
+        .design
+        .responsive_variants
+        .get(&variant.id)
+        .cloned()
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_RESPONSIVE_MISSING",
+                "the responsive variant does not exist",
+                None,
+            )
+        })?;
+    snapshot
+        .design
+        .responsive_variants
+        .insert(variant.id.clone(), variant.clone());
+    Ok(Command::UpdateResponsiveVariant { variant: prior })
+}
+
+fn remove_responsive_variant(
+    snapshot: &mut StudioDesignSnapshot,
+    variant_id: &crate::ResponsiveVariantId,
+) -> Result<Command, DesignerDiagnostic> {
+    let variant = snapshot
+        .design
+        .responsive_variants
+        .get(variant_id)
+        .cloned()
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_RESPONSIVE_MISSING",
+                "the responsive variant does not exist",
+                None,
+            )
+        })?;
+    if snapshot
+        .design
+        .nodes
+        .values()
+        .any(|node| node.responsive_overrides.contains_key(variant_id))
+    {
+        return Err(diagnostic(
+            "DESIGN_RESPONSIVE_IN_USE",
+            "clear responsive overrides before removing the variant",
+            None,
+        ));
+    }
+    snapshot.design.responsive_variants.remove(variant_id);
+    Ok(Command::DefineResponsiveVariant { variant })
+}
+
+fn set_responsive_override(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    variant_id: &crate::ResponsiveVariantId,
+    value: Option<&ResponsiveNodeOverride>,
+) -> Result<Command, DesignerDiagnostic> {
+    if !snapshot.design.responsive_variants.contains_key(variant_id) {
+        return Err(diagnostic(
+            "DESIGN_RESPONSIVE_MISSING",
+            "the responsive override references an unknown variant",
+            None,
+        ));
+    }
+    if let Some(value) = value {
+        validate_responsive_override(&snapshot.design, node_id, value)?;
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = match value {
+        Some(value) => node
+            .responsive_overrides
+            .insert(variant_id.clone(), value.clone()),
+        None => node.responsive_overrides.remove(variant_id),
+    };
+    Ok(Command::SetResponsiveOverride {
+        node_id: node_id.clone(),
+        variant_id: variant_id.clone(),
+        value: prior,
+    })
+}
+
+fn define_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token: &DesignToken,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_token(token)?;
+    if snapshot.design.tokens.contains_key(&token.id) {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_EXISTS",
+            "the token identity already exists",
+            None,
+        ));
+    }
+    snapshot
+        .design
+        .tokens
+        .insert(token.id.clone(), token.clone());
+    Ok(Command::RemoveToken {
+        token_id: token.id.clone(),
+    })
+}
+
+fn update_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token: &DesignToken,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_token(token)?;
+    let prior = snapshot
+        .design
+        .tokens
+        .get(&token.id)
+        .cloned()
+        .ok_or_else(|| diagnostic("DESIGN_TOKEN_MISSING", "the token does not exist", None))?;
+    snapshot
+        .design
+        .tokens
+        .insert(token.id.clone(), token.clone());
+    Ok(Command::UpdateToken { token: prior })
+}
+
+fn remove_token(
+    snapshot: &mut StudioDesignSnapshot,
+    token_id: &TokenId,
+) -> Result<Command, DesignerDiagnostic> {
+    let token = snapshot
+        .design
+        .tokens
+        .get(token_id)
+        .cloned()
+        .ok_or_else(|| diagnostic("DESIGN_TOKEN_MISSING", "the token does not exist", None))?;
+    if design_references_token(&snapshot.design, token_id) {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_IN_USE",
+            "clear every token reference before removing the token",
+            None,
+        ));
+    }
+    snapshot.design.tokens.remove(token_id);
+    Ok(Command::DefineToken { token })
+}
+
+fn apply_token(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+    token_id: &TokenId,
+) -> Result<Command, DesignerDiagnostic> {
+    if !snapshot.design.tokens.contains_key(token_id) {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_MISSING",
+            "the token does not exist",
+            None,
+        ));
+    }
+    set_property(
+        snapshot,
+        node_id,
+        property,
+        Some(&PropertyValue::Token(token_id.clone())),
+    )
+}
+
+fn set_binding(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    property: &str,
+    binding: Option<&BindingPath>,
+) -> Result<Command, DesignerDiagnostic> {
+    if let Some(binding) = binding {
+        validate_binding(binding, node_id)?;
+    }
+    set_property(
+        snapshot,
+        node_id,
+        property,
+        binding
+            .map(|binding| PropertyValue::Binding(binding.clone()))
+            .as_ref(),
+    )
+}
+
+fn define_interaction(
+    snapshot: &mut StudioDesignSnapshot,
+    interaction: &Interaction,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_interaction(&snapshot.design, interaction)?;
+    if snapshot.design.interactions.contains_key(&interaction.id) {
+        return Err(interaction_diagnostic(
+            "DESIGN_INTERACTION_EXISTS",
+            "the interaction identity already exists",
+            &interaction.id,
+        ));
+    }
+    attach_interaction(snapshot, interaction)?;
+    snapshot
+        .design
+        .interactions
+        .insert(interaction.id.clone(), interaction.clone());
+    Ok(Command::RemoveInteraction {
+        interaction_id: interaction.id.clone(),
+    })
+}
+
+fn update_interaction(
+    snapshot: &mut StudioDesignSnapshot,
+    interaction: &Interaction,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_interaction(&snapshot.design, interaction)?;
+    let prior = snapshot
+        .design
+        .interactions
+        .get(&interaction.id)
+        .cloned()
+        .ok_or_else(|| {
+            interaction_diagnostic(
+                "DESIGN_INTERACTION_MISSING",
+                "the interaction does not exist",
+                &interaction.id,
+            )
+        })?;
+    detach_interaction(snapshot, &prior);
+    attach_interaction(snapshot, interaction)?;
+    snapshot
+        .design
+        .interactions
+        .insert(interaction.id.clone(), interaction.clone());
+    Ok(Command::UpdateInteraction { interaction: prior })
+}
+
+fn remove_interaction(
+    snapshot: &mut StudioDesignSnapshot,
+    interaction_id: &crate::InteractionId,
+) -> Result<Command, DesignerDiagnostic> {
+    let interaction = snapshot
+        .design
+        .interactions
+        .get(interaction_id)
+        .cloned()
+        .ok_or_else(|| {
+            interaction_diagnostic(
+                "DESIGN_INTERACTION_MISSING",
+                "the interaction does not exist",
+                interaction_id,
+            )
+        })?;
+    detach_interaction(snapshot, &interaction);
+    snapshot.design.interactions.remove(interaction_id);
+    Ok(Command::DefineInteraction { interaction })
+}
+
+fn define_composition(
+    snapshot: &mut StudioDesignSnapshot,
+    composition: &crate::ReusableComposition,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_composition(&snapshot.design, composition)?;
+    if snapshot.design.compositions.contains_key(&composition.id) {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_EXISTS",
+            "the composition identity already exists",
+            None,
+        ));
+    }
+    snapshot
+        .design
+        .compositions
+        .insert(composition.id.clone(), composition.clone());
+    Ok(Command::RemoveComposition {
+        composition_id: composition.id.clone(),
+    })
+}
+
+fn update_composition(
+    snapshot: &mut StudioDesignSnapshot,
+    composition: &crate::ReusableComposition,
+) -> Result<Command, DesignerDiagnostic> {
+    validate_composition(&snapshot.design, composition)?;
+    let prior = snapshot
+        .design
+        .compositions
+        .get(&composition.id)
+        .cloned()
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_COMPOSITION_MISSING",
+                "the composition does not exist",
+                None,
+            )
+        })?;
+    if composition.root_node_id != prior.root_node_id {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_ROOT_IMMUTABLE",
+            "a composition definition cannot change its root identity",
+            Some(prior.root_node_id),
+        ));
+    }
+    if composition.definition_version == prior.definition_version {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_VERSION_INVALID",
+            "a composition update must change definition_version",
+            Some(composition.root_node_id.clone()),
+        ));
+    }
+    snapshot
+        .design
+        .compositions
+        .insert(composition.id.clone(), composition.clone());
+    for node in snapshot.design.nodes.values_mut() {
+        if let DesignNodeSource::CompositionInstance {
+            composition_id,
+            definition_version,
+            ..
+        } = &mut node.source
+            && composition_id == &composition.id
+        {
+            *definition_version = composition.definition_version;
+        }
+    }
+    Ok(Command::UpdateComposition { composition: prior })
+}
+
+fn remove_composition(
+    snapshot: &mut StudioDesignSnapshot,
+    composition_id: &crate::CompositionId,
+) -> Result<Command, DesignerDiagnostic> {
+    let composition = snapshot
+        .design
+        .compositions
+        .get(composition_id)
+        .cloned()
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_COMPOSITION_MISSING",
+                "the composition does not exist",
+                None,
+            )
+        })?;
+    if snapshot.design.nodes.values().any(|node| {
+        matches!(&node.source, DesignNodeSource::CompositionInstance { composition_id: id, .. } if id == composition_id)
+    }) {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_IN_USE",
+            "remove every composition instance before removing the definition",
+            Some(composition.root_node_id),
+        ));
+    }
+    snapshot.design.compositions.remove(composition_id);
+    Ok(Command::DefineComposition { composition })
+}
+
+fn instantiate_composition(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    name: &str,
+    parent: &ParentPlacement,
+    composition_id: &crate::CompositionId,
+    inputs: &BTreeMap<String, PropertyValue>,
+) -> Result<Command, DesignerDiagnostic> {
+    if snapshot.design.nodes.contains_key(node_id) || id_is_tombstoned(snapshot, node_id) {
+        return Err(node_diagnostic(
+            "DESIGN_NODE_EXISTS",
+            "the composition instance identity already exists",
+            node_id,
+        ));
+    }
+    let composition = snapshot
+        .design
+        .compositions
+        .get(composition_id)
+        .cloned()
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_COMPOSITION_MISSING",
+                "the composition does not exist",
+                None,
+            )
+        })?;
+    if name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
+        return Err(node_diagnostic(
+            "DESIGN_NODE_NAME_INVALID",
+            "a node name must contain 1..=256 safe bytes",
+            node_id,
+        ));
+    }
+    validate_composition_values(
+        &snapshot.design,
+        &composition,
+        inputs,
+        &BTreeMap::new(),
+        node_id,
+    )?;
+    let node = DesignNode {
+        schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+        id: node_id.clone(),
+        name: name.to_owned(),
+        source: DesignNodeSource::CompositionInstance {
+            composition_id: composition.id,
+            definition_version: composition.definition_version,
+            inputs: inputs.clone(),
+            admitted_overrides: BTreeMap::new(),
+        },
+        children: Vec::new(),
+        properties: BTreeMap::new(),
+        layout: Default::default(),
+        style: Default::default(),
+        accessibility: Default::default(),
+        responsive_overrides: BTreeMap::new(),
+        interaction_ids: Vec::new(),
+    };
+    insert_node(snapshot, parent, &node)
+}
+
+fn set_composition_input(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    input: &str,
+    value: Option<&PropertyValue>,
+    override_value: bool,
+) -> Result<Command, DesignerDiagnostic> {
+    if !valid_field_name(input) {
+        return Err(node_diagnostic(
+            "DESIGN_COMPOSITION_INPUT_INVALID",
+            "a composition input name must contain 1..=128 safe bytes",
+            node_id,
+        ));
+    }
+    let composition_id = match snapshot.design.nodes.get(node_id).map(|node| &node.source) {
+        Some(DesignNodeSource::CompositionInstance { composition_id, .. }) => {
+            composition_id.clone()
+        }
+        Some(_) => {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INSTANCE_REQUIRED",
+                "the command targets a primitive node, not a composition instance",
+                node_id,
+            ));
+        }
+        None => return Err(missing_node(node_id)),
+    };
+    let composition = snapshot
+        .design
+        .compositions
+        .get(&composition_id)
+        .cloned()
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_COMPOSITION_MISSING",
+                "the composition does not exist",
+                None,
+            )
+        })?;
+    let contract = composition.inputs.get(input).ok_or_else(|| {
+        node_diagnostic(
+            "DESIGN_COMPOSITION_INPUT_UNKNOWN",
+            "the input is not declared by the composition contract",
+            node_id,
+        )
+    })?;
+    if override_value && !contract.overridable {
+        return Err(node_diagnostic(
+            "DESIGN_COMPOSITION_OVERRIDE_FORBIDDEN",
+            "the composition contract does not admit an override for this input",
+            node_id,
+        ));
+    }
+    if let Some(value) = value {
+        validate_property_value(&snapshot.design, value, Some(node_id))?;
+        if !value_matches_kind(&snapshot.design, value, contract.value_kind) {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_TYPE",
+                "the value does not match the composition input type",
+                node_id,
+            ));
+        }
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .expect("composition instance was checked above");
+    let DesignNodeSource::CompositionInstance {
+        inputs,
+        admitted_overrides,
+        ..
+    } = &mut node.source
+    else {
+        unreachable!("composition instance was checked above")
+    };
+    let target = if override_value {
+        admitted_overrides
+    } else {
+        inputs
+    };
+    let prior = match value {
+        Some(value) => target.insert(input.to_owned(), value.clone()),
+        None => target.remove(input),
+    };
+    Ok(if override_value {
+        Command::SetCompositionOverride {
+            node_id: node_id.clone(),
+            input: input.to_owned(),
+            value: prior,
+        }
+    } else {
+        Command::SetCompositionInput {
+            node_id: node_id.clone(),
+            input: input.to_owned(),
+            value: prior,
+        }
+    })
+}
+
+fn validate_responsive_variant(variant: &ResponsiveVariant) -> Result<(), DesignerDiagnostic> {
+    if variant.schema_version != STUDIO_DESIGN_SCHEMA_VERSION {
+        return Err(diagnostic(
+            "DESIGN_RESPONSIVE_INVALID",
+            "the responsive variant schema version is unsupported",
+            None,
+        ));
+    }
+    if variant.name.trim().is_empty()
+        || variant.name.len() > 128
+        || variant.name.chars().any(char::is_control)
+    {
+        return Err(diagnostic(
+            "DESIGN_RESPONSIVE_INVALID",
+            "a responsive variant name must contain 1..=128 safe bytes",
+            None,
+        ));
+    }
+    if variant
+        .minimum_width
+        .zip(variant.maximum_width)
+        .is_some_and(|(minimum, maximum)| minimum > maximum)
+    {
+        return Err(diagnostic(
+            "DESIGN_RESPONSIVE_INVALID",
+            "a responsive variant minimum width cannot exceed its maximum width",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_responsive_override(
+    design: &StudioDesign,
+    node_id: &NodeId,
+    value: &ResponsiveNodeOverride,
+) -> Result<(), DesignerDiagnostic> {
+    if value.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+        || value.layout.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+        || value.style.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+    {
+        return Err(node_diagnostic(
+            "DESIGN_RESPONSIVE_INVALID",
+            "a responsive override has an unsupported schema version",
+            node_id,
+        ));
+    }
+    for (property, property_value) in &value.properties {
+        if !valid_field_name(property) {
+            return Err(node_diagnostic(
+                "DESIGN_PROPERTY_INVALID",
+                "a responsive property name must contain 1..=128 safe bytes",
+                node_id,
+            ));
+        }
+        validate_property_value(design, property_value, Some(node_id))?;
+    }
+    validate_layout_style(design, &value.layout, &value.style, node_id)?;
+    Ok(())
+}
+
+fn validate_layout_style(
+    design: &StudioDesign,
+    layout: &crate::LayoutProperties,
+    style: &crate::StyleProperties,
+    node_id: &NodeId,
+) -> Result<(), DesignerDiagnostic> {
+    if layout.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+        || style.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+    {
+        return Err(node_diagnostic(
+            "DESIGN_STYLE_SCHEMA_INVALID",
+            "layout and style values must use the supported schema version",
+            node_id,
+        ));
+    }
+    for paint in [&style.background, &style.foreground, &style.border_color]
+        .into_iter()
+        .flatten()
+    {
+        if let crate::Paint::Token(token_id) = paint
+            && !design.tokens.contains_key(token_id)
+        {
+            return Err(node_diagnostic(
+                "DESIGN_TOKEN_MISSING",
+                "a style references an unknown token",
+                node_id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_token(token: &DesignToken) -> Result<(), DesignerDiagnostic> {
+    if token.schema_version != STUDIO_DESIGN_SCHEMA_VERSION || token.id.as_str().is_empty() {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_INVALID",
+            "a token identity or schema version is invalid",
+            None,
+        ));
+    }
+    if token.name.trim().is_empty()
+        || token.name.len() > 128
+        || token.name.chars().any(char::is_control)
+    {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_INVALID",
+            "a token name must contain 1..=128 safe bytes",
+            None,
+        ));
+    }
+    let value_matches = matches!(
+        (token.kind, &token.value),
+        (crate::TokenKind::Color, crate::TokenValue::Color(_))
+            | (crate::TokenKind::Length, crate::TokenValue::Length(_))
+            | (crate::TokenKind::Number, crate::TokenValue::Number(_))
+            | (crate::TokenKind::String, crate::TokenValue::String(_))
+            | (
+                crate::TokenKind::Typography,
+                crate::TokenValue::Typography(_)
+            )
+    );
+    if !value_matches {
+        return Err(diagnostic(
+            "DESIGN_TOKEN_TYPE",
+            "the token value does not match its declared kind",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_binding(binding: &BindingPath, node_id: &NodeId) -> Result<(), DesignerDiagnostic> {
+    if !valid_field_name(&binding.collection)
+        || binding.segments.is_empty()
+        || binding
+            .segments
+            .iter()
+            .any(|segment| !valid_field_name(segment))
+    {
+        return Err(node_diagnostic(
+            "DESIGN_BINDING_INVALID",
+            "a binding requires a safe collection and at least one safe path segment",
+            node_id,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_property_value(
+    design: &StudioDesign,
+    value: &PropertyValue,
+    node_id: Option<&NodeId>,
+) -> Result<(), DesignerDiagnostic> {
+    let error = |code: &str, message: &str| diagnostic(code, message, node_id.cloned());
+    match value {
+        PropertyValue::Token(token_id) if !design.tokens.contains_key(token_id) => {
+            return Err(error(
+                "DESIGN_TOKEN_MISSING",
+                "a property references an unknown token",
+            ));
+        }
+        PropertyValue::Binding(binding) => {
+            validate_binding(
+                binding,
+                node_id.unwrap_or(&NodeId::new("binding").expect("literal identity")),
+            )?;
+        }
+        PropertyValue::Node(target) if !design.nodes.contains_key(target) => {
+            return Err(error(
+                "DESIGN_NODE_MISSING",
+                "a property references an unknown node",
+            ));
+        }
+        PropertyValue::List(values) => {
+            for value in values {
+                validate_property_value(design, value, node_id)?;
+            }
+        }
+        PropertyValue::String(_)
+        | PropertyValue::Boolean(_)
+        | PropertyValue::Integer(_)
+        | PropertyValue::Decimal(_)
+        | PropertyValue::Length(_)
+        | PropertyValue::Color(_)
+        | PropertyValue::Token(_)
+        | PropertyValue::Node(_)
+        | PropertyValue::Asset(_) => {}
+    }
+    Ok(())
+}
+
+fn value_matches_kind(design: &StudioDesign, value: &PropertyValue, kind: ValueKind) -> bool {
+    matches!(
+        (value, kind),
+        (PropertyValue::String(_), ValueKind::String)
+            | (PropertyValue::Boolean(_), ValueKind::Boolean)
+            | (PropertyValue::Integer(_), ValueKind::Integer)
+            | (PropertyValue::Decimal(_), ValueKind::Decimal)
+            | (PropertyValue::Length(_), ValueKind::Length)
+            | (PropertyValue::Color(_), ValueKind::Color)
+            | (PropertyValue::Token(_), ValueKind::Token)
+            | (PropertyValue::Binding(_), ValueKind::Binding)
+            | (PropertyValue::Node(_), ValueKind::Node)
+            | (PropertyValue::Asset(_), ValueKind::Asset)
+            | (PropertyValue::List(_), ValueKind::List)
+    ) && (!matches!(value, PropertyValue::Token(token_id) if !design.tokens.contains_key(token_id)))
+}
+
+fn validate_interaction(
+    design: &StudioDesign,
+    interaction: &Interaction,
+) -> Result<(), DesignerDiagnostic> {
+    if interaction.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+        || !design.nodes.contains_key(&interaction.source.node_id)
+    {
+        return Err(interaction_diagnostic(
+            "DESIGN_INTERACTION_INVALID",
+            "an interaction requires a valid source node and schema version",
+            &interaction.id,
+        ));
+    }
+    validate_interaction_action(design, &interaction.id, &interaction.action)
+}
+
+fn validate_interaction_action(
+    design: &StudioDesign,
+    interaction_id: &InteractionId,
+    action: &InteractionAction,
+) -> Result<(), DesignerDiagnostic> {
+    match action {
+        InteractionAction::Navigate { screen_id, .. }
+            if !design.screens.contains_key(screen_id) =>
+        {
+            Err(interaction_diagnostic(
+                "DESIGN_INTERACTION_TARGET_MISSING",
+                "a navigation interaction references an unknown screen",
+                interaction_id,
+            ))
+        }
+        InteractionAction::SetProperty {
+            node_id,
+            property,
+            value,
+        } => {
+            if !design.nodes.contains_key(node_id) {
+                return Err(interaction_diagnostic(
+                    "DESIGN_INTERACTION_TARGET_MISSING",
+                    "a property interaction references an unknown node",
+                    interaction_id,
+                ));
+            }
+            if !valid_field_name(property) {
+                return Err(interaction_diagnostic(
+                    "DESIGN_PROPERTY_INVALID",
+                    "an interaction property name must contain 1..=128 safe bytes",
+                    interaction_id,
+                ));
+            }
+            validate_property_value(design, value, None).map_err(|_| {
+                interaction_diagnostic(
+                    "DESIGN_INTERACTION_VALUE_INVALID",
+                    "an interaction property value is invalid",
+                    interaction_id,
+                )
+            })
+        }
+        InteractionAction::ToggleVisibility { node_id } if !design.nodes.contains_key(node_id) => {
+            Err(interaction_diagnostic(
+                "DESIGN_INTERACTION_TARGET_MISSING",
+                "a visibility interaction references an unknown node",
+                interaction_id,
+            ))
+        }
+        InteractionAction::Emit { event } if !valid_field_name(event) => {
+            Err(interaction_diagnostic(
+                "DESIGN_INTERACTION_EVENT_INVALID",
+                "an emitted event name must contain 1..=128 safe bytes",
+                interaction_id,
+            ))
+        }
+        InteractionAction::Sequence { interaction_ids } => {
+            if interaction_ids.iter().any(|id| id == interaction_id)
+                || interaction_ids
+                    .iter()
+                    .any(|id| !design.interactions.contains_key(id))
+            {
+                return Err(interaction_diagnostic(
+                    "DESIGN_INTERACTION_TARGET_MISSING",
+                    "an interaction sequence contains an unknown or self-referencing interaction",
+                    interaction_id,
+                ));
+            }
+            Ok(())
+        }
+        InteractionAction::Navigate { .. }
+        | InteractionAction::ToggleVisibility { .. }
+        | InteractionAction::Emit { .. } => Ok(()),
+    }
+}
+
+fn attach_interaction(
+    snapshot: &mut StudioDesignSnapshot,
+    interaction: &Interaction,
+) -> Result<(), DesignerDiagnostic> {
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(&interaction.source.node_id)
+        .ok_or_else(|| missing_node(&interaction.source.node_id))?;
+    if !node.interaction_ids.contains(&interaction.id) {
+        node.interaction_ids.push(interaction.id.clone());
+    }
+    Ok(())
+}
+
+fn detach_interaction(snapshot: &mut StudioDesignSnapshot, interaction: &Interaction) {
+    if let Some(node) = snapshot.design.nodes.get_mut(&interaction.source.node_id) {
+        node.interaction_ids.retain(|id| id != &interaction.id);
+    }
+}
+
+fn validate_composition(
+    design: &StudioDesign,
+    composition: &crate::ReusableComposition,
+) -> Result<(), DesignerDiagnostic> {
+    if composition.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
+        || !design.nodes.contains_key(&composition.root_node_id)
+        || design.parents.get(&composition.root_node_id)
+            != Some(&NodeParent::Composition {
+                composition_id: composition.id.clone(),
+            })
+    {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_INVALID",
+            "a composition requires a valid composition-owned root node",
+            Some(composition.root_node_id.clone()),
+        ));
+    }
+    if composition.name.trim().is_empty()
+        || composition.name.len() > 128
+        || composition.name.chars().any(char::is_control)
+        || composition.definition_version == 0
+    {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_INVALID",
+            "a composition name must be safe and its definition version non-zero",
+            Some(composition.root_node_id.clone()),
+        ));
+    }
+    for input in composition.inputs.values() {
+        if let Some(default) = &input.default {
+            validate_property_value(design, default, Some(&composition.root_node_id))?;
+            if !value_matches_kind(design, default, input.value_kind) {
+                return Err(diagnostic(
+                    "DESIGN_COMPOSITION_INPUT_TYPE",
+                    "a composition input default does not match its declared type",
+                    Some(composition.root_node_id.clone()),
+                ));
+            }
+        }
+    }
+    if composition
+        .inputs
+        .keys()
+        .any(|name| !valid_field_name(name))
+        || composition.slots.keys().any(|name| !valid_field_name(name))
+    {
+        return Err(diagnostic(
+            "DESIGN_COMPOSITION_CONTRACT_INVALID",
+            "composition input and slot names must contain 1..=128 safe bytes",
+            Some(composition.root_node_id.clone()),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_composition_values(
+    design: &StudioDesign,
+    composition: &crate::ReusableComposition,
+    inputs: &BTreeMap<String, PropertyValue>,
+    overrides: &BTreeMap<String, PropertyValue>,
+    node_id: &NodeId,
+) -> Result<(), DesignerDiagnostic> {
+    for key in inputs.keys().chain(overrides.keys()) {
+        if !valid_field_name(key) {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_INVALID",
+                "a composition input name must contain 1..=128 safe bytes",
+                node_id,
+            ));
+        }
+    }
+    for (key, value) in inputs {
+        let Some(contract) = composition.inputs.get(key) else {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_UNKNOWN",
+                "the instance supplies an input not declared by the composition",
+                node_id,
+            ));
+        };
+        validate_property_value(design, value, Some(node_id))?;
+        if !value_matches_kind(design, value, contract.value_kind) {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_TYPE",
+                "an instance input does not match the composition contract",
+                node_id,
+            ));
+        }
+    }
+    for (key, value) in overrides {
+        let Some(contract) = composition.inputs.get(key) else {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_UNKNOWN",
+                "the instance overrides an input not declared by the composition",
+                node_id,
+            ));
+        };
+        if !contract.overridable {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_OVERRIDE_FORBIDDEN",
+                "the composition contract does not admit an override for this input",
+                node_id,
+            ));
+        }
+        validate_property_value(design, value, Some(node_id))?;
+        if !value_matches_kind(design, value, contract.value_kind) {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_TYPE",
+                "an instance override does not match the composition contract",
+                node_id,
+            ));
+        }
+    }
+    for (key, contract) in &composition.inputs {
+        if contract.required && contract.default.is_none() && !inputs.contains_key(key) {
+            return Err(node_diagnostic(
+                "DESIGN_COMPOSITION_INPUT_REQUIRED",
+                "a required composition input has no supplied value or default",
+                node_id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn design_references_token(design: &StudioDesign, token_id: &TokenId) -> bool {
+    design.nodes.values().any(|node| {
+        node.properties
+            .values()
+            .any(|value| property_contains_token(value, token_id))
+            || [&node.style.background, &node.style.foreground, &node.style.border_color]
+                .into_iter()
+                .flatten()
+                .any(|paint| matches!(paint, crate::Paint::Token(id) if id == token_id))
+            || node
+                .responsive_overrides
+                .values()
+                .any(|value| {
+                    value
+                        .properties
+                        .values()
+                        .any(|value| property_contains_token(value, token_id))
+                        || [&value.style.background, &value.style.foreground, &value.style.border_color]
+                            .into_iter()
+                            .flatten()
+                            .any(|paint| matches!(paint, crate::Paint::Token(id) if id == token_id))
+                })
+            || matches!(&node.source, DesignNodeSource::CompositionInstance { inputs, admitted_overrides, .. } if inputs.values().any(|value| property_contains_token(value, token_id)) || admitted_overrides.values().any(|value| property_contains_token(value, token_id)))
+    }) || design.compositions.values().any(|composition| {
+        composition
+            .inputs
+            .values()
+            .filter_map(|input| input.default.as_ref())
+            .any(|value| property_contains_token(value, token_id))
+    })
+}
+
+fn property_contains_token(value: &PropertyValue, token_id: &TokenId) -> bool {
+    match value {
+        PropertyValue::Token(id) => id == token_id,
+        PropertyValue::List(values) => values
+            .iter()
+            .any(|value| property_contains_token(value, token_id)),
+        PropertyValue::String(_)
+        | PropertyValue::Boolean(_)
+        | PropertyValue::Integer(_)
+        | PropertyValue::Decimal(_)
+        | PropertyValue::Length(_)
+        | PropertyValue::Color(_)
+        | PropertyValue::Binding(_)
+        | PropertyValue::Node(_)
+        | PropertyValue::Asset(_) => false,
+    }
+}
+
 fn insert_child(
     design: &mut StudioDesign,
     placement: &ParentPlacement,
@@ -1245,6 +2342,26 @@ fn reference_diagnostics(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnos
 }
 
 #[allow(clippy::too_many_lines)]
+fn validate_snapshot(snapshot: &StudioDesignSnapshot) -> Vec<DesignerDiagnostic> {
+    let mut diagnostics = validate_design(&snapshot.design);
+    let dangling_interactions = snapshot
+        .tombstones
+        .values()
+        .flat_map(|tombstone| &tombstone.references)
+        .filter_map(|reference| reference.owner.strip_prefix("interaction:"))
+        .collect::<BTreeSet<_>>();
+    diagnostics.retain(|diagnostic| {
+        !(matches!(
+            diagnostic.code.as_str(),
+            "DESIGN_INTERACTION_INVALID" | "DESIGN_INTERACTION_TARGET_MISSING"
+        ) && diagnostic
+            .interaction_id
+            .as_ref()
+            .is_some_and(|id| dangling_interactions.contains(id.as_str())))
+    });
+    diagnostics
+}
+
 fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
     let mut diagnostics = Vec::new();
     if design.schema_version != STUDIO_DESIGN_SCHEMA_VERSION {
@@ -1346,24 +2463,60 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
                 ));
             }
         }
-        if let DesignNodeSource::CompositionInstance { composition_id, .. } = &node.source
-            && !design.compositions.contains_key(composition_id)
+        if let DesignNodeSource::CompositionInstance {
+            composition_id,
+            definition_version,
+            inputs,
+            admitted_overrides,
+        } = &node.source
         {
-            diagnostics.push(node_diagnostic(
-                "DESIGN_COMPOSITION_MISSING",
-                "a composition instance references an unknown definition",
-                node_id,
-            ));
+            match design.compositions.get(composition_id) {
+                None => diagnostics.push(node_diagnostic(
+                    "DESIGN_COMPOSITION_MISSING",
+                    "a composition instance references an unknown definition",
+                    node_id,
+                )),
+                Some(composition) => {
+                    if *definition_version != composition.definition_version {
+                        diagnostics.push(node_diagnostic(
+                            "DESIGN_COMPOSITION_VERSION_STALE",
+                            "a composition instance does not match its definition version",
+                            node_id,
+                        ));
+                    }
+                    if let Err(error) = validate_composition_values(
+                        design,
+                        composition,
+                        inputs,
+                        admitted_overrides,
+                        node_id,
+                    ) {
+                        diagnostics.push(error);
+                    }
+                }
+            }
         }
-        if node.responsive_overrides.iter().any(|(variant_id, value)| {
-            !design.responsive_variants.contains_key(variant_id)
-                || value.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
-        }) {
-            diagnostics.push(node_diagnostic(
-                "DESIGN_RESPONSIVE_INVALID",
-                "a responsive override references an unknown or unsupported variant",
-                node_id,
-            ));
+        for (variant_id, value) in &node.responsive_overrides {
+            if !design.responsive_variants.contains_key(variant_id) {
+                diagnostics.push(node_diagnostic(
+                    "DESIGN_RESPONSIVE_INVALID",
+                    "a responsive override references an unknown variant",
+                    node_id,
+                ));
+            } else if let Err(error) = validate_responsive_override(design, node_id, value) {
+                diagnostics.push(error);
+            }
+        }
+        if let Err(error) = validate_layout_style(design, &node.layout, &node.style, node_id) {
+            diagnostics.push(error);
+        }
+        for (property, value) in &node.properties {
+            if let Err(error) = validate_property_value(design, value, Some(node_id)) {
+                diagnostics.push(DesignerDiagnostic {
+                    message: format!("invalid node property {property}: {}", error.message),
+                    ..error
+                });
+            }
         }
         if node
             .interaction_ids
@@ -1375,6 +2528,17 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
                 "a node references an unknown interaction",
                 node_id,
             ));
+        }
+        for interaction_id in &node.interaction_ids {
+            if let Some(interaction) = design.interactions.get(interaction_id)
+                && interaction.source.node_id != *node_id
+            {
+                diagnostics.push(node_diagnostic(
+                    "DESIGN_INTERACTION_SOURCE_INVALID",
+                    "a node interaction attachment does not match the interaction source",
+                    node_id,
+                ));
+            }
         }
         if parent_chain_cycles(design, node_id) {
             diagnostics.push(node_diagnostic(
@@ -1391,21 +2555,19 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
                 "a token identity or schema version is invalid",
                 None,
             ));
+        } else if let Err(error) = validate_token(token) {
+            diagnostics.push(error);
         }
     }
     for (variant_id, variant) in &design.responsive_variants {
-        if variant.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
-            || variant.id != *variant_id
-            || variant
-                .minimum_width
-                .zip(variant.maximum_width)
-                .is_some_and(|(minimum, maximum)| minimum > maximum)
-        {
+        if variant.schema_version != STUDIO_DESIGN_SCHEMA_VERSION || variant.id != *variant_id {
             diagnostics.push(diagnostic(
                 "DESIGN_RESPONSIVE_INVALID",
                 "a responsive variant identity, bounds, or schema version is invalid",
                 None,
             ));
+        } else if let Err(error) = validate_responsive_variant(variant) {
+            diagnostics.push(error);
         }
     }
     for (interaction_id, interaction) in &design.interactions {
@@ -1417,6 +2579,8 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
                 "an interaction identity or schema version is invalid",
                 None,
             ));
+        } else if let Err(error) = validate_interaction(design, interaction) {
+            diagnostics.push(error);
         }
     }
     diagnostics
@@ -1498,6 +2662,20 @@ fn invalid_parent(node_id: &NodeId, message: impl Into<String>) -> DesignerDiagn
 
 fn node_diagnostic(code: &str, message: impl Into<String>, node_id: &NodeId) -> DesignerDiagnostic {
     diagnostic(code, message, Some(node_id.clone()))
+}
+
+fn interaction_diagnostic(
+    code: &str,
+    message: impl Into<String>,
+    interaction_id: &InteractionId,
+) -> DesignerDiagnostic {
+    DesignerDiagnostic {
+        code: code.to_owned(),
+        severity: DiagnosticSeverity::Error,
+        message: message.into(),
+        node_id: None,
+        interaction_id: Some(interaction_id.clone()),
+    }
 }
 
 fn diagnostic(
