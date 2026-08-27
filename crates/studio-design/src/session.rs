@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::{CompareReport, DeviceProfileMatrix, PropertyProvenance};
 use crate::{
     command::{CommandBatch, HistoryEntry},
     model::{
@@ -41,10 +42,22 @@ pub trait DesignerSession: Send {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DesignerQuery {
     Snapshot,
-    Node { node_id: NodeId },
+    Node {
+        node_id: NodeId,
+    },
     Diagnostics,
     History,
     SessionState,
+    ResponsiveProfiles,
+    ResponsiveInspector {
+        node_id: NodeId,
+        profile_id: crate::DeviceProfileId,
+    },
+    CompareProfiles {
+        node_id: NodeId,
+        left_profile_id: crate::DeviceProfileId,
+        right_profile_id: crate::DeviceProfileId,
+    },
 }
 
 /// Owned immutable result of one typed query.
@@ -61,6 +74,9 @@ pub enum DesignerQueryResult {
     Diagnostics(Vec<DesignerDiagnostic>),
     History(HistorySnapshot),
     SessionState(SessionStateSnapshot),
+    ResponsiveProfiles(DeviceProfileMatrix),
+    ResponsiveInspector(Vec<PropertyProvenance>),
+    ProfileComparison(CompareReport),
 }
 
 /// Result of a command, undo, or redo request.
@@ -133,6 +149,26 @@ pub struct SessionStateSnapshot {
     pub tool: ToolKind,
     pub panel_state: BTreeMap<String, bool>,
     pub history_cursor: usize,
+    pub canvas: CanvasStateSnapshot,
+}
+
+/// Ephemeral canvas view state preserved while switching profiles or views.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasStateSnapshot {
+    pub zoom: String,
+    pub pan_x: String,
+    pub pan_y: String,
+}
+
+impl Default for CanvasStateSnapshot {
+    fn default() -> Self {
+        Self {
+            zoom: "1.0".to_owned(),
+            pan_x: "0.0".to_owned(),
+            pan_y: "0.0".to_owned(),
+        }
+    }
 }
 
 /// Presentation-context fields a caller may update without mutating design source.
@@ -144,6 +180,7 @@ pub struct SessionContextUpdate {
     pub device_profile: Option<Option<String>>,
     pub tool: Option<ToolKind>,
     pub panel_state: Option<BTreeMap<String, bool>>,
+    pub canvas: Option<CanvasStateSnapshot>,
 }
 
 /// Closed set of primary authoring tools.

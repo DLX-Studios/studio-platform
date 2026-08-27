@@ -71,6 +71,8 @@ define_id!(/// Stable design-token identity.
     TokenId);
 define_id!(/// Stable responsive-variant identity.
     ResponsiveVariantId);
+define_id!(/// Stable device-profile identity used by the Designer preview.
+    DeviceProfileId);
 define_id!(/// Stable interaction identity.
     InteractionId);
 define_id!(/// Stable admitted Library asset identity.

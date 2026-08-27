@@ -2,15 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::responsive::{DeviceProfileMatrix, compare_profiles, inspect_node};
+use crate::session::CanvasStateSnapshot;
 use crate::{
     command::{
         AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
     },
     model::{
         Actor, DeletionTombstone, DesignNode, DesignNodeSource, DesignerDiagnostic,
-        DiagnosticSeverity, InteractionAction, NodeId, NodeParent, OperationId, ProjectId,
-        PropertyValue, RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION,
-        SelectionSnapshot, StudioDesign, StudioDesignSnapshot, TombstoneReference, UndoGroupId,
+        DiagnosticSeverity, InteractionAction, LayoutProperties, NodeId, NodeParent, OperationId,
+        ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariantId, RevisionId,
+        RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot,
+        StudioDesign, StudioDesignSnapshot, StyleProperties, TombstoneReference, UndoGroupId,
     },
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
     session::{
@@ -29,6 +32,8 @@ pub struct DefaultDesignerSession<P> {
     device_profile: Option<String>,
     tool: ToolKind,
     panel_state: BTreeMap<String, bool>,
+    profile_matrix: DeviceProfileMatrix,
+    canvas: CanvasStateSnapshot,
 }
 
 impl<P: DesignerPersistence> DefaultDesignerSession<P> {
@@ -89,6 +94,8 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             device_profile: None,
             tool: ToolKind::default(),
             panel_state: BTreeMap::new(),
+            profile_matrix: DeviceProfileMatrix::standard(),
+            canvas: CanvasStateSnapshot::default(),
         })
     }
 
@@ -113,6 +120,8 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             device_profile: None,
             tool: ToolKind::default(),
             panel_state: BTreeMap::new(),
+            profile_matrix: DeviceProfileMatrix::standard(),
+            canvas: CanvasStateSnapshot::default(),
         })
     }
 
@@ -363,6 +372,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             tool: self.tool,
             panel_state: self.panel_state.clone(),
             history_cursor: self.state.history_cursor,
+            canvas: self.canvas.clone(),
         }
     }
 }
@@ -382,6 +392,64 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
                 cursor: self.state.history_cursor,
             }),
             DesignerQuery::SessionState => DesignerQueryResult::SessionState(self.session_state()),
+            DesignerQuery::ResponsiveProfiles => {
+                DesignerQueryResult::ResponsiveProfiles(self.profile_matrix.clone())
+            }
+            DesignerQuery::ResponsiveInspector {
+                node_id,
+                profile_id,
+            } => {
+                let entries = self
+                    .state
+                    .current
+                    .design
+                    .nodes
+                    .get(&node_id)
+                    .and_then(|node| {
+                        self.profile_matrix
+                            .profiles
+                            .get(&profile_id)
+                            .map(|profile| inspect_node(&self.state.current.design, node, profile))
+                    })
+                    .unwrap_or_default();
+                DesignerQueryResult::ResponsiveInspector(entries)
+            }
+            DesignerQuery::CompareProfiles {
+                node_id,
+                left_profile_id,
+                right_profile_id,
+            } => {
+                let report =
+                    self.state
+                        .current
+                        .design
+                        .nodes
+                        .get(&node_id)
+                        .and_then(|node| {
+                            self.profile_matrix
+                                .profiles
+                                .get(&left_profile_id)
+                                .and_then(|left| {
+                                    self.profile_matrix.profiles.get(&right_profile_id).map(
+                                        |right| {
+                                            compare_profiles(
+                                                &self.state.current.design,
+                                                node,
+                                                left,
+                                                right,
+                                            )
+                                        },
+                                    )
+                                })
+                        })
+                        .unwrap_or(crate::CompareReport {
+                            node_id,
+                            left_profile: left_profile_id,
+                            right_profile: right_profile_id,
+                            differences: Vec::new(),
+                        });
+                DesignerQueryResult::ProfileComparison(report)
+            }
         }
     }
 
@@ -412,6 +480,9 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
         }
         if let Some(panel_state) = update.panel_state {
             self.panel_state = panel_state;
+        }
+        if let Some(canvas) = update.canvas {
+            self.canvas = canvas;
         }
         self.session_state()
     }
@@ -502,6 +573,19 @@ fn failed_precondition(design: &StudioDesign, conditions: &[CommandPrecondition]
             .nodes
             .get(node_id)
             .is_none_or(|node| node.properties.get(property) != value.as_ref()),
+        CommandPrecondition::BreakpointPropertyEquals {
+            node_id,
+            variant_id,
+            property,
+            value,
+        } => {
+            design
+                .nodes
+                .get(node_id)
+                .and_then(|node| node.responsive_overrides.get(variant_id))
+                .and_then(|override_value| override_value.properties.get(property))
+                != value.as_ref()
+        }
     })
 }
 
@@ -543,6 +627,17 @@ fn apply_command(
             property,
             value,
         } => set_property(snapshot, node_id, property, value.as_ref()),
+        Command::SetBreakpointProperty {
+            node_id,
+            variant_id,
+            property,
+            value,
+        } => set_breakpoint_property(snapshot, node_id, variant_id, property, value.as_ref()),
+        Command::SetBreakpointOverride {
+            node_id,
+            variant_id,
+            value,
+        } => set_breakpoint_override(snapshot, node_id, variant_id, value.as_deref()),
         Command::RenameNode { node_id, name } => rename_node(snapshot, node_id, name),
     }
 }
@@ -900,6 +995,106 @@ fn set_property(
         node_id: node_id.clone(),
         property: property.to_owned(),
         value: prior,
+    })
+}
+
+fn set_breakpoint_property(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    variant_id: &ResponsiveVariantId,
+    property: &str,
+    value: Option<&PropertyValue>,
+) -> Result<Command, DesignerDiagnostic> {
+    if !valid_field_name(property) {
+        return Err(node_diagnostic(
+            "DESIGN_PROPERTY_INVALID",
+            "a property name must contain 1..=128 safe bytes",
+            node_id,
+        ));
+    }
+    if !snapshot.design.responsive_variants.contains_key(variant_id) {
+        return Err(node_diagnostic(
+            "DESIGN_RESPONSIVE_VARIANT_MISSING",
+            "the breakpoint override references an unknown responsive variant",
+            node_id,
+        ));
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = node
+        .responsive_overrides
+        .get(variant_id)
+        .and_then(|override_value| override_value.properties.get(property))
+        .cloned();
+    let entry = node
+        .responsive_overrides
+        .entry(variant_id.clone())
+        .or_insert_with(|| crate::model::ResponsiveNodeOverride {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            properties: BTreeMap::new(),
+            layout: LayoutProperties::default(),
+            style: StyleProperties::default(),
+        });
+    match value {
+        Some(value) => {
+            entry.properties.insert(property.to_owned(), value.clone());
+        }
+        None => {
+            entry.properties.remove(property);
+        }
+    }
+    let empty = entry.properties.is_empty()
+        && entry.layout == LayoutProperties::default()
+        && entry.style == StyleProperties::default();
+    if empty {
+        node.responsive_overrides.remove(variant_id);
+    }
+    Ok(Command::SetBreakpointProperty {
+        node_id: node_id.clone(),
+        variant_id: variant_id.clone(),
+        property: property.to_owned(),
+        value: prior,
+    })
+}
+
+fn set_breakpoint_override(
+    snapshot: &mut StudioDesignSnapshot,
+    node_id: &NodeId,
+    variant_id: &ResponsiveVariantId,
+    value: Option<&ResponsiveNodeOverride>,
+) -> Result<Command, DesignerDiagnostic> {
+    if !snapshot.design.responsive_variants.contains_key(variant_id) {
+        return Err(node_diagnostic(
+            "DESIGN_RESPONSIVE_VARIANT_MISSING",
+            "the breakpoint override references an unknown responsive variant",
+            node_id,
+        ));
+    }
+    if value.is_some_and(|item| item.schema_version != STUDIO_DESIGN_SCHEMA_VERSION) {
+        return Err(node_diagnostic(
+            "DESIGN_RESPONSIVE_INVALID",
+            "a breakpoint override has an unsupported schema version",
+            node_id,
+        ));
+    }
+    let node = snapshot
+        .design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    let prior = if let Some(value) = value {
+        node.responsive_overrides
+            .insert(variant_id.clone(), value.clone())
+    } else {
+        node.responsive_overrides.remove(variant_id)
+    };
+    Ok(Command::SetBreakpointOverride {
+        node_id: node_id.clone(),
+        variant_id: variant_id.clone(),
+        value: prior.map(Box::new),
     })
 }
 
@@ -1364,6 +1559,17 @@ fn validate_design(design: &StudioDesign) -> Vec<DesignerDiagnostic> {
                 "a responsive override references an unknown or unsupported variant",
                 node_id,
             ));
+        }
+        for override_value in node.responsive_overrides.values() {
+            for property in override_value.properties.keys() {
+                if !valid_field_name(property) {
+                    diagnostics.push(node_diagnostic(
+                        "DESIGN_PROPERTY_INVALID",
+                        "a responsive property name must contain 1..=128 safe bytes",
+                        node_id,
+                    ));
+                }
+            }
         }
         if node
             .interaction_ids

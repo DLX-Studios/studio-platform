@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Actor, DeletionTombstone, DesignNode, NodeId, NodeParent, OperationId, ProjectId,
-    PropertyValue, RevisionId, UndoGroupId,
+    PropertyValue, ResponsiveNodeOverride, ResponsiveVariantId, RevisionId, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -51,6 +51,12 @@ pub enum CommandPrecondition {
         property: String,
         value: Option<PropertyValue>,
     },
+    BreakpointPropertyEquals {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        property: String,
+        value: Option<PropertyValue>,
+    },
 }
 
 /// Structural and property-edit commands implemented by ticket 37.
@@ -84,6 +90,19 @@ pub enum Command {
         node_id: NodeId,
         property: String,
         value: Option<PropertyValue>,
+    },
+    /// Set or clear one sparse property override at a breakpoint.
+    SetBreakpointProperty {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        property: String,
+        value: Option<PropertyValue>,
+    },
+    /// Replace or clear the complete typed override for a breakpoint.
+    SetBreakpointOverride {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        value: Option<Box<ResponsiveNodeOverride>>,
     },
     RenameNode {
         node_id: NodeId,

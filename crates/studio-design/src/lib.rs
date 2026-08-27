@@ -10,6 +10,7 @@ pub mod command;
 mod engine;
 pub mod model;
 pub mod persistence;
+pub mod responsive;
 pub mod session;
 
 pub use command::{
@@ -19,21 +20,27 @@ pub use engine::DefaultDesignerSession;
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, BindingPath, ColorValue,
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
-    DesignerDiagnostic, DiagnosticSeverity, Interaction, InteractionAction, InteractionEvent,
-    InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit, LibraryAssetId,
-    NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId, PropertyValue,
-    ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId, ReusableComposition,
-    RevisionId, RevisionMetadata, RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId,
-    SelectionSnapshot, SlotDefinition, StudioDesign, StudioDesignSnapshot, StyleProperties,
-    TokenId, TokenKind, TokenValue, TombstoneReference, UndoGroupId, ValueKind,
+    DesignerDiagnostic, DeviceProfileId, DiagnosticSeverity, InputEnvironment, Interaction,
+    InteractionAction, InteractionEvent, InteractionId, InteractionSource, LayoutProperties,
+    Length, LengthUnit, LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint,
+    ProjectId, PropertyValue, ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId,
+    ReusableComposition, RevisionId, RevisionMetadata, RevisionReason,
+    STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, SelectionSnapshot, SlotDefinition,
+    StudioDesign, StudioDesignSnapshot, StyleProperties, TokenId, TokenKind, TokenValue,
+    TombstoneReference, UndoGroupId, ValueKind,
 };
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
     PersistenceError, PersistenceErrorCode, SessionFuture,
 };
+pub use responsive::{
+    BreakpointProvenance, CompareReport, DeviceInput, DeviceProfile, DeviceProfileMatrix, Insets,
+    Orientation, ProfileDifference, PropertyPath, PropertyProvenance, ResolvedNode, ResolvedValue,
+    ResponsiveValue, Viewport, compare_profiles, inspect_node, resolve_node, select_variant,
+};
 pub use session::{
-    BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
-    DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate, SessionError,
-    SessionStateSnapshot, ToolKind,
+    BatchConflict, CanvasStateSnapshot, CommandOutcome, CommandReceipt, DesignerQuery,
+    DesignerQueryResult, DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate,
+    SessionError, SessionStateSnapshot, ToolKind,
 };
 pub use studio_protocol::NodeKind;
