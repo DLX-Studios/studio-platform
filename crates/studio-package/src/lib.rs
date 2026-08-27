@@ -26,4 +26,7 @@ pub use manifest::{
 pub use migration::{MigrationAdmissionError, VerifiedMigrationBundle};
 pub use pack::{PackError, PackInput, PackMode, pack_bundle};
 pub use sign::{sign_bundle, sign_document};
-pub use trust::{TrustStore, TrustedPublisherKey};
+pub use trust::{
+    ProvisionedPublisherKey, PublisherKeyIdentity, TrustSnapshot, TrustSnapshotEvidence,
+    TrustStore, TrustStoreError, TrustStoreErrorCode, TrustedPublisherKey, TRUST_STORE_PATH_ENV,
+};
