@@ -6,6 +6,7 @@ mod integrity;
 mod manifest;
 mod migration;
 mod pack;
+mod provider;
 mod sign;
 mod trust;
 
@@ -25,5 +26,11 @@ pub use manifest::{
 };
 pub use migration::{MigrationAdmissionError, VerifiedMigrationBundle};
 pub use pack::{PackError, PackInput, PackMode, pack_bundle};
+pub use provider::{
+    AI_PROVIDER_ID, AI_PROVIDER_VERSION, GITHUB_PROVIDER_ID, GITHUB_PROVIDER_VERSION,
+    PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAdmissionError, ProviderAdmissionErrorCode,
+    ProviderAdmissionPlan, ProviderCredentialPolicy, ProviderDescriptor, ProviderDescriptorState,
+    ProviderRegistry, ProviderRouteDescriptor, ResolvedProvider,
+};
 pub use sign::{sign_bundle, sign_document};
 pub use trust::{TrustStore, TrustedPublisherKey};
