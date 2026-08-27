@@ -183,6 +183,10 @@ pub struct DesignNode {
     pub source: DesignNodeSource,
     pub children: Vec<NodeId>,
     pub properties: BTreeMap<String, PropertyValue>,
+    /// Per-property values that temporarily override a shared token binding.
+    /// The binding remains in `properties`, preserving shared intent.
+    #[serde(default)]
+    pub token_overrides: BTreeMap<String, TokenOverride>,
     pub layout: LayoutProperties,
     pub style: StyleProperties,
     pub accessibility: AccessibilityProperties,
@@ -201,6 +205,7 @@ impl DesignNode {
             source: DesignNodeSource::Primitive { kind },
             children: Vec::new(),
             properties: BTreeMap::new(),
+            token_overrides: BTreeMap::new(),
             layout: LayoutProperties::default(),
             style: StyleProperties::default(),
             accessibility: AccessibilityProperties::default(),
@@ -706,10 +711,15 @@ pub struct DesignToken {
 #[serde(rename_all = "snake_case")]
 pub enum TokenKind {
     Color,
+    Typography,
+    Spacing,
+    Radius,
+    Border,
+    Shadow,
+    Motion,
     Length,
     Number,
     String,
-    Typography,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -725,6 +735,17 @@ pub enum TokenValue {
     Number(String),
     String(String),
     Typography(TypographyToken),
+    Border(BorderToken),
+    Shadow(ShadowToken),
+    Motion(MotionToken),
+}
+
+/// A local value for one property whose shared intent is a token.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenOverride {
+    pub token_id: TokenId,
+    pub value: TokenValue,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -734,6 +755,55 @@ pub struct TypographyToken {
     pub weight: u16,
     pub size: String,
     pub line_height: String,
+}
+
+/// Typed border token data.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BorderToken {
+    pub width: Length,
+    pub color: ColorValue,
+    pub style: String,
+}
+
+/// Typed shadow token data.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShadowToken {
+    pub x: Length,
+    pub y: Length,
+    pub blur: Length,
+    pub spread: Length,
+    pub color: ColorValue,
+}
+
+/// Typed motion token data.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MotionToken {
+    pub duration: String,
+    pub easing: String,
+}
+
+/// One inspected use of a token in the source design.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenUsage {
+    pub token_id: TokenId,
+    pub owner: String,
+    pub property: String,
+    pub node_id: Option<NodeId>,
+    pub local_override: Option<TokenValue>,
+}
+
+/// The shared intent and local value presented by a node inspector.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspectedTokenValue {
+    pub property: String,
+    pub token_id: TokenId,
+    pub shared_value: Option<TokenValue>,
+    pub local_value: Option<TokenValue>,
 }
 
 /// A typed declarative interaction reference graph entry.

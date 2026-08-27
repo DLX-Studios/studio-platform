@@ -14,7 +14,7 @@ use crate::{
     command::{CommandBatch, HistoryEntry},
     model::{
         Actor, DesignerDiagnostic, NodeId, OperationId, ProjectId, RevisionId, SelectionSnapshot,
-        StudioDesignSnapshot, UndoGroupId,
+        StudioDesignSnapshot, TokenId, UndoGroupId,
     },
     persistence::{PersistenceError, SessionFuture},
 };
@@ -49,6 +49,16 @@ pub enum DesignerQuery {
         node_id: NodeId,
         profile: Option<String>,
     },
+    Tokens,
+    Token {
+        token_id: TokenId,
+    },
+    TokenUsages {
+        token_id: TokenId,
+    },
+    NodeTokenValues {
+        node_id: NodeId,
+    },
     Diagnostics,
     DiagnosticsForNode {
         node_id: NodeId,
@@ -79,6 +89,10 @@ pub enum DesignerQuery {
 pub enum DesignerQueryResult {
     Snapshot(StudioDesignSnapshot),
     Node(Option<crate::DesignNode>),
+    Tokens(Vec<crate::DesignToken>),
+    Token(Option<crate::DesignToken>),
+    TokenUsages(Vec<crate::TokenUsage>),
+    NodeTokenValues(Vec<crate::InspectedTokenValue>),
     Diagnostics(Vec<DesignerDiagnostic>),
     History(HistorySnapshot),
     SessionState(SessionStateSnapshot),

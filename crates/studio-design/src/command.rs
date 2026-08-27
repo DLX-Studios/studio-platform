@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     Actor, BindingPath, DeletionTombstone, DesignNode, DesignToken, Interaction, LayoutProperties,
     NodeId, NodeParent, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride,
-    ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, TokenId, UndoGroupId,
+    ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, TokenId, TokenOverride,
+    TokenValue, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -57,6 +58,16 @@ pub enum CommandPrecondition {
         variant_id: ResponsiveVariantId,
         property: String,
         value: Option<PropertyValue>,
+    },
+    TokenExists {
+        token_id: TokenId,
+    },
+    TokenMissing {
+        token_id: TokenId,
+    },
+    TokenValueEquals {
+        token_id: TokenId,
+        value: TokenValue,
     },
 }
 
@@ -157,6 +168,49 @@ pub enum Command {
         node_id: NodeId,
         property: String,
         token_id: TokenId,
+    },
+    /// Add a project-owned token while retaining the supplied identity.
+    CreateToken {
+        token: Box<DesignToken>,
+    },
+    /// Change a token's shared value without changing its identity.
+    EditToken {
+        token_id: TokenId,
+        value: TokenValue,
+    },
+    /// Set a local value while retaining the shared token binding.
+    OverrideToken {
+        node_id: NodeId,
+        property: String,
+        value: TokenValue,
+    },
+    /// Clear a local value and reveal the shared token value.
+    ClearTokenOverride {
+        node_id: NodeId,
+        property: String,
+    },
+    /// Rename a token; consumers continue to reference its stable identity.
+    RenameToken {
+        token_id: TokenId,
+        name: String,
+    },
+    /// Delete a token, optionally confirming existing usages.
+    DeleteToken {
+        token_id: TokenId,
+        confirm: bool,
+    },
+    /// Internal inverse for restoring a token override.
+    SetTokenOverride {
+        node_id: NodeId,
+        property: String,
+        value: Option<TokenOverride>,
+    },
+    /// Inverse that restores both a binding and its local override atomically.
+    RestoreTokenApplication {
+        node_id: NodeId,
+        property: String,
+        property_value: Option<PropertyValue>,
+        override_value: Option<TokenOverride>,
     },
     /// Set or clear a typed content binding on a node property.
     SetBinding {
