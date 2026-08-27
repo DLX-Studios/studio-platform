@@ -7,9 +7,11 @@
 //! transports, and Runtime UI trees.
 
 pub mod agent;
+pub mod access;
 pub mod command;
 pub mod content;
 mod engine;
+pub mod mcp;
 pub mod model;
 pub mod navigation;
 pub mod persistence;
@@ -28,11 +30,16 @@ pub use agent::{
     AgentSchemaSnapshot, AgentScope, AgentSubtreeSnapshot, InvalidAgentRunId, LiveAgentChannel,
     NoopAgentChecker, NoopAgentEventSink,
 };
+pub use access::{
+    DesignerCapability, DesignerScope, ScopeDenied, ScopedDesignerAccess, ScopedDesignerSession,
+    ScopedOperation,
+};
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
 };
 pub use content::*;
 pub use engine::{DefaultDesignerSession, validate_layout};
+pub use mcp::{McpClient, McpClientError};
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, Alignment, BindingId,
     BindingPath, BindingSource, BorderToken, CollectionId, CollectionPreview, ColorValue,
