@@ -4,6 +4,7 @@
 //! facade, where the host resolves the provider session at send time. This keeps the same API
 //! usable by a Runtime guest, a deterministic test harness, or a future Designer preview.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use studio_net::{BrokerError, BrokerRequest, GuestRestApi};
 use studio_net::credential::OAuthSessionResolver;
@@ -75,7 +76,7 @@ pub const fn provider_descriptor() -> GithubProviderDescriptor {
         authorization_endpoint: "https://github.com/login/oauth/authorize",
         token_endpoint: "https://github.com/login/oauth/access_token",
         profile_endpoint: "/user",
-        scopes: &["read:user", "user:email", "repo"],
+        scopes: &["read:user", "user:email"],
         client_authentication: ClientAuthentication::Pkce,
         refresh: RefreshSemantics::None,
         profile: GithubProfileMapping {
@@ -95,7 +96,7 @@ pub fn descriptor_document() -> Value {
         "authorizationEndpoint": "https://github.com/login/oauth/authorize",
         "tokenEndpoint": "https://github.com/login/oauth/access_token",
         "profileEndpoint": "/user",
-        "scopes": ["read:user", "user:email", "repo"],
+        "scopes": ["read:user", "user:email"],
         "clientAuthentication": "pkce",
         "refresh": "none",
         "privateEmailFallback": { "endpoint": "/user/emails", "field": "primary verified email" }
@@ -170,8 +171,6 @@ pub struct GithubProviderReference {
     pub provider: String,
     /// OAuth application client id; never a client secret.
     pub client_id: String,
-    /// Protected configuration name supplied to the host out of band.
-    pub client_secret_name: String,
     /// Descriptor version selected by the package.
     pub descriptor_version: String,
 }
@@ -181,7 +180,6 @@ impl Default for GithubProviderReference {
         Self {
             provider: GITHUB_PROVIDER_ID.to_owned(),
             client_id: String::new(),
-            client_secret_name: "github.oauth.client_secret".to_owned(),
             descriptor_version: GITHUB_PROVIDER_VERSION.to_owned(),
         }
     }
@@ -412,6 +410,8 @@ fn valid_segment(value: &str) -> bool {
 pub enum GithubViewerScreen {
     /// No provider session has been established.
     SignIn,
+    /// The host has opened the browser and is waiting for the callback.
+    Authorizing,
     /// Provider session exists and repositories are being requested.
     LoadingRepositories { user: GithubUser },
     /// Authenticated repository list.
@@ -420,6 +420,47 @@ pub enum GithubViewerScreen {
     RepositoryDetail { user: GithubUser, detail: GithubRepositoryDetail },
     /// Safe failure state with no upstream payload.
     Error { code: &'static str },
+}
+
+/// Typed guest-to-host events emitted by the viewer. These events contain provider metadata and
+/// repository identities only; browser URLs, callback state, and credentials remain host-owned.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GithubGuestEvent {
+    /// Begin the host-owned PKCE sign-in flow.
+    SignInRequested {
+        /// Provider registry identity.
+        provider: String,
+        /// Least-privilege scopes admitted by the descriptor.
+        scopes: Vec<String>,
+    },
+    /// Ask the host broker for the authenticated repository list.
+    RepositoriesRequested,
+    /// Ask the host broker for one repository detail projection.
+    RepositoryRequested { owner: String, name: String },
+}
+
+/// Typed host-to-guest events consumed by the viewer. Every payload is an approved projection;
+/// no variant can carry an access or refresh token.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GithubHostEvent {
+    /// Browser handoff and callback capture are in progress on the host.
+    SignInStarted,
+    /// Host-approved profile claims are available to the guest.
+    ProfileApproved { user: GithubUser },
+    /// Host-approved repository list response.
+    RepositoriesLoaded {
+        user: GithubUser,
+        repositories: Vec<GithubRepository>,
+    },
+    /// Host-approved repository detail response.
+    RepositoryLoaded {
+        user: GithubUser,
+        detail: GithubRepositoryDetail,
+    },
+    /// Safe failure code with no upstream response or credential context.
+    Failed { code: String, retryable: bool },
 }
 
 /// Host-neutral proof journey controller.
@@ -447,12 +488,57 @@ impl<'api> GithubViewer<'api> {
         GithubSignInRequest { provider: GITHUB_PROVIDER_ID, scopes: provider_descriptor().scopes }
     }
 
+    /// Typed guest event starting the host-owned browser/PKCE flow.
+    #[must_use]
+    pub fn sign_in_event() -> GithubGuestEvent {
+        GithubGuestEvent::SignInRequested {
+            provider: GITHUB_PROVIDER_ID.to_owned(),
+            scopes: provider_descriptor()
+                .scopes
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect(),
+        }
+    }
+
+    /// Apply one host-approved event and perform the corresponding screen transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a repository response before a profile/list screen exists.
+    pub fn apply_host_event(&mut self, event: GithubHostEvent) -> Result<(), GithubError> {
+        match event {
+            GithubHostEvent::SignInStarted => {
+                self.screen = GithubViewerScreen::Authorizing;
+                Ok(())
+            }
+            GithubHostEvent::ProfileApproved { user } => {
+                self.screen = GithubViewerScreen::LoadingRepositories { user };
+                Ok(())
+            }
+            GithubHostEvent::RepositoriesLoaded { user, repositories } => {
+                self.screen = GithubViewerScreen::Repositories { user, repositories };
+                Ok(())
+            }
+            GithubHostEvent::RepositoryLoaded { user, detail } => {
+                self.screen = GithubViewerScreen::RepositoryDetail { user, detail };
+                Ok(())
+            }
+            GithubHostEvent::Failed { code, .. } => {
+                self.screen = GithubViewerScreen::Error {
+                    code: safe_error_code(&code),
+                };
+                Ok(())
+            }
+        }
+    }
+
     /// Complete sign-in with the host-approved public profile and load repositories.
     pub fn complete_sign_in(&mut self, user: GithubUser) -> Result<(), GithubError> {
-        self.screen = GithubViewerScreen::LoadingRepositories { user: user.clone() };
+        self.apply_host_event(GithubHostEvent::ProfileApproved { user: user.clone() })?;
         match self.client.repositories() {
             Ok(repositories) => {
-                self.screen = GithubViewerScreen::Repositories { user, repositories };
+                self.apply_host_event(GithubHostEvent::RepositoriesLoaded { user, repositories })?;
                 Ok(())
             }
             Err(error) => {
@@ -470,7 +556,7 @@ impl<'api> GithubViewer<'api> {
         };
         match self.client.repository(owner, name) {
             Ok(detail) => {
-                self.screen = GithubViewerScreen::RepositoryDetail { user, detail };
+                self.apply_host_event(GithubHostEvent::RepositoryLoaded { user, detail })?;
                 Ok(())
             }
             Err(error) => {
@@ -504,6 +590,24 @@ fn github_error_code(error: &GithubError) -> &'static str {
     }
 }
 
+fn safe_error_code(code: &str) -> &'static str {
+    match code {
+        "net.credential.oauth_session_unavailable" => {
+            "net.credential.oauth_session_unavailable"
+        }
+        "net.route.origin_not_declared" => "net.route.origin_not_declared",
+        "net.route.path_not_declared" => "net.route.path_not_declared",
+        "net.route.method_not_allowed" => "net.route.method_not_allowed",
+        "net.response.upstream_rejected" => "net.response.upstream_rejected",
+        "net.response.malformed" => "net.response.malformed",
+        "net.response.schema_mismatch" => "net.response.schema_mismatch",
+        "net.response.too_large" => "net.response.too_large",
+        "github.repository.invalid" => "github.repository.invalid",
+        "github.response.invalid" => "github.response.invalid",
+        _ => "github.request.failed",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,6 +628,22 @@ mod tests {
     fn sign_in_request_contains_only_provider_metadata() {
         let request = sign_in_request();
         assert_eq!(request.provider, GITHUB_PROVIDER_ID);
-        assert_eq!(request.scopes, &["read:user", "user:email", "repo"]);
+        assert_eq!(request.scopes, &["read:user", "user:email"]);
+    }
+
+    #[test]
+    fn typed_events_are_closed_and_token_free() {
+        let request = sign_in_event();
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["type"], "sign_in_requested");
+        assert_eq!(encoded["scopes"], json!(["read:user", "user:email"]));
+
+        let event = GithubHostEvent::Failed {
+            code: String::from("net.response.upstream_rejected"),
+            retryable: true,
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        assert!(!encoded.contains("token"));
+        assert_eq!(safe_error_code("unexpected upstream detail"), "github.request.failed");
     }
 }

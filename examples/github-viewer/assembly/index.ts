@@ -2,7 +2,7 @@
 declare function hostEmit(pointer: i32, length: i32): i32;
 
 let sequence: i64 = 0;
-let signedIn: bool = false;
+let signInRequested: bool = false;
 function emit(value: string): i32 {
   const bytes = String.UTF8.encode(value, false);
   return hostEmit(changetype<i32>(bytes), bytes.byteLength);
@@ -18,7 +18,8 @@ export function studio_init(_pointer: i32, _length: i32): i32 {
 }
 export function studio_event(pointer: i32, length: i32): i32 {
   const event = String.UTF8.decodeUnsafe(pointer, length, false);
-  if (signedIn || !event.includes('"node_id":"signin"')) return 0;
-  signedIn = true;
-  return patch("status", "text", "Waiting for host OAuth callback and repository response");
+  if (signInRequested || !event.includes('"node_id":"signin"')) return 0;
+  signInRequested = true;
+  sequence += 1;
+  return emit('{"type":"action","payload":{"request_id":"github-sign-in","capability":"github.oauth","operation":"sign_in","payload":{"provider":"github","scopes":["read:user","user:email"]}}}');
 }

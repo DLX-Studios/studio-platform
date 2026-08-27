@@ -12,7 +12,7 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex, RwLock},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ pub const GITHUB_DESCRIPTOR_VERSION: &str = "1.0.0";
 const CALLBACK_PATH: &str = "/oauth/callback";
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_BYTES: usize = 4096;
-const TOKEN_RECORD_PREFIX: &[u8] = b"studio.oauth.tokens.v1\0";
+const TOKEN_RECORD_PREFIX: &[u8] = b"studio.oauth.tokens.v2\0";
 
 /// Closed, value-free OAuth failure codes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -271,6 +271,8 @@ impl ProviderDescriptor {
                     verified: ClaimPath::new("verified"),
                 }),
             },
+            // The viewer only reads the authenticated profile and private email. `repo` is a
+            // broad repository-management grant and is intentionally not admitted here.
             scopes: vec![String::from("read:user"), String::from("user:email")],
             client_authentication: ClientAuthentication::Pkce,
             quirks: ProviderQuirks {
@@ -289,6 +291,7 @@ impl ProviderDescriptor {
             || !https_url(&self.token_endpoint)
             || self.scopes.is_empty()
             || self.scopes.iter().any(|scope| !valid_scope(scope))
+            || has_duplicate_strings(&self.scopes)
             || !https_url(&self.profile.endpoint)
             || !valid_claim_path(&self.profile.subject)
             || self
@@ -316,6 +319,13 @@ impl ProviderDescriptor {
                 .profile_url
                 .as_ref()
                 .is_some_and(|path| !valid_claim_path(path))
+        {
+            return Err(OAuthError::new(OAuthErrorCode::DescriptorInvalid));
+        }
+        if self.id == GITHUB_PROVIDER_ID
+            && self.scopes.iter().any(|scope| {
+                !matches!(scope.as_str(), "read:user" | "user:email")
+            })
         {
             return Err(OAuthError::new(OAuthErrorCode::DescriptorInvalid));
         }
@@ -621,6 +631,7 @@ impl fmt::Debug for SecretToken<'_> {
 pub struct TokenResponse {
     access_token: Zeroizing<Vec<u8>>,
     refresh_token: Option<Zeroizing<Vec<u8>>>,
+    scopes: Option<Vec<String>>,
     /// Provider-declared lifetime in seconds, when supplied.
     pub expires_in: Option<u64>,
 }
@@ -643,8 +654,33 @@ impl TokenResponse {
         Ok(Self {
             access_token: Zeroizing::new(access_token),
             refresh_token: refresh_token.map(Zeroizing::new),
+            scopes: None,
             expires_in,
         })
+    }
+
+    /// Attach the provider-reported granted scopes for strict host-side validation.
+    ///
+    /// Transports should provide this when the token endpoint returns a scope field. Older
+    /// providers that omit it remain supported; an explicitly returned scope set is never
+    /// allowed to broaden or silently reduce the descriptor declaration.
+    pub fn with_scopes<I, S>(
+        mut self,
+        scopes: I,
+    ) -> Result<Self, OAuthError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let scopes = scopes
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        if scopes.is_empty() || scopes.iter().any(|scope| !valid_scope(scope)) {
+            return Err(OAuthError::new(OAuthErrorCode::TokenExchangeFailed));
+        }
+        self.scopes = Some(scopes);
+        Ok(self)
     }
 
     fn access(&self) -> SecretToken<'_> {
@@ -887,14 +923,41 @@ fn parse_callback(stream: &mut TcpStream) -> Result<Callback, OAuthError> {
     {
         return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
     }
-    let query = target
-        .split_once('?')
-        .map_or("", |(_, query)| query)
-        .split('&')
-        .filter_map(|part| part.split_once('='))
-        .map(|(key, value)| (percent_decode(key), percent_decode(value)))
-        .collect::<BTreeMap<_, _>>();
+    let mut query = BTreeMap::new();
+    for part in target.split_once('?').map_or("", |(_, query)| query).split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let (key, value) = part
+            .split_once('=')
+            .ok_or_else(|| OAuthError::new(OAuthErrorCode::CallbackFailed))?;
+        let key = percent_decode(key)?;
+        let value = percent_decode(value)?;
+        if !matches!(key.as_str(), "code" | "state" | "error" | "scope")
+            || query.insert(key, value).is_some()
+        {
+            return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
+        }
+    }
     let denied = query.contains_key("error");
+    if query
+        .get("code")
+        .is_some_and(|value| !valid_callback_value(value))
+        || query
+            .get("state")
+            .is_some_and(|value| !valid_callback_value(value))
+        || query
+            .get("error")
+            .is_some_and(|value| !valid_callback_value(value))
+        || query.get("scope").is_some_and(|value| {
+            value.is_empty()
+                || value
+                    .split_ascii_whitespace()
+                    .any(|scope| !valid_scope(scope))
+        })
+    {
+        return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
+    }
     let callback = Callback {
         code: query.get("code").cloned(),
         state: query.get("state").cloned(),
@@ -976,7 +1039,16 @@ impl<B: CredentialBackend + Send + Sync> OAuthTokenStore for ProtectedOAuthToken
             Some(refresh) => append_bytes(&mut encoded, refresh.as_bytes())?,
             None => encoded.extend_from_slice(&u32::MAX.to_be_bytes()),
         }
-        encoded.extend_from_slice(&response.expires_in.unwrap_or(u64::MAX).to_be_bytes());
+        let expires_at = response
+            .expires_in
+            .map(|seconds| {
+                unix_epoch_seconds()
+                    .checked_add(seconds)
+                    .ok_or_else(|| OAuthError::new(OAuthErrorCode::TokenExchangeFailed))
+            })
+            .transpose()?
+            .unwrap_or(u64::MAX);
+        encoded.extend_from_slice(&expires_at.to_be_bytes());
         let scope = self.scope()?;
         scope
             .configure(&key, SecretInput::new(encoded).map_err(map_secret_error)?)
@@ -1048,6 +1120,9 @@ impl<B: CredentialBackend> ProtectedOAuthTokenStore<B> {
         let key = token_key(provider)?;
         self.scope()?.with_configured_secret(&key, |encoded| {
             let record = decode_token_record(encoded)?;
+            if token_expired(record.expires_at, unix_epoch_seconds()) {
+                return Err(OAuthError::new(OAuthErrorCode::TokenUnavailable));
+            }
             let token = if access {
                 record.access.as_slice()
             } else {
@@ -1064,6 +1139,7 @@ impl<B: CredentialBackend> ProtectedOAuthTokenStore<B> {
 struct DecodedTokens {
     access: Zeroizing<Vec<u8>>,
     refresh: Option<Zeroizing<Vec<u8>>>,
+    expires_at: Option<u64>,
 }
 
 fn append_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), OAuthError> {
@@ -1099,12 +1175,14 @@ fn decode_token_record(bytes: &[u8]) -> Result<DecodedTokens, OAuthError> {
         cursor = end;
         Some(value)
     };
-    if cursor.checked_add(8) != Some(bytes.len()) {
+    let expires_at = read_u64(bytes, &mut cursor)?;
+    if cursor != bytes.len() {
         return Err(OAuthError::new(OAuthErrorCode::StorageUnavailable));
     }
     Ok(DecodedTokens {
         access: Zeroizing::new(access),
         refresh,
+        expires_at: (expires_at != u64::MAX).then_some(expires_at),
     })
 }
 
@@ -1122,6 +1200,20 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, OAuthError> {
     Ok(value)
 }
 
+fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, OAuthError> {
+    let end = cursor
+        .checked_add(8)
+        .ok_or_else(|| OAuthError::new(OAuthErrorCode::StorageUnavailable))?;
+    let value = bytes
+        .get(*cursor..end)
+        .ok_or_else(|| OAuthError::new(OAuthErrorCode::StorageUnavailable))?
+        .try_into()
+        .map(u64::from_be_bytes)
+        .map_err(|_| OAuthError::new(OAuthErrorCode::StorageUnavailable))?;
+    *cursor = end;
+    Ok(value)
+}
+
 fn read_bytes(bytes: &[u8], cursor: &mut usize) -> Result<Vec<u8>, OAuthError> {
     let length = usize::try_from(read_u32(bytes, cursor)?)
         .map_err(|_| OAuthError::new(OAuthErrorCode::StorageUnavailable))?;
@@ -1134,6 +1226,16 @@ fn read_bytes(bytes: &[u8], cursor: &mut usize) -> Result<Vec<u8>, OAuthError> {
         .to_vec();
     *cursor = end;
     Ok(value)
+}
+
+fn unix_epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+fn token_expired(expires_at: Option<u64>, now: u64) -> bool {
+    expires_at.is_some_and(|expires_at| now >= expires_at)
 }
 
 fn token_key(provider: &str) -> Result<ProtectedSecretKey, OAuthError> {
@@ -1180,6 +1282,23 @@ fn valid_scope(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
 }
 
+fn has_duplicate_strings(values: &[String]) -> bool {
+    let mut seen = std::collections::BTreeSet::new();
+    values.iter().any(|value| !seen.insert(value))
+}
+
+fn valid_loopback_redirect_uri(value: &str) -> bool {
+    let Some(port_and_path) = value.strip_prefix("http://127.0.0.1:") else {
+        return false;
+    };
+    let Some((port, path)) = port_and_path.split_once(CALLBACK_PATH) else {
+        return false;
+    };
+    !port.is_empty()
+        && port.parse::<u16>().is_ok_and(|port| port != 0)
+        && path.is_empty()
+}
+
 fn valid_claim_path(path: &ClaimPath) -> bool {
     !path.0.is_empty()
         && path.0.len() <= 256
@@ -1211,22 +1330,29 @@ fn percent_encode(value: &str) -> String {
     output
 }
 
-fn percent_decode(value: &str) -> String {
+fn percent_decode(value: &str) -> Result<String, OAuthError> {
     let mut output = Vec::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
-                output.push(high * 16 + low);
-                index += 3;
-                continue;
-            }
+            let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) else {
+                return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
+            };
+            output.push(high * 16 + low);
+            index += 3;
+            continue;
+        } else if bytes[index] == b'%' {
+            return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
         }
         output.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&output).into_owned()
+    String::from_utf8(output).map_err(|_| OAuthError::new(OAuthErrorCode::CallbackFailed))
+}
+
+fn valid_callback_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 2048 && !value.chars().any(char::is_control)
 }
 
 fn hex(value: u8) -> Option<u8> {
@@ -1409,7 +1535,16 @@ impl OAuthManager {
             return OAuthStatus::Unavailable;
         }
         match self.store.state(provider) {
-            Ok(ProtectedSecretState::Configured) => OAuthStatus::Authenticated,
+            Ok(ProtectedSecretState::Configured) => {
+                let mut probe = |_token: SecretToken<'_>| Ok(());
+                match self.store.with_access_token(provider, &mut probe) {
+                    Ok(()) => OAuthStatus::Authenticated,
+                    Err(error) if error.code() == OAuthErrorCode::TokenUnavailable => {
+                        OAuthStatus::Expired
+                    }
+                    Err(_) => OAuthStatus::Unavailable,
+                }
+            }
             Ok(ProtectedSecretState::Revoked) => OAuthStatus::Revoked,
             Ok(ProtectedSecretState::Missing) => OAuthStatus::SignedOut,
             Err(_) => OAuthStatus::Unavailable,
@@ -1445,18 +1580,31 @@ impl OAuthManager {
             .listener
             .bind()
             .map_err(|_| OAuthError::new(OAuthErrorCode::CallbackBindFailed))?;
+        if !valid_loopback_redirect_uri(callback.redirect_uri()) {
+            return Err(OAuthError::new(OAuthErrorCode::CallbackBindFailed));
+        }
+        let redirect_uri = callback.redirect_uri().to_owned();
         let pkce = PkcePair::generate(self.entropy.as_ref())?;
         let state = self.generate_state()?;
-        let url = authorization_url(descriptor, package, callback.redirect_uri(), &state, &pkce);
+        let url = authorization_url(descriptor, package, &redirect_uri, &state, &pkce);
         self.browser.open(&url)?;
         let response = callback.wait(self.callback_timeout)?;
+        if callback.redirect_uri() != redirect_uri
+            || response
+                .code
+                .as_deref()
+                .is_some_and(|code| !valid_callback_value(code))
+        {
+            return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
+        }
         if response.state.as_deref() != Some(state.as_str()) {
             return Err(OAuthError::new(OAuthErrorCode::StateMismatch));
         }
         if response.denied || response.code.is_none() {
             return Err(OAuthError::new(OAuthErrorCode::AuthorizationDenied));
         }
-        let token_response = self.exchange(descriptor, package, response.code.as_deref().unwrap_or_default(), &pkce, callback.redirect_uri())?;
+        let token_response = self.exchange(descriptor, package, response.code.as_deref().unwrap_or_default(), &pkce, &redirect_uri)?;
+        validate_granted_scopes(descriptor, &token_response)?;
         let claims = self.map_profile(descriptor, provider, &token_response)?;
         self.store.save(provider, &token_response)?;
         self.sessions
@@ -1634,6 +1782,7 @@ impl OAuthManager {
         })?;
         let response = refreshed
             .ok_or_else(|| OAuthError::new(OAuthErrorCode::RefreshUnavailable))?;
+        validate_granted_scopes(&descriptor, &response)?;
         let claims = self.map_profile(&descriptor, provider, &response)?;
         self.store.save(provider, &response)?;
         self.sessions
@@ -1800,8 +1949,27 @@ fn status_for_error(code: OAuthErrorCode) -> OAuthStatus {
     }
 }
 
+fn validate_granted_scopes(
+    descriptor: &ProviderDescriptor,
+    response: &TokenResponse,
+) -> Result<(), OAuthError> {
+    let Some(granted) = &response.scopes else {
+        return Ok(());
+    };
+    if has_duplicate_strings(granted)
+        || granted.len() != descriptor.scopes.len()
+        || descriptor
+            .scopes
+            .iter()
+            .any(|scope| !granted.iter().any(|candidate| candidate == scope))
+    {
+        return Err(OAuthError::new(OAuthErrorCode::TokenExchangeFailed));
+    }
+    Ok(())
+}
+
 fn map_claims(mapping: &ProfileMapping, profile: &Value) -> Result<ApprovedClaims, OAuthError> {
-    let subject = claim_string(&mapping.subject, profile)
+    let subject = claim_subject(&mapping.subject, profile)
         .ok_or_else(|| OAuthError::new(OAuthErrorCode::ClaimsInvalid))?;
     Ok(ApprovedClaims {
         subject,
@@ -1822,6 +1990,20 @@ fn map_claims(mapping: &ProfileMapping, profile: &Value) -> Result<ApprovedClaim
     })
 }
 
+fn claim_subject(path: &ClaimPath, root: &Value) -> Option<String> {
+    let value = path.value(root)?;
+    match value {
+        Value::String(value)
+            if !value.is_empty() && value.len() <= 2048 && !value.chars().any(char::is_control) =>
+            Some(value.clone()),
+        Value::Number(value) => {
+            let value = value.to_string();
+            (value.len() <= 2048).then_some(value)
+        }
+        _ => None,
+    }
+}
+
 fn claim_string(path: &ClaimPath, root: &Value) -> Option<String> {
     let value = path.value(root)?.as_str()?;
     if value.is_empty() || value.len() > 2048 || value.chars().any(char::is_control) {
@@ -1840,4 +2022,102 @@ fn fallback_email(mapping: &EmailFallbackMapping, response: &Value) -> Option<St
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_descriptor_is_read_only_and_rejects_broad_repository_scope() {
+        let descriptor = ProviderDescriptor::github();
+        descriptor.validate().unwrap();
+        assert_eq!(
+            descriptor.scopes,
+            vec![String::from("read:user"), String::from("user:email")]
+        );
+
+        let mut broad = descriptor;
+        broad.scopes.push(String::from("repo"));
+        assert_eq!(
+            broad.validate().unwrap_err().code(),
+            OAuthErrorCode::DescriptorInvalid
+        );
+    }
+
+    #[test]
+    fn callback_decoding_is_strict_and_redirects_are_loopback_only() {
+        assert_eq!(percent_decode("read%3Auser").unwrap(), "read:user");
+        assert!(percent_decode("bad%2").is_err());
+        assert!(valid_loopback_redirect_uri(
+            "http://127.0.0.1:43121/oauth/callback"
+        ));
+        for redirect in [
+            "http://localhost:43121/oauth/callback",
+            "https://127.0.0.1:43121/oauth/callback",
+            "http://127.0.0.1:0/oauth/callback",
+            "http://127.0.0.1:43121/oauth/callback?state=leak",
+        ] {
+            assert!(!valid_loopback_redirect_uri(redirect));
+        }
+    }
+
+    #[test]
+    fn granted_scopes_must_match_the_descriptor_when_reported() {
+        let descriptor = ProviderDescriptor::github();
+        let response = TokenResponse::new(b"access".to_vec(), None, None)
+            .unwrap()
+            .with_scopes(["read:user", "user:email"])
+            .unwrap();
+        validate_granted_scopes(&descriptor, &response).unwrap();
+
+        let broad = TokenResponse::new(b"access".to_vec(), None, None)
+            .unwrap()
+            .with_scopes(["read:user", "repo"])
+            .unwrap();
+        assert_eq!(
+            validate_granted_scopes(&descriptor, &broad)
+                .unwrap_err()
+                .code(),
+            OAuthErrorCode::TokenExchangeFailed
+        );
+    }
+
+    #[test]
+    fn persisted_token_expiry_is_checked_before_injection() {
+        assert!(!token_expired(None, u64::MAX));
+        assert!(!token_expired(Some(101), 100));
+        assert!(token_expired(Some(100), 100));
+    }
+
+    #[test]
+    fn authorization_url_contains_only_the_declared_scopes() {
+        let descriptor = ProviderDescriptor::github();
+        let package = ProviderPackage::new("github", "1.0.0", "client");
+        let pkce = PkcePair {
+            verifier: Zeroizing::new(b"verifier".to_vec()),
+            challenge: String::from("challenge"),
+        };
+        let url = authorization_url(
+            &descriptor,
+            &package,
+            "http://127.0.0.1:43121/oauth/callback",
+            "state",
+            &pkce,
+        );
+        assert!(url.contains("scope=read%3Auser%20user%3Aemail"));
+        assert!(!url.contains("repo"));
+    }
+
+    #[test]
+    fn github_numeric_subjects_map_to_guest_safe_claims() {
+        let descriptor = ProviderDescriptor::github();
+        let claims = map_claims(
+            &descriptor.profile,
+            &serde_json::json!({"id": 42, "login": "octocat"}),
+        )
+        .unwrap();
+        assert_eq!(claims.subject, "42");
+        assert_eq!(claims.login.as_deref(), Some("octocat"));
+    }
 }
