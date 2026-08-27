@@ -4,6 +4,7 @@ mod action_dispatch;
 pub mod agent_conversation;
 pub mod cli;
 mod confirmation_surface;
+pub mod connection;
 mod diagnostic;
 mod failure_surface;
 pub mod focus_view;
