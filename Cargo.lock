@@ -8062,6 +8062,7 @@ dependencies = [
  "studio-design",
  "studio-host",
  "studio-navigation",
+ "studio-net",
  "studio-package",
  "studio-protocol",
  "studio-security",

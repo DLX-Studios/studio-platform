@@ -11,6 +11,7 @@ use studio_package::{
     TrustStoreError, VerifiedMigrationBundle, inspect_archive, parse_manifest,
     verify_bundle_signature,
 };
+use studio_net::{BrokerError, RestBroker, RestBrokerConfig};
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
 use studio_security::PluginPrincipal;
 use studio_ui::{InstanceId, UiRegistry};
@@ -181,6 +182,22 @@ impl StudioHost {
     #[must_use]
     pub const fn new(config: HostConfig, wayland: WaylandAvailability) -> Self {
         Self { config, wayland }
+    }
+
+    /// Construct the host-owned REST broker for one admitted package.
+    ///
+    /// Callers provide the package's already admitted route declarations and host-only resolver
+    /// seams. The factory compiles every route atomically before returning, so a package cannot
+    /// observe a broker with only a subset of its routes installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable broker admission error when a declaration or host limit is invalid.
+    pub fn prepare_broker<'store>(
+        &self,
+        config: RestBrokerConfig<'store>,
+    ) -> Result<std::sync::Arc<RestBroker<'store>>, BrokerError> {
+        RestBroker::from_config(config)
     }
 
     /// Compose an instance-owned protected payment session from verified host identities.
