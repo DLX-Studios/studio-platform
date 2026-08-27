@@ -5,6 +5,7 @@ pub mod cli;
 mod confirmation_surface;
 mod diagnostic;
 mod failure_surface;
+pub mod focus_view;
 pub mod foundation;
 pub mod host;
 pub mod plugin_surface;
@@ -20,6 +21,10 @@ pub use confirmation_surface::{
 };
 pub use diagnostic::SafeDiagnostic;
 pub use failure_surface::{FailureSurface, PluginRecovery, RecoveryError, RestartTrigger};
+pub use focus_view::{
+    FocusOpenError, FocusSelectionError, FocusView, FocusViewModel, FocusViewSnapshot,
+    FocusViewState,
+};
 pub use host::StudioHost;
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;

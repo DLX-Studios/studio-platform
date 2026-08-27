@@ -10,6 +10,7 @@ pub mod command;
 mod engine;
 pub mod model;
 pub mod persistence;
+pub mod projection;
 pub mod session;
 
 pub use command::{
@@ -21,6 +22,7 @@ pub use model::{
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
     DesignerDiagnostic, DiagnosticSeverity, InputEnvironment, Interaction, InteractionAction,
     InteractionEvent, InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit,
+    InvalidIdentity,
     LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint, ProjectId,
     PropertyValue, ResponsiveNodeOverride, ResponsiveVariant, ResponsiveVariantId,
     ReusableComposition, RevisionId, RevisionMetadata, RevisionReason,
@@ -31,6 +33,12 @@ pub use model::{
 pub use persistence::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, InMemoryDesignerPersistence,
     PersistenceError, PersistenceErrorCode, SessionFuture,
+};
+pub use projection::{
+    CODE_ASSET_MISSING, CODE_NODE_INVALID, CODE_PROPERTY_INVALID, CODE_PROTOCOL_INVALID,
+    CODE_SCREEN_INVALID, CODE_UNSUPPORTED, LibraryAsset, LibrarySnapshot, ProjectionDiagnostic,
+    ProjectionError, ProjectionOptions, ProjectionReport, RuntimeProjection, project_report,
+    project_runtime,
 };
 pub use session::{
     BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
