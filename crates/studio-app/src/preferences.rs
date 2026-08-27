@@ -2,6 +2,8 @@
 
 use studio_navigation::MotionPreference;
 
+use crate::settings::GlobalSettings;
+
 /// Effective preferences read from the native host environment.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HostPreferences {
@@ -23,5 +25,11 @@ impl HostPreferences {
         } else {
             MotionPreference::Standard
         }
+    }
+
+    /// Resolve host navigation preferences from persisted global settings.
+    #[must_use]
+    pub const fn from_global(settings: &GlobalSettings) -> Self {
+        Self::new(settings.reduced_motion)
     }
 }
