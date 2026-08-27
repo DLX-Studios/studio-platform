@@ -52,6 +52,12 @@ pub enum CommandPrecondition {
         property: String,
         value: Option<PropertyValue>,
     },
+    BreakpointPropertyEquals {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        property: String,
+        value: Option<PropertyValue>,
+    },
 }
 
 /// Closed command families for structural editing and semantic design data.
@@ -98,6 +104,19 @@ pub enum Command {
     RemoveResponsiveLayout {
         node_id: NodeId,
         variant_id: ResponsiveVariantId,
+    },
+    /// Set or clear one sparse property override at a breakpoint.
+    SetBreakpointProperty {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        property: String,
+        value: Option<PropertyValue>,
+    },
+    /// Replace or clear the complete typed override for a breakpoint.
+    SetBreakpointOverride {
+        node_id: NodeId,
+        variant_id: ResponsiveVariantId,
+        value: Option<Box<ResponsiveNodeOverride>>,
     },
     RenameNode {
         node_id: NodeId,

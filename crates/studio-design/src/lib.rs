@@ -11,6 +11,7 @@ mod engine;
 pub mod model;
 pub mod persistence;
 pub mod projection;
+pub mod responsive;
 pub mod session;
 
 pub use command::{
@@ -20,7 +21,7 @@ pub use engine::{DefaultDesignerSession, validate_layout};
 pub use model::{
     AccessibilityProperties, AccessibilityRole, Actor, ActorId, ActorKind, Alignment, BindingPath, ColorValue,
     CompositionId, CompositionInput, DeletionTombstone, DesignNode, DesignNodeSource, DesignToken,
-    DesignerDiagnostic, DiagnosticSeverity, InputEnvironment, Interaction, InteractionAction,
+    DesignerDiagnostic, DeviceProfileId, DiagnosticSeverity, InputEnvironment, Interaction, InteractionAction,
     InteractionEvent, InteractionId, InteractionSource, LayoutProperties, Length, LengthUnit,
     InvalidIdentity,
     LayoutPosition, LibraryAssetId, NavigationMode, NodeId, NodeParent, OperationId, Paint,
@@ -39,9 +40,14 @@ pub use projection::{
     ProjectionError, ProjectionOptions, ProjectionReport, RuntimeProjection, project_report,
     project_runtime,
 };
+pub use responsive::{
+    BreakpointProvenance, CompareReport, DeviceInput, DeviceProfile, DeviceProfileMatrix, Insets,
+    Orientation, ProfileDifference, PropertyPath, PropertyProvenance, ResolvedNode, ResolvedValue,
+    ResponsiveValue, Viewport, compare_profiles, inspect_node, resolve_node, select_variant,
+};
 pub use session::{
-    BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
-    DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate, SessionError,
-    SessionStateSnapshot, ToolKind,
+    BatchConflict, CanvasStateSnapshot, CommandOutcome, CommandReceipt, DesignerQuery,
+    DesignerQueryResult, DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate,
+    SessionError, SessionStateSnapshot, ToolKind,
 };
 pub use studio_protocol::NodeKind;
