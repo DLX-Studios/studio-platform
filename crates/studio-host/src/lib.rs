@@ -10,10 +10,10 @@ pub mod application_data;
 pub mod local_store;
 
 pub use application_data::{
-    ApplicationDataError, ApplicationDataErrorCode, ApplicationDataGuestApi,
-    ApplicationDataNamespace, CollectionDeclaration, CollectionRequest, CollectionResponse,
-    FieldDeclaration, FieldType, ForbiddenDataOperation, GuestDataRequest, PatchOperation,
-    RecordId, RecordSchema, StoredRecord,
+    APPLICATION_DATA_NAMESPACE_VERSION, ApplicationDataError, ApplicationDataErrorCode,
+    ApplicationDataGuestApi, ApplicationDataHandle, ApplicationDataHost, ApplicationDataNamespace,
+    CollectionDeclaration, CollectionRequest, CollectionResponse, FieldDeclaration, FieldType,
+    ForbiddenDataOperation, GuestDataRequest, PatchOperation, RecordId, RecordSchema, StoredRecord,
 };
 pub use local_store::{
     Durability, EmbeddedLocalStore, LocalStore, LocalStoreDiagnostic, LocalStoreDiagnosticCode,
