@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use studio_design::{
     DesignerPersistence, DesignerTransaction, DurableDesignerState, PersistenceError,
     PersistenceErrorCode, ProjectId, STUDIO_DESIGN_SCHEMA_VERSION, SessionFuture,
+    WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceError, WorkspacePersistence, WorkspaceRecord,
 };
 
 use crate::local_store::{
@@ -144,6 +145,64 @@ impl DesignerPersistence for LocalStoreDesignerPersistence {
     }
 }
 
+impl WorkspacePersistence for LocalStoreDesignerPersistence {
+    fn load<'a>(
+        &'a self,
+        project_id: &'a ProjectId,
+    ) -> SessionFuture<'a, Result<Option<WorkspaceRecord>, WorkspaceError>> {
+        Box::pin(async move {
+            let entries = self
+                .store
+                .batch_entries(&workspace_batch_id(project_id))
+                .await
+                .map_err(workspace_store_error)?;
+            if entries.is_empty() {
+                return Ok(None);
+            }
+            let [entry] = entries.as_slice() else {
+                return Err(WorkspaceError::InvalidState(
+                    "workspace record contains multiple entries".to_owned(),
+                ));
+            };
+            if entry.ordinal != 0 {
+                return Err(WorkspaceError::InvalidState(
+                    "workspace record has an invalid entry ordinal".to_owned(),
+                ));
+            }
+            let record: WorkspaceRecord =
+                serde_json::from_value(entry.payload.clone()).map_err(|_| {
+                    WorkspaceError::InvalidState("workspace record is damaged".to_owned())
+                })?;
+            validate_workspace_record(&record, project_id)?;
+            Ok(Some(record))
+        })
+    }
+
+    fn save<'a>(
+        &'a self,
+        record: &'a WorkspaceRecord,
+    ) -> SessionFuture<'a, Result<(), WorkspaceError>> {
+        Box::pin(async move {
+            validate_workspace_record(record, &record.project_id)?;
+            let payload = serde_json::to_value(record).map_err(|_| {
+                WorkspaceError::Persistence("workspace record could not be encoded".to_owned())
+            })?;
+            let batch = StoreBatch::new(
+                workspace_batch_id(&record.project_id),
+                [StoreBatchEntry {
+                    ordinal: 0,
+                    payload,
+                }],
+            )
+            .map_err(workspace_store_error)?;
+            self.store
+                .write_batch(&batch)
+                .await
+                .map_err(workspace_store_error)
+        })
+    }
+}
+
 fn project_batch_id(project_id: &ProjectId) -> String {
     let mut batch_id = String::with_capacity(18 + project_id.as_str().len() * 2);
     batch_id.push_str("designer-project-");
@@ -151,6 +210,31 @@ fn project_batch_id(project_id: &ProjectId) -> String {
         write!(&mut batch_id, "{byte:02x}").expect("writing to a String cannot fail");
     }
     batch_id
+}
+
+fn workspace_batch_id(project_id: &ProjectId) -> String {
+    let mut batch_id = String::with_capacity(20 + project_id.as_str().len() * 2);
+    batch_id.push_str("designer-workspace-");
+    for byte in project_id.as_str().bytes() {
+        write!(&mut batch_id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    batch_id
+}
+
+fn validate_workspace_record(
+    record: &WorkspaceRecord,
+    project_id: &ProjectId,
+) -> Result<(), WorkspaceError> {
+    if record.schema_version != WORKSPACE_STATE_SCHEMA_VERSION || record.project_id != *project_id {
+        return Err(WorkspaceError::InvalidState(
+            "workspace record metadata is incompatible".to_owned(),
+        ));
+    }
+    record.state.validate()
+}
+
+fn workspace_store_error(error: LocalStoreError) -> WorkspaceError {
+    WorkspaceError::Persistence(error.diagnostic().message().to_owned())
 }
 
 fn map_store_error(error: LocalStoreError) -> PersistenceError {

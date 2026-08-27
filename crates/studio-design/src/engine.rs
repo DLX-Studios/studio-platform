@@ -28,6 +28,9 @@ pub struct DefaultDesignerSession<P> {
     active_screen_id: Option<crate::ScreenId>,
     device_profile: Option<String>,
     tool: ToolKind,
+    canvas_transform: crate::CanvasTransform,
+    runs: Vec<crate::AgentRun>,
+    unsaved_work: crate::UnsavedWork,
     panel_state: BTreeMap<String, bool>,
 }
 
@@ -88,6 +91,9 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             active_screen_id,
             device_profile: None,
             tool: ToolKind::default(),
+            canvas_transform: crate::CanvasTransform::IDENTITY,
+            runs: Vec::new(),
+            unsaved_work: crate::UnsavedWork::default(),
             panel_state: BTreeMap::new(),
         })
     }
@@ -112,6 +118,9 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             active_screen_id,
             device_profile: None,
             tool: ToolKind::default(),
+            canvas_transform: crate::CanvasTransform::IDENTITY,
+            runs: Vec::new(),
+            unsaved_work: crate::UnsavedWork::default(),
             panel_state: BTreeMap::new(),
         })
     }
@@ -361,6 +370,9 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             active_screen_id: self.active_screen_id.clone(),
             device_profile: self.device_profile.clone(),
             tool: self.tool,
+            canvas_transform: self.canvas_transform,
+            runs: self.runs.clone(),
+            unsaved_work: self.unsaved_work.clone(),
             panel_state: self.panel_state.clone(),
             history_cursor: self.state.history_cursor,
         }
@@ -409,6 +421,15 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
         }
         if let Some(tool) = update.tool {
             self.tool = tool;
+        }
+        if let Some(canvas_transform) = update.canvas_transform {
+            self.canvas_transform = canvas_transform;
+        }
+        if let Some(runs) = update.runs {
+            self.runs = runs;
+        }
+        if let Some(unsaved_work) = update.unsaved_work {
+            self.unsaved_work = unsaved_work;
         }
         if let Some(panel_state) = update.panel_state {
             self.panel_state = panel_state;

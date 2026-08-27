@@ -11,6 +11,7 @@ mod engine;
 pub mod model;
 pub mod persistence;
 pub mod session;
+pub mod workspace;
 
 pub use command::{
     AppliedBatch, Command, CommandBatch, CommandPrecondition, HistoryEntry, ParentPlacement,
@@ -32,8 +33,14 @@ pub use persistence::{
     PersistenceError, PersistenceErrorCode, SessionFuture,
 };
 pub use session::{
-    BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
-    DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate, SessionError,
-    SessionStateSnapshot, ToolKind,
+    AgentRun, AgentRunStatus, BatchConflict, CanvasTransform, CommandOutcome, CommandReceipt,
+    DesignerQuery, DesignerQueryResult, DesignerSession, HistoryOperation, HistorySnapshot,
+    SessionContextUpdate, SessionError, SessionStateSnapshot, ToolKind, UnsavedWork,
 };
 pub use studio_protocol::NodeKind;
+pub use workspace::{
+    CommandDescriptor, EditorView, InMemoryWorkspacePersistence, PanelArrangement, PanelGeometry,
+    PanelId, PanelState, ViewSwitchSnapshot, WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceCommand,
+    WorkspaceController, WorkspaceError, WorkspacePersistence, WorkspaceRecord, WorkspaceState,
+    command_registry, find_commands,
+};
