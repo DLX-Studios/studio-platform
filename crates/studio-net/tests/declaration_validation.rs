@@ -94,15 +94,15 @@ fn declared_limits_above_host_ceilings_are_rejected() {
 }
 
 #[test]
-fn streaming_routes_must_declare_get_only() {
+fn streaming_routes_allow_bounded_get_or_post() {
     let mut group = json_api_group();
-    group.methods = vec![HttpMethod::Get, HttpMethod::Post];
+    group.methods = vec![HttpMethod::Post];
     group.response_schema = None;
     group.streaming = Some(common_sse());
-    assert_eq!(compile(&group), Err(BrokerErrorCode::DeclarationInvalid));
-
-    group.methods = vec![HttpMethod::Get];
     assert_eq!(compile(&group), Ok(()));
+
+    group.methods = vec![HttpMethod::Put];
+    assert_eq!(compile(&group), Err(BrokerErrorCode::DeclarationInvalid));
 }
 
 #[test]

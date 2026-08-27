@@ -10,9 +10,15 @@ export interface ChatRequest {
   readonly messages: readonly ChatMessage[];
   readonly stream?: boolean;
   readonly temperature?: number;
+  readonly streamOptions?: StreamOptions;
 }
 
-/** Host-mediated response stream; chunks have passed the signed route schema. */
+/** OpenAI-compatible stream controls. */
+export interface StreamOptions {
+  readonly includeUsage: boolean;
+}
+
+/** Host-mediated response stream; events have passed the signed route schema. */
 export interface AiChunkStream {
   readonly [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
 }
@@ -30,6 +36,27 @@ export interface ChatDelta {
   readonly finishReason?: string | null;
 }
 
+/** Token accounting emitted by a terminal provider event. */
+export interface ChatUsage {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly totalTokens: number;
+}
+
+/** Provider error carried in a terminal stream event. */
+export interface ChatError {
+  readonly message: string;
+  readonly errorType?: string;
+  readonly param?: string;
+  readonly code?: string;
+}
+
+/** Typed event projection for incremental output and terminal provider events. */
+export type AiStreamEvent =
+  | { readonly kind: "delta"; readonly delta: ChatDelta }
+  | { readonly kind: "usage"; readonly usage: ChatUsage }
+  | { readonly kind: "error"; readonly error: ChatError };
+
 /** Provider-neutral AI client. API keys remain protected host configuration. */
 export class AiClient {
   public constructor(private readonly transport: AiTransport) {}
@@ -38,19 +65,43 @@ export class AiClient {
     return this.transport.complete({ ...request, stream: false });
   }
 
-  public stream(request: ChatRequest): AsyncIterable<ChatDelta> {
+  public stream(request: ChatRequest): AsyncIterable<AiStreamEvent> {
     const source = this.transport.stream({ ...request, stream: true });
-    return this.deltas(source);
+    return this.events(source);
   }
 
-  private async *deltas(source: AiChunkStream): AsyncGenerator<ChatDelta> {
-    for await (const value of source) yield parseChunk(value);
+  private async *events(source: AiChunkStream): AsyncGenerator<AiStreamEvent> {
+    for await (const value of source) yield parseEvent(value);
   }
 }
 
-function parseChunk(value: unknown): ChatDelta {
+function parseEvent(value: unknown): AiStreamEvent {
   if (!value || typeof value !== "object") throw new Error("ai payload projection invalid");
+  const error = (value as { error?: unknown }).error;
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message !== "string" || message.length === 0) throw new Error("ai payload projection invalid");
+    return {
+      kind: "error",
+      error: {
+        message,
+        errorType: typeof (error as { type?: unknown }).type === "string" ? (error as { type: string }).type : undefined,
+        param: typeof (error as { param?: unknown }).param === "string" ? (error as { param: string }).param : undefined,
+        code: typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : undefined,
+      },
+    };
+  }
   const choices = (value as { choices?: unknown }).choices;
+  const usage = (value as { usage?: unknown }).usage;
+  if (Array.isArray(choices) && choices.length === 0 && usage && typeof usage === "object") {
+    const promptTokens = nonNegativeInteger((usage as { prompt_tokens?: unknown }).prompt_tokens);
+    const completionTokens = nonNegativeInteger((usage as { completion_tokens?: unknown }).completion_tokens);
+    const totalTokens = nonNegativeInteger((usage as { total_tokens?: unknown }).total_tokens);
+    if (promptTokens === undefined || completionTokens === undefined || totalTokens === undefined) {
+      throw new Error("ai payload projection invalid");
+    }
+    return { kind: "usage", usage: { promptTokens, completionTokens, totalTokens } };
+  }
   if (!Array.isArray(choices) || choices.length === 0 || !choices[0] || typeof choices[0] !== "object") {
     throw new Error("ai payload projection invalid");
   }
@@ -60,8 +111,15 @@ function parseChunk(value: unknown): ChatDelta {
     ? (delta as { content: string }).content
     : undefined;
   return {
-    choiceIndex: typeof choice.index === "number" ? choice.index : 0,
-    text,
-    finishReason: typeof choice.finish_reason === "string" || choice.finish_reason === null ? choice.finish_reason : undefined,
+    kind: "delta",
+    delta: {
+      choiceIndex: typeof choice.index === "number" ? choice.index : 0,
+      text,
+      finishReason: typeof choice.finish_reason === "string" || choice.finish_reason === null ? choice.finish_reason : undefined,
+    },
   };
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }

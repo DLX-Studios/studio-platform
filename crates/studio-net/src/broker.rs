@@ -182,7 +182,7 @@ impl<'store> RestBroker<'store> {
         Ok(TypedResponse::new(response.status, body))
     }
 
-    /// Open one declared server-sent-event stream.
+    /// Open one declared server-sent-event stream, optionally carrying a bounded request body.
     ///
     /// # Errors
     ///
@@ -192,20 +192,22 @@ impl<'store> RestBroker<'store> {
         if !group.is_streaming() {
             return Err(BrokerError::new(BrokerErrorCode::RouteNotStreaming));
         }
-        if request.body.is_some() {
-            return Err(BrokerError::with_detail(
-                BrokerErrorCode::RequestSchemaInvalid,
-                String::from("streaming routes carry no body"),
-            ));
-        }
         let limits = *group.limits();
         self.check_rate(
             group.id(),
             limits.max_requests_per_window,
             limits.rate_window,
         )?;
+        let body_bytes = self.prepare_body(
+            request.body.as_ref(),
+            group.request_schema(),
+            limits.max_request_bytes,
+        )?;
         let mut headers = guest_headers(&request);
         headers.push((String::from("accept"), String::from("text/event-stream")));
+        if !body_bytes.is_empty() {
+            headers.push((String::from("content-type"), String::from("application/json")));
+        }
         credential::resolve(
             group,
             self.injector
@@ -227,7 +229,7 @@ impl<'store> RestBroker<'store> {
                 request.query.as_deref(),
             ),
             headers,
-            body: None,
+            body: (!body_bytes.is_empty()).then_some(body_bytes),
             timeout: limits.stream_idle_timeout,
         };
         Ok(streaming::spawn_stream(
