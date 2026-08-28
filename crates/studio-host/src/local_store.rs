@@ -376,8 +376,10 @@ async fn connect_rocksdb(
 
 /// Reads the engine manifest, returning `None` when no store was initialized.
 fn read_manifest(directory: &Path) -> Result<Option<EngineManifest>, LocalStoreDiagnosticCode> {
-    let Ok(raw) = std::fs::read_to_string(directory.join(ENGINE_MANIFEST_FILE)) else {
-        return Ok(None);
+    let raw = match std::fs::read_to_string(directory.join(ENGINE_MANIFEST_FILE)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(LocalStoreDiagnosticCode::EngineManifestCorrupt),
     };
     serde_json::from_str::<EngineManifest>(&raw)
         .map(Some)
@@ -1010,6 +1012,18 @@ mod tests {
         let mut future = manifest.clone();
         future.format_version += 1;
         assert!(validate_manifest(&future).is_err());
+    }
+
+    #[test]
+    fn manifest_read_failures_other_than_not_found_are_corruption() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::create_dir(directory.path().join(ENGINE_MANIFEST_FILE))
+            .expect("manifest path directory");
+
+        assert!(matches!(
+            read_manifest(directory.path()),
+            Err(LocalStoreDiagnosticCode::EngineManifestCorrupt)
+        ));
     }
 
     #[tokio::test]

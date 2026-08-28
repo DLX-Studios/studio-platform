@@ -297,13 +297,14 @@ fn corruption_diagnostics_are_actionable_via_real_engine() {
         .build()
         .expect("runtime");
 
-    // Corrupted manifest: open and recover both return EngineManifestCorrupt.
+    // Invalid UTF-8 in an existing manifest is corruption, not a fresh store.
     let corrupted = tempfile::tempdir().expect("tempdir");
     runtime.block_on(async {
         let store = opened(corrupted.path(), Durability::Every).await;
         store.close().await.expect("close");
     });
-    std::fs::write(corrupted.path().join(MANIFEST_FILE), "{not json").expect("corrupt");
+    std::fs::write(corrupted.path().join(MANIFEST_FILE), [0xff, 0xfe, 0xfd])
+        .expect("corrupt manifest bytes");
     runtime.block_on(async {
         let open_err = EmbeddedLocalStore::open(corrupted.path(), Durability::Every)
             .await
@@ -316,6 +317,33 @@ fn corruption_diagnostics_are_actionable_via_real_engine() {
             .expect("corrupted recover fails");
         assert_code(recover_err, LocalStoreDiagnosticCode::EngineManifestCorrupt);
     });
+    assert_eq!(
+        std::fs::read(corrupted.path().join(MANIFEST_FILE)).expect("manifest remains readable"),
+        [0xff, 0xfe, 0xfd]
+    );
+
+    // A manifest path that is a directory is a portable non-NotFound read
+    // failure on supported platforms and must also fail closed.
+    let unreadable = tempfile::tempdir().expect("temporary directory");
+    runtime.block_on(async {
+        let store = opened(unreadable.path(), Durability::Every).await;
+        store.close().await.expect("close");
+    });
+    std::fs::remove_file(unreadable.path().join(MANIFEST_FILE)).expect("remove manifest");
+    std::fs::create_dir(unreadable.path().join(MANIFEST_FILE)).expect("manifest directory");
+    runtime.block_on(async {
+        let open_err = EmbeddedLocalStore::open(unreadable.path(), Durability::Every)
+            .await
+            .err()
+            .expect("directory manifest must fail");
+        assert_code(open_err, LocalStoreDiagnosticCode::EngineManifestCorrupt);
+        let recover_err = EmbeddedLocalStore::recover(unreadable.path(), Durability::Every)
+            .await
+            .err()
+            .expect("directory manifest recovery must fail");
+        assert_code(recover_err, LocalStoreDiagnosticCode::EngineManifestCorrupt);
+    });
+    assert!(unreadable.path().join(MANIFEST_FILE).is_dir());
 
     // Incompatible manifest (future format / foreign engine).
     let incompatible = tempfile::tempdir().expect("tempdir");
