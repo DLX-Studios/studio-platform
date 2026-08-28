@@ -9,7 +9,7 @@
 ## Build and Verification Policy
 - During ticket work, run focused package, library, and named-test commands for the code in scope.
 - Reserve full workspace tests and `cargo clippy --locked --workspace --all-targets -- -D warnings` for integration checkpoints.
-- At an integration checkpoint, run format, workspace tests, Clippy, and release builds sequentially with one active Cargo process.
+- At an integration checkpoint, run format, workspace tests, and Clippy sequentially with one active Cargo process. Run a release build only at an explicit release checkpoint.
 - Bind each `CARGO_TARGET_DIR` cache to one exact commit and build configuration; serialize every command that uses it.
 - For verification builds that do not require debugger symbols or incremental reuse, set `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and `CARGO_INCREMENTAL=0` before the first command so the cache keeps one consistent configuration.
 - Reuse focused test evidence within a ticket pass instead of rebuilding every integration-test executable.

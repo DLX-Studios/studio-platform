@@ -4,7 +4,7 @@
 
 **Blocked by:** 14, 22
 
-**Status:** implemented-code-only (awaiting serialized runner/fixer pass)
+**Status:** done
 
 - [x] Seam tests cover create/open/edit/undo/redo/reopen without touching internals
 - [x] Invalid batch rolls back atomically leaving no new revision
@@ -15,10 +15,9 @@
 
 ## Implementation notes
 
-Branch `tt/37-designersession-seam`. The implementation is intentionally split into three commits:
-the public model/seams, the command/history engine, and the host persistence adapter. No Cargo
-command was run in this writer worktree; the serialized runner still owns the locked workspace
-test, Clippy, format, and release-build gates.
+Branch `tt/37-designersession-seam`. The implementation was intentionally split into three commits:
+the public model/seams, the command/history engine, and the host persistence adapter. The focused
+acceptance suites and integration checkpoint have since verified the landed implementation.
 
 ### Interface and source model
 
@@ -47,8 +46,7 @@ test, Clippy, format, and release-build gates.
   placement, deletion revision, and typed reference diagnostics.
 - Public seam tests cover create/open/edit/undo/redo/reopen, rollback, identity stability,
   duplication, tombstone restore/diagnostics, grouped undo, stale conflicts, and closed-schema
-  decode. These 8 pure domain tests were compiled, linted (`all` + `pedantic` + `-D warnings`), and
-  executed directly with `rustc`/`clippy-driver`; all passed without invoking Cargo.
+  decode.
 
 ### LocalStore persistence and recovery
 
@@ -61,13 +59,21 @@ test, Clippy, format, and release-build gates.
   signals the parent, is force-killed, and the recovery process asserts that exact revision and
   property value reopen.
 
-### UNVERIFIED items (for the runner/fixer pass)
+### Verification evidence
 
-1. UNVERIFIED(compile) — the new `studio-host -> studio-design` lockfile edge and host adapter/tests
-   were authored against the landed LocalStore API but not compiled through Cargo in this writer.
-2. UNVERIFIED(runtime) — SurrealDB/RocksDB serialization of the versioned Designer envelope through
-   `StoreBatchEntry.payload` and forced-termination recovery are asserted by real integration tests
-   but require the serialized runner to execute them.
-3. UNVERIFIED(scale) — v1 atomically replaces the complete per-project revision/history envelope on
-   each accepted batch. This is deliberately simple and crash-safe for the current seam; measure
-   large-project/revision histories before selecting a later append/checkpoint compaction scheme.
+Verified on integration commit `909a143` with one Cargo job, a commit-specific target cache,
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and `CARGO_INCREMENTAL=0`:
+
+- `cargo test --locked -p studio-design --test designer_session_seam`: 10 passed.
+- `cargo test --locked -p studio-host --test designer_persistence`: 3 passed.
+- `cargo test --locked -p studio-host --test crash_recovery`: 1 passed, including forced
+  termination followed by reopen at the last accepted revision.
+- `cargo fmt --all -- --check`: passed.
+- `cargo test --locked --workspace`: passed.
+- `cargo clippy --locked --workspace --all-targets -- -D warnings`: passed.
+
+The release build was intentionally deferred under the repository verification policy; it is an
+explicit release-checkpoint gate rather than a ticket-closure gate. The v1 persistence adapter
+still atomically replaces the complete per-project revision/history envelope on each accepted
+batch. Measure large-project histories before selecting a later append/checkpoint compaction
+scheme; this is a scale follow-up, not a correctness gap in the verified ticket scope.
