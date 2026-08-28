@@ -1,10 +1,27 @@
 //! Active-environment resolution, per-environment application data isolation, and a
 //! promotion path that cannot move credential material.
 //!
-//! # UNVERIFIED
-//! - Authored against ticket 28 acceptance criteria; serialized runner has not executed yet.
-//! - Boundaries deliberately leave row-scope extension points clean for ticket 24 (RBAC):
-//!   [`EnvironmentDataScope`] is the single place a future row-scope axis would attach.
+//! Environments are `development`, `staging`, and `production`. Each environment
+//! resolves to an independent partition digest for both the embedded data layer
+//! ([`EnvironmentDataStore`]) and the protected credential layer
+//! ([`crate::ProtectedSecretStore`]) using distinct domain-separated hashes, so
+//! data keys and credential locators never alias even for the same logical name
+//! and application.
+//!
+//! Active-environment selection is closed and has no default: resolution reads the
+//! protected host configuration key `environment.active` and fails with a stable
+//! safe code for missing, invalid, or ambiguous values.
+//!
+//! Promotion is structurally secret-free: [`PromotionPlan`] admits only
+//! [`SecretFreeMetadata`] (sealed, value-free status) and [`apply_promotion`]
+//! receives no credential backend handle, so no secret bytes can cross
+//! environments. The call additionally refuses invalid source or target
+//! identities (wrong environment, mismatched application, or malformed record
+//! names) with stable safe diagnostics.
+//!
+//! Boundaries leave row-scope extension points clean for ticket 24 (RBAC):
+//! [`EnvironmentDataScope`] is the single place a future row-scope axis would
+//! attach.
 
 use std::{collections::BTreeMap, error::Error, fmt};
 
@@ -423,7 +440,7 @@ impl PromotionDirection {
     }
 }
 
-/// A reviewed promotion between two environments.
+/// A reviewed promotion between two environments, bound to one application identity.
 ///
 /// Construction admits only [`SecretFreeMetadata`] items, and execution touches no credential
 /// backend at all: there is no code path from a [`PromotionPlan`] to secret bytes, which is the
@@ -431,26 +448,38 @@ impl PromotionDirection {
 #[derive(Clone, Debug)]
 pub struct PromotionPlan {
     direction: PromotionDirection,
+    application: String,
     entries: Vec<PromotionEntry>,
 }
 
 impl PromotionPlan {
-    /// Plan a promotion from value-free status metadata only.
+    /// Plan a promotion from value-free status metadata only, bound to one application identity.
     ///
     /// # Errors
     ///
-    /// Returns [`EnvironmentErrorCode::RequestInvalid`] for a backward or lateral direction.
+    /// Returns [`EnvironmentErrorCode::RequestInvalid`] for an empty or oversized application
+    /// identity, or [`EnvironmentErrorCode::CrossEnvironmentDenied`] for a backward or lateral
+    /// direction.
     pub fn build<S: SecretFreeMetadata>(
         direction: PromotionDirection,
+        application: impl Into<String>,
         statuses: impl IntoIterator<Item = S>,
     ) -> Result<Self, EnvironmentError> {
+        let application = application.into();
+        if application.is_empty() || application.len() > 256 {
+            return Err(EnvironmentError::new(EnvironmentErrorCode::RequestInvalid));
+        }
         let entries: Vec<PromotionEntry> = statuses
             .into_iter()
             .map(|status| status.describe())
             .collect();
         match direction {
             PromotionDirection::DevelopmentToStaging | PromotionDirection::StagingToProduction => {
-                Ok(Self { direction, entries })
+                Ok(Self {
+                    direction,
+                    application,
+                    entries,
+                })
             }
         }
     }
@@ -459,6 +488,12 @@ impl PromotionPlan {
     #[must_use]
     pub const fn direction(&self) -> PromotionDirection {
         self.direction
+    }
+
+    /// Verified application identity the plan was built for.
+    #[must_use]
+    pub fn application(&self) -> &str {
+        &self.application
     }
 
     /// Value-free entries the operator must act on after promotion.
@@ -496,13 +531,17 @@ pub struct PromotionReceipt {
 ///
 /// Credential material is untouched by construction: the plan holds only value-free metadata,
 /// and this function receives no credential backend handle, so there is no code path from a
-/// [`PromotionPlan`] to secret bytes.
+/// [`PromotionPlan`] to secret bytes. Separate domain-separated partition digests for the
+/// data layer (`studio.environment.data-partition.v1`) and the credential layer
+/// (`studio.protected-secret.partition.v1` / `credential.v1`) guarantee `LocalStore` and
+/// secret namespaces never alias even for identical application and environment values.
 ///
 /// # Errors
 ///
 /// Returns [`EnvironmentErrorCode::CrossEnvironmentDenied`] if the caller-supplied scopes do not
-/// match the plan's direction, or [`EnvironmentErrorCode::RequestInvalid`] for malformed record
-/// names.
+/// match the plan's direction, belong to different applications, or otherwise cross the
+/// environment boundary, and [`EnvironmentErrorCode::RequestInvalid`] for malformed record
+/// names or application identifiers.
 pub fn apply_promotion(
     plan: &PromotionPlan,
     source: &EnvironmentDataScope<'_>,
@@ -511,6 +550,9 @@ pub fn apply_promotion(
 ) -> Result<(PromotionReceipt, BTreeMap<String, Vec<u8>>), EnvironmentError> {
     if source.environment() != plan.direction().source()
         || target.environment() != plan.direction().target()
+        || source.application() != plan.application()
+        || target.application() != plan.application()
+        || source.application() != target.application()
     {
         return Err(EnvironmentError::new(
             EnvironmentErrorCode::CrossEnvironmentDenied,

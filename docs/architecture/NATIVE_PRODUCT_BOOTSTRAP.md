@@ -25,4 +25,3 @@ The GPUI `NativeProductShell` renders the route model and retains a verified
 Runtime surface only after authentication. The existing foundation renderer is
 therefore a child of the authenticated project route rather than the native
 startup surface.
-

@@ -12,6 +12,7 @@ use std::{
     collections::BTreeMap,
     future::Future,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -310,6 +311,24 @@ fn batch_id_is_valid(id: &str) -> bool {
     !id.is_empty() && !id.chars().any(char::is_control)
 }
 
+/// Treat a missing table or record as an empty typed batch.
+///
+/// Embedded SurrealDB can wrap a `NotFound` result in an outer context error
+/// when a table has not been created yet. Batch reads are intentionally
+/// presence-based, so inspect the complete reviewed error chain before
+/// converting that first-read condition into an empty result. Other storage
+/// failures remain fatal and continue to fail closed.
+fn is_missing_batch_resource(error: &surrealdb::Error) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.is_not_found() {
+            return true;
+        }
+        current = error.cause();
+    }
+    false
+}
+
 /// Projects a validated [`StoreBatch`] onto its persisted record shape.
 fn persisted_batch(batch: &StoreBatch) -> PersistedBatch {
     PersistedBatch {
@@ -357,8 +376,10 @@ async fn connect_rocksdb(
 
 /// Reads the engine manifest, returning `None` when no store was initialized.
 fn read_manifest(directory: &Path) -> Result<Option<EngineManifest>, LocalStoreDiagnosticCode> {
-    let Ok(raw) = std::fs::read_to_string(directory.join(ENGINE_MANIFEST_FILE)) else {
-        return Ok(None);
+    let raw = match std::fs::read_to_string(directory.join(ENGINE_MANIFEST_FILE)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(LocalStoreDiagnosticCode::EngineManifestCorrupt),
     };
     serde_json::from_str::<EngineManifest>(&raw)
         .map(Some)
@@ -398,7 +419,7 @@ async fn read_schema_metadata(
     let stored: Option<StoredMetadata> = match database.select((TABLE_METADATA, METADATA_KEY)).await
     {
         Ok(stored) => stored,
-        Err(error) if error.is_not_found() => return Ok(None),
+        Err(error) if is_missing_batch_resource(&error) => return Ok(None),
         Err(_) => return Err(LocalStoreDiagnosticCode::SchemaMetadataCorrupt),
     };
     Ok(stored)
@@ -430,11 +451,14 @@ async fn ensure_schema_metadata(
             };
             let written: Result<Option<StoredMetadata>, surrealdb::Error> = database
                 .upsert((TABLE_METADATA, METADATA_KEY))
-                .content(initial)
+                .content(initial.clone())
                 .await;
-            written
-                .map_err(|_| LocalStoreDiagnosticCode::OperationFailed)?
-                .ok_or(LocalStoreDiagnosticCode::OperationFailed)
+            // SurrealDB may return `None` for a successful content upsert when
+            // no explicit RETURN projection is requested. The write itself is
+            // the durable operation we need here; requiring a returned record
+            // incorrectly rejects a fresh store during native bootstrap.
+            written.map_err(|_| LocalStoreDiagnosticCode::OperationFailed)?;
+            Ok(initial)
         }
     }
 }
@@ -489,6 +513,10 @@ pub struct EmbeddedLocalStore {
     database: Surreal<Db>,
     directory: PathBuf,
     durability: Durability,
+    // A blocking-open store owns the runtime that services SurrealDB's local
+    // router after `open_blocking` returns. Async-open stores remain attached
+    // to their caller's runtime and leave this unset.
+    runtime: Option<Arc<Runtime>>,
 }
 
 impl EmbeddedLocalStore {
@@ -538,6 +566,7 @@ impl EmbeddedLocalStore {
             database,
             directory,
             durability,
+            runtime: None,
         })
     }
 
@@ -593,6 +622,7 @@ impl EmbeddedLocalStore {
             database,
             directory,
             durability,
+            runtime: None,
         })
     }
 
@@ -617,11 +647,17 @@ impl EmbeddedLocalStore {
         directory: impl Into<PathBuf>,
         durability: Durability,
     ) -> Result<Self, LocalStoreError> {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
-        runtime.block_on(Self::open(directory, durability))
+        let runtime = Arc::new(
+            Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("studio-localstore-bootstrap")
+                .enable_all()
+                .build()
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?,
+        );
+        let mut store = runtime.block_on(Self::open(directory, durability))?;
+        store.runtime = Some(runtime);
+        Ok(store)
     }
 
     /// Read one typed batch from a synchronous host adapter.
@@ -629,6 +665,9 @@ impl EmbeddedLocalStore {
         &self,
         batch_id: &str,
     ) -> Result<Vec<StoreBatchEntry>, LocalStoreError> {
+        if let Some(runtime) = &self.runtime {
+            return runtime.block_on(self.batch_entries(batch_id));
+        }
         let runtime = Builder::new_current_thread()
             .enable_all()
             .build()
@@ -638,6 +677,9 @@ impl EmbeddedLocalStore {
 
     /// Persist one typed batch from a synchronous host adapter.
     pub fn write_batch_blocking(&self, batch: &StoreBatch) -> Result<(), LocalStoreError> {
+        if let Some(runtime) = &self.runtime {
+            return runtime.block_on(self.write_batch(batch));
+        }
         let runtime = Builder::new_current_thread()
             .enable_all()
             .build()
@@ -686,7 +728,7 @@ impl LocalStore for EmbeddedLocalStore {
             let stored: Option<PersistedBatch> =
                 match self.database.select((TABLE_BATCH, batch_id)).await {
                     Ok(stored) => stored,
-                    Err(error) if error.is_not_found() => None,
+                    Err(error) if is_missing_batch_resource(&error) => None,
                     Err(_) => {
                         return Err(LocalStoreError::new(
                             LocalStoreDiagnosticCode::OperationFailed,
@@ -972,6 +1014,18 @@ mod tests {
         assert!(validate_manifest(&future).is_err());
     }
 
+    #[test]
+    fn manifest_read_failures_other_than_not_found_are_corruption() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::create_dir(directory.path().join(ENGINE_MANIFEST_FILE))
+            .expect("manifest path directory");
+
+        assert!(matches!(
+            read_manifest(directory.path()),
+            Err(LocalStoreDiagnosticCode::EngineManifestCorrupt)
+        ));
+    }
+
     #[tokio::test]
     async fn typed_batches_persist_and_read_back_atomically_on_the_memory_engine() {
         let database = memory_database().await;
@@ -1008,5 +1062,43 @@ mod tests {
         assert!(batch_id_is_valid("ordinary-batch"));
         assert!(!batch_id_is_valid(""));
         assert!(!batch_id_is_valid("bad\u{7}id"));
+    }
+
+    #[tokio::test]
+    async fn fresh_rocksdb_identity_snapshot_is_empty() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = std::sync::Arc::new(
+            EmbeddedLocalStore::open(directory.path(), Durability::Every)
+                .await
+                .expect("fresh RocksDB store opens"),
+        );
+        let identity = crate::IdentityService::with_credentials(
+            std::sync::Arc::clone(&store),
+            studio_security::OsSessionCredentialStore,
+        );
+        let snapshot = identity
+            .snapshot()
+            .await
+            .expect("fresh identity snapshot reads as empty");
+        assert!(snapshot.identities.is_empty());
+        assert!(snapshot.sessions.is_empty());
+    }
+
+    #[test]
+    fn fresh_rocksdb_identity_snapshot_blocking_is_empty() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = std::sync::Arc::new(
+            EmbeddedLocalStore::open_blocking(directory.path(), Durability::Every)
+                .expect("fresh RocksDB store opens"),
+        );
+        let identity = crate::IdentityService::with_credentials(
+            std::sync::Arc::clone(&store),
+            studio_security::OsSessionCredentialStore,
+        );
+        let snapshot = identity
+            .snapshot_blocking()
+            .expect("fresh blocking identity snapshot reads as empty");
+        assert!(snapshot.identities.is_empty());
+        assert!(snapshot.sessions.is_empty());
     }
 }

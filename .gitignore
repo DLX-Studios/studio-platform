@@ -24,3 +24,4 @@ examples/starter/build/*
 .DS_Store
 .vscode/
 .idea/
+keys.txt
