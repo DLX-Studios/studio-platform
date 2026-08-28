@@ -1,4 +1,57 @@
 //! Closed guest contract for host-owned application data.
+//!
+//! # Authority and isolation
+//!
+//! Each verified `publisher/application` pair receives a stable, opaque
+//! [`ApplicationDataNamespace`] derived via a closed, domain-separated,
+//! length-delimited SHA-256 over the verified publisher and application
+//! identifiers. Signing-key rotation, bundle updates, process instances, and
+//! restarts retain the same partition, while different publishers or
+//! applications never observe each other's records through any guest
+//! interface. Guest requests contain only typed `select/list/create/update-merge`
+//! `/update-patch/delete` shapes; no namespace selector, database selector,
+//! or query string crosses the host boundary.
+//!
+//! # Typed collection helpers
+//!
+//! Collections are declared by the verified package as closed
+//! [`RecordSchema`] values. Every write is validated before it reaches
+//! [`LocalStore`] and every read is re-validated after it leaves the store.
+//! Unknown fields, missing required fields, and type mismatches are rejected
+//! with [`ApplicationDataErrorCode::SchemaViolation`].
+//!
+//! # Safe diagnostics
+//!
+//! All guest-visible failures use stable [`ApplicationDataErrorCode`] and
+//! [`SurrealQueryErrorCode`] values with fixed, context-free messages. No
+//! record payload, namespace digest, query text, or storage-engine detail
+//! crosses the boundary. Forbidden guest paths (`RawQuery`,
+//! `NamespaceSwitch`, `DatabaseSwitch`) carry operation markers only and fail
+//! with `RawQueryDenied`/`NamespaceSwitchDenied`/`DatabaseSwitchDenied`.
+//! Cross-namespace attribution via [`ApplicationDataHandle::authorize_namespace`]
+//! fails deterministically with `CrossNamespaceDenied`.
+//!
+//! # Preliminary throughput budget
+//!
+//! On the project's supported baseline machine (`STUDIO-BENCH-1`, Intel N100
+//! 8 GiB, NVMe, Weston) with `Durability::Every`, a 1,000-record collection
+//! should target p95 ≤ 10 ms for `select`, p95 ≤ 25 ms for
+//! `create/update/delete`, and p95 ≤ 75 ms for a full ordered `list` after
+//! warmup. These are preliminary targets recorded in
+//! `.scratch/studio-designer/issues/15-app-data-namespaces-collection-helpers.md`
+//! and are **not** enforced in the automated suite. The serialized runner
+//! records machine/storage details and at least 1,000 samples per verb before
+//! treating them as qualification evidence. In-repo tests record conservative
+//! smoke evidence (generous upper bounds, counts, and a printed report) without
+//! brittle machine-specific timing so CI remains deterministic on any
+//! hardware.
+//!
+//! # Public surface
+//!
+//! The typed host mediation is exposed only through
+//! [`ApplicationDataHost`] / [`ApplicationDataHandle`] and the
+//! [`ApplicationDataGuestApi`] / [`ApplicationDataQueryGuestApi`] traits.
+//! Guests never receive a database handle or query language.
 
 #![allow(missing_docs)]
 #![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
