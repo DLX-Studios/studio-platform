@@ -2,16 +2,22 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use studio_security::{
-    ApplicationEnvironment, CredentialBackend, CredentialBackendError, CredentialBytes,
-    CredentialLocator, EnvironmentDataStore, EnvironmentErrorCode, PluginPrincipal,
-    PromotionDirection, PromotionPlan, ProtectedConfiguration, ProtectedSecretKey,
+    ApplicationEnvironment, ApplicationSecretStore, CredentialBackend, CredentialBackendError,
+    CredentialBytes, CredentialLocator, EnvironmentDataStore, EnvironmentErrorCode,
+    OsCredentialBackend, PluginPrincipal, PromotionDirection, PromotionPlan,
+    ProtectedConfiguration, ProtectedSecretError, ProtectedSecretErrorCode, ProtectedSecretKey,
     ProtectedSecretState, ProtectedSecretStatus, ProtectedSecretStore, SecretInput, TrustMode,
     apply_promotion, resolve_active_environment,
 };
+
+static NEXT_OS_TEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Default)]
 struct MemoryBackend {
@@ -57,6 +63,50 @@ impl CredentialBackend for MemoryBackend {
             .remove(locator)
             .map(|_| ())
             .ok_or(CredentialBackendError::NotFound)
+    }
+}
+
+struct OsVaultCleanup<'guard, 'store> {
+    staging: &'guard ApplicationSecretStore<'store, OsCredentialBackend>,
+    production: &'guard ApplicationSecretStore<'store, OsCredentialBackend>,
+    key: &'guard ProtectedSecretKey,
+    finished: bool,
+}
+
+impl<'guard, 'store> OsVaultCleanup<'guard, 'store> {
+    fn new(
+        staging: &'guard ApplicationSecretStore<'store, OsCredentialBackend>,
+        production: &'guard ApplicationSecretStore<'store, OsCredentialBackend>,
+        key: &'guard ProtectedSecretKey,
+    ) -> Self {
+        Self {
+            staging,
+            production,
+            key,
+            finished: false,
+        }
+    }
+
+    fn cleanup(&mut self) -> Result<(), ProtectedSecretError> {
+        let mut first_error = None;
+        for (environment, scope) in [("staging", self.staging), ("production", self.production)] {
+            if let Err(error) = scope.purge(self.key) {
+                eprintln!(
+                    "external gap: failed to purge OS-vault {environment} evidence ({error:?})"
+                );
+                first_error.get_or_insert(error);
+            }
+        }
+        self.finished = true;
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+impl Drop for OsVaultCleanup<'_, '_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.cleanup();
+        }
     }
 }
 
@@ -249,6 +299,7 @@ fn promotion_copies_zero_secret_material() {
 
     let plan = PromotionPlan::build(
         PromotionDirection::StagingToProduction,
+        "com.example.pos",
         [secret_status, undeclared_status],
     )
     .unwrap();
@@ -343,9 +394,12 @@ fn wrong_environment_denial_matrix_produces_stable_safe_codes() {
             .is_ok()
     );
 
-    let backward =
-        PromotionPlan::build::<ProtectedSecretStatus>(PromotionDirection::StagingToProduction, [])
-            .unwrap();
+    let backward = PromotionPlan::build::<ProtectedSecretStatus>(
+        PromotionDirection::StagingToProduction,
+        "com.example.pos",
+        [],
+    )
+    .unwrap();
     let mismatch = apply_promotion(
         &backward,
         &store.scope(ApplicationEnvironment::Production),
@@ -427,6 +481,7 @@ fn localstore_and_secret_namespaces_are_separate_and_independent() {
     // proving the two namespaces are separate promotion domains.
     let plan = PromotionPlan::build(
         PromotionDirection::StagingToProduction,
+        "com.example.pos",
         [staging_secrets.status(&secret_key).unwrap()],
     )
     .unwrap();
@@ -455,18 +510,35 @@ fn localstore_and_secret_namespaces_are_separate_and_independent() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn promotion_refuses_invalid_source_target_identities() {
     let primary = EnvironmentDataStore::new("com.example.pos").unwrap();
     let other_app = EnvironmentDataStore::new("com.example.other").unwrap();
 
     // Mismatched application identities must be refused even when the
-    // environment direction is correct.
-    let plan =
-        PromotionPlan::build::<ProtectedSecretStatus>(PromotionDirection::StagingToProduction, [])
-            .unwrap();
+    // environment direction is correct, including a plan with real entries.
+    let cross_backend = MemoryBackend::default();
+    let cross_secret_store = ProtectedSecretStore::new(cross_backend);
+    let cross_principal = principal("publisher.example", "signing-key-1", "com.example.pos");
+    let cross_secret_store = cross_secret_store
+        .for_application(&cross_principal, ApplicationEnvironment::Staging)
+        .unwrap();
+    let cross_secret = declaration();
+    cross_secret_store
+        .configure(
+            &cross_secret,
+            SecretInput::new(b"cross-app-provenance-value".to_vec()).unwrap(),
+        )
+        .unwrap();
+    let plan = PromotionPlan::build(
+        PromotionDirection::StagingToProduction,
+        "com.example.pos",
+        [cross_secret_store.status(&cross_secret).unwrap()],
+    )
+    .unwrap();
     let cross_app = apply_promotion(
         &plan,
-        &primary.scope(ApplicationEnvironment::Staging),
+        &other_app.scope(ApplicationEnvironment::Staging),
         &other_app.scope(ApplicationEnvironment::Production),
         &BTreeMap::new(),
     )
@@ -506,9 +578,12 @@ fn promotion_refuses_invalid_source_target_identities() {
 
     // Development → Production direct jump is not a valid plan direction;
     // the scopes would mismatch either allowed direction.
-    let dev_to_prod_plan =
-        PromotionPlan::build::<ProtectedSecretStatus>(PromotionDirection::DevelopmentToStaging, [])
-            .unwrap();
+    let dev_to_prod_plan = PromotionPlan::build::<ProtectedSecretStatus>(
+        PromotionDirection::DevelopmentToStaging,
+        "com.example.pos",
+        [],
+    )
+    .unwrap();
     let dev_to_prod = apply_promotion(
         &dev_to_prod_plan,
         &primary.scope(ApplicationEnvironment::Development),
@@ -539,6 +614,7 @@ fn promotion_refuses_invalid_source_target_identities() {
         .unwrap();
     let realistic_plan = PromotionPlan::build(
         PromotionDirection::StagingToProduction,
+        "com.example.pos",
         [staging_secrets.status(&secret).unwrap()],
     )
     .unwrap();
@@ -567,8 +643,6 @@ fn promotion_refuses_invalid_source_target_identities() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn os_credential_backend_evidence_with_explicit_external_gate() {
-    use studio_security::{OsCredentialBackend, ProtectedSecretErrorCode};
-
     // This test exercises the most production-real backend safely available
     // in deterministic CI: the OS credential facility. It must not fake
     // claims about vault availability — when the facility is unavailable
@@ -592,28 +666,13 @@ fn os_credential_backend_evidence_with_explicit_external_gate() {
         return;
     }
 
-    // Use a unique principal and declaration per test invocation to avoid
-    // polluting a developer machine's real vault with leftover credentials.
-    let unique = {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let pid = u128::from(std::process::id());
-        let thread = {
-            let id = std::thread::current().id();
-            // Debug format of ThreadId is stable enough for uniqueness: "ThreadId(1)"
-            let s = format!("{id:?}");
-            let mut h: u128 = 0;
-            for b in s.bytes() {
-                h = h.wrapping_mul(31).wrapping_add(u128::from(b));
-            }
-            h
-        };
-        let combined = nanos ^ (pid << 32) ^ (thread << 64);
-        let bytes: [u8; 8] = combined.to_le_bytes()[..8].try_into().unwrap();
-        hex::encode(bytes)
-    };
+    // Use a process-and-counter identity per test invocation. Unlike a truncated
+    // hash, the atomic counter retains its full entropy for concurrent runs.
+    let unique = format!(
+        "{:x}-{:x}",
+        std::process::id(),
+        NEXT_OS_TEST_ID.fetch_add(1, Ordering::Relaxed)
+    );
     let publisher = format!("publisher.example.os-gate-{unique}");
     let application = format!("com.example.os-gate-{unique}");
     let declaration_name = format!("payments.os_gate_{unique}");
@@ -649,10 +708,26 @@ fn os_credential_backend_evidence_with_explicit_external_gate() {
     let production = store
         .for_application(&principal, ApplicationEnvironment::Production)
         .unwrap();
+    let mut cleanup = OsVaultCleanup::new(&staging, &production, &secret_key);
 
     // Purge any leftover from a prior interrupted run before asserting.
-    let _ = staging.purge(&secret_key);
-    let _ = production.purge(&secret_key);
+    for (environment, result) in [
+        ("staging", staging.purge(&secret_key)),
+        ("production", production.purge(&secret_key)),
+    ] {
+        match result {
+            Ok(()) => {}
+            Err(e) if e.code() == ProtectedSecretErrorCode::BackendUnavailable => {
+                eprintln!(
+                    "external gap: OsCredentialBackend {environment} purge failed with {e:?} — gate retained"
+                );
+                return;
+            }
+            Err(e) => {
+                panic!("unexpected error from OsCredentialBackend {environment} purge: {e:?}")
+            }
+        }
+    }
 
     let staging_value = format!("rk_os_staging_{unique}").into_bytes();
     match staging.configure(
@@ -676,20 +751,30 @@ fn os_credential_backend_evidence_with_explicit_external_gate() {
         Ok(s) => s,
         Err(e) if e.code() == ProtectedSecretErrorCode::BackendUnavailable => {
             eprintln!("external gap: status failed with {e:?} — gate retained");
-            let _ = staging.purge(&secret_key);
             return;
         }
         Err(e) => panic!("staging status failed: {e:?}"),
     };
     assert_eq!(staging_status.state(), ProtectedSecretState::Configured);
-    let production_status = production.status(&secret_key).unwrap();
+    let production_status = match production.status(&secret_key) {
+        Ok(status) => status,
+        Err(e) if e.code() == ProtectedSecretErrorCode::BackendUnavailable => {
+            eprintln!("external gap: production status failed with {e:?} — gate retained");
+            return;
+        }
+        Err(e) => panic!("production status failed: {e:?}"),
+    };
     assert_eq!(production_status.state(), ProtectedSecretState::Missing);
 
     // Promotion must still copy zero secret bytes even with the real backend:
     // build a plan from value-free status only and prove the production
     // partition stays Missing after promotion.
-    let plan =
-        PromotionPlan::build(PromotionDirection::StagingToProduction, [staging_status]).unwrap();
+    let plan = PromotionPlan::build(
+        PromotionDirection::StagingToProduction,
+        application.clone(),
+        [staging_status],
+    )
+    .unwrap();
     let rendered = format!("{plan:?}");
     assert!(!rendered.contains(&*String::from_utf8_lossy(&staging_value)));
 
@@ -711,29 +796,23 @@ fn os_credential_backend_evidence_with_explicit_external_gate() {
 
     // Verify the OS backend still shows production Missing (promotion did not
     // move the credential).
-    let after = production.status(&secret_key).unwrap();
+    let after = match production.status(&secret_key) {
+        Ok(status) => status,
+        Err(e) if e.code() == ProtectedSecretErrorCode::BackendUnavailable => {
+            eprintln!("external gap: production verification failed with {e:?} — gate retained");
+            return;
+        }
+        Err(e) => panic!("production verification failed: {e:?}"),
+    };
     assert_eq!(after.state(), ProtectedSecretState::Missing);
 
     // Clean up so the developer vault does not retain the test credential.
-    staging.purge(&secret_key).unwrap_or_else(|e| {
-        eprintln!("warning: failed to purge OS test credential {e:?}");
-    });
-    let _ = production.purge(&secret_key);
-    eprintln!(
-        "production-real evidence: OsCredentialBackend ({facility}) proved isolated staging secret and secret-free promotion"
-    );
-}
-
-// Minimal hex helper to avoid adding a new dependency: the workspace already
-// depends on sha2/hex via other crates, but we keep this self-contained.
-mod hex {
-    pub fn encode(bytes: [u8; 8]) -> String {
-        const LUT: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(16);
-        for b in bytes {
-            out.push(LUT[(b >> 4) as usize] as char);
-            out.push(LUT[(b & 0x0f) as usize] as char);
-        }
-        out
+    match cleanup.cleanup() {
+        Ok(()) => eprintln!(
+            "production-real evidence: OsCredentialBackend ({facility}) proved isolated staging secret and secret-free promotion"
+        ),
+        Err(e) => eprintln!(
+            "external gap: OsCredentialBackend cleanup failed with {e:?}; vault evidence may remain"
+        ),
     }
 }

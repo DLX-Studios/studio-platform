@@ -440,7 +440,7 @@ impl PromotionDirection {
     }
 }
 
-/// A reviewed promotion between two environments.
+/// A reviewed promotion between two environments, bound to one application identity.
 ///
 /// Construction admits only [`SecretFreeMetadata`] items, and execution touches no credential
 /// backend at all: there is no code path from a [`PromotionPlan`] to secret bytes, which is the
@@ -448,26 +448,38 @@ impl PromotionDirection {
 #[derive(Clone, Debug)]
 pub struct PromotionPlan {
     direction: PromotionDirection,
+    application: String,
     entries: Vec<PromotionEntry>,
 }
 
 impl PromotionPlan {
-    /// Plan a promotion from value-free status metadata only.
+    /// Plan a promotion from value-free status metadata only, bound to one application identity.
     ///
     /// # Errors
     ///
-    /// Returns [`EnvironmentErrorCode::RequestInvalid`] for a backward or lateral direction.
+    /// Returns [`EnvironmentErrorCode::RequestInvalid`] for an empty or oversized application
+    /// identity, or [`EnvironmentErrorCode::CrossEnvironmentDenied`] for a backward or lateral
+    /// direction.
     pub fn build<S: SecretFreeMetadata>(
         direction: PromotionDirection,
+        application: impl Into<String>,
         statuses: impl IntoIterator<Item = S>,
     ) -> Result<Self, EnvironmentError> {
+        let application = application.into();
+        if application.is_empty() || application.len() > 256 {
+            return Err(EnvironmentError::new(EnvironmentErrorCode::RequestInvalid));
+        }
         let entries: Vec<PromotionEntry> = statuses
             .into_iter()
             .map(|status| status.describe())
             .collect();
         match direction {
             PromotionDirection::DevelopmentToStaging | PromotionDirection::StagingToProduction => {
-                Ok(Self { direction, entries })
+                Ok(Self {
+                    direction,
+                    application,
+                    entries,
+                })
             }
         }
     }
@@ -476,6 +488,12 @@ impl PromotionPlan {
     #[must_use]
     pub const fn direction(&self) -> PromotionDirection {
         self.direction
+    }
+
+    /// Verified application identity the plan was built for.
+    #[must_use]
+    pub fn application(&self) -> &str {
+        &self.application
     }
 
     /// Value-free entries the operator must act on after promotion.
@@ -532,6 +550,8 @@ pub fn apply_promotion(
 ) -> Result<(PromotionReceipt, BTreeMap<String, Vec<u8>>), EnvironmentError> {
     if source.environment() != plan.direction().source()
         || target.environment() != plan.direction().target()
+        || source.application() != plan.application()
+        || target.application() != plan.application()
         || source.application() != target.application()
     {
         return Err(EnvironmentError::new(
