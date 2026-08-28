@@ -1,4 +1,4 @@
-//! Child process used only by the LocalStore forced-termination integration test.
+//! Child process used only by the `LocalStore` forced-termination integration test.
 //!
 //! Sequence: open the store with `Durability::Every`, commit a durable batch,
 //! then enter an uncommitted transaction with a second batch, signal the pause
@@ -8,7 +8,7 @@
 use std::{env, path::PathBuf};
 
 use serde_json::json;
-use studio_host::{Durability, EmbeddedLocalStore, StoreBatch, StoreBatchEntry};
+use studio_host::{Durability, EmbeddedLocalStore, LocalStore, StoreBatch, StoreBatchEntry};
 
 const PAUSE_MARKER_FILE: &str = ".studio-localstore-test-paused";
 const DURABLE_BATCH_ID: &str = "durable-before-termination";
@@ -46,9 +46,8 @@ fn main() {
             .await
             .expect("worker commits durable batch");
 
-        let interrupted =
-            StoreBatch::new("forced-termination", sample_entries("interrupted"))
-                .expect("worker batch is valid");
+        let interrupted = StoreBatch::new("forced-termination", sample_entries("interrupted"))
+            .expect("worker batch is valid");
         store
             .test_pause_inside_uncommitted_transaction(
                 &interrupted,

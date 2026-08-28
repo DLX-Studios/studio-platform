@@ -3,7 +3,7 @@
 //! This module owns the closed, versioned IR that both Designer-authored
 //! projects and hand-authored Studio Script compile through.  The IR mirrors
 //! the parser-of-record semantic model for screens and nodes, adds declarative
-//! navigation behaviors, and is the single input of the AssemblyScript
+//! navigation behaviors, and is the single input of the `AssemblyScript`
 //! lowering backend.
 //!
 //! The v1 skeleton subset covers static screen trees and typed navigation
@@ -11,7 +11,7 @@
 //! they are rejected with stable source-linked diagnostics during lowering
 //! instead of being carried through for a later runtime to interpret.
 
-use studio_script::Span;
+use crate::Span;
 
 /// The only Studio IR version currently produced by this crate.
 pub const STUDIO_IR_VERSION: u16 = 1;

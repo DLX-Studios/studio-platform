@@ -10,3 +10,16 @@
 - [ ] Requests outside declared routes are denied even with valid session
 - [ ] Package builds deterministically and launches in Runtime
 - [ ] Documentation shows adding a second provider requires no application changes
+
+## Implementation notes
+
+- Added `crates/studio-github` with the versioned GitHub provider descriptor, host-resolved OAuth
+  route groups, typed `/user`, `/user/repos`, and `/repos/{owner}/{repo}` projections, and a
+  host-neutral sign-in → repository list → repository detail state model.
+- Added `crates/studio-ai` plus the `sdk/ai` package with an OpenAI-compatible request/chunk shape;
+  API keys remain named protected configuration and SSE chunks arrive through the broker stream.
+- Added `sdk/github` (`@studio/github`) and a signed `examples/github-viewer` package. Manifest
+  integration and route declarations are now first-class package fields and are revalidated against
+  broker ceilings before admission.
+- Live OAuth/API credentials, callback capture, and native Runtime launch were not exercised in
+  this implementation pass; those external gates remain unchecked.

@@ -42,7 +42,7 @@ fn valid_catalog() -> [(NodeKind, Value, Vec<UiNode>); 27] {
     [
         (
             NodeKind::Box,
-            json!({"padding": 8, "background": "surface"}),
+            json!({"padding": 8, "background": "surface", "width": 390, "height": 720, "shrink": true}),
             vec![leaf("box-child")],
         ),
         (
@@ -85,7 +85,7 @@ fn valid_catalog() -> [(NodeKind, Value, Vec<UiNode>); 27] {
         (NodeKind::Icon, json!({"name": "cart"}), vec![]),
         (
             NodeKind::Image,
-            json!({"asset": "assets/item.png", "alt": "Item"}),
+            json!({"asset": "assets/item.png", "alt": "Item", "width": 72, "height": 72}),
             vec![],
         ),
         (
@@ -97,7 +97,7 @@ fn valid_catalog() -> [(NodeKind, Value, Vec<UiNode>); 27] {
         (NodeKind::ProgressIndicator, json!({"value": 0.5}), vec![]),
         (
             NodeKind::Button,
-            json!({"label": "Checkout", "enabled": true, "on_pressed": "checkout", "variant": "primary"}),
+            json!({"label": "Checkout", "enabled": true, "on_pressed": "checkout", "variant": "primary", "width": "full"}),
             vec![],
         ),
         (

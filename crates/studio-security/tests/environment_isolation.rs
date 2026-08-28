@@ -6,11 +6,11 @@ use std::{
 };
 
 use studio_security::{
-    apply_promotion, resolve_active_environment, ApplicationEnvironment, CredentialBackend,
-    CredentialBackendError, CredentialBytes, CredentialLocator, EnvironmentDataStore,
-    EnvironmentErrorCode, PluginPrincipal, PromotionDirection, PromotionPlan,
-    ProtectedConfiguration, ProtectedSecretKey, ProtectedSecretState, ProtectedSecretStore,
-    ProtectedSecretStatus, SecretInput, TrustMode,
+    ApplicationEnvironment, CredentialBackend, CredentialBackendError, CredentialBytes,
+    CredentialLocator, EnvironmentDataStore, EnvironmentErrorCode, PluginPrincipal,
+    PromotionDirection, PromotionPlan, ProtectedConfiguration, ProtectedSecretKey,
+    ProtectedSecretState, ProtectedSecretStatus, ProtectedSecretStore, SecretInput, TrustMode,
+    apply_promotion, resolve_active_environment,
 };
 
 #[derive(Clone, Default)]
@@ -81,10 +81,7 @@ fn declaration() -> ProtectedSecretKey {
 }
 
 fn config(environment: &str) -> ProtectedConfiguration {
-    ProtectedConfiguration::new([(
-        "environment.active".to_string(),
-        environment.to_string(),
-    )])
+    ProtectedConfiguration::new([("environment.active".to_string(), environment.to_string())])
 }
 
 #[test]
@@ -120,7 +117,10 @@ fn three_environments_coexist_with_independent_data_stores() {
     assert!(staging.admit(&staging_key).is_ok());
     assert!(production.admit(&production_key).is_ok());
 
-    assert_eq!(development.environment(), ApplicationEnvironment::Development);
+    assert_eq!(
+        development.environment(),
+        ApplicationEnvironment::Development
+    );
     assert_eq!(staging.application(), "com.example.pos");
 }
 
@@ -154,10 +154,7 @@ fn active_environment_resolution_follows_protected_configuration_without_default
     let invalid = config("prod");
     let invalid_error = resolve_active_environment(&invalid).unwrap_err();
     assert_eq!(invalid_error.code(), EnvironmentErrorCode::ConfigInvalid);
-    assert_eq!(
-        invalid_error.stable_code(),
-        "environment.config_invalid"
-    );
+    assert_eq!(invalid_error.stable_code(), "environment.config_invalid");
     assert!(!format!("{invalid_error}").contains("prod"));
 
     let ambiguous = ProtectedConfiguration::new([
@@ -188,9 +185,18 @@ fn secret_resolution_follows_the_active_environment_not_the_package() {
         .unwrap();
 
     for (environment, expected_state) in [
-        (ApplicationEnvironment::Development, ProtectedSecretState::Missing),
-        (ApplicationEnvironment::Staging, ProtectedSecretState::Configured),
-        (ApplicationEnvironment::Production, ProtectedSecretState::Missing),
+        (
+            ApplicationEnvironment::Development,
+            ProtectedSecretState::Missing,
+        ),
+        (
+            ApplicationEnvironment::Staging,
+            ProtectedSecretState::Configured,
+        ),
+        (
+            ApplicationEnvironment::Production,
+            ProtectedSecretState::Missing,
+        ),
     ] {
         let scope = store.for_application(&principal, environment).unwrap();
         assert_eq!(
@@ -265,14 +271,20 @@ fn promotion_copies_zero_secret_material() {
     )
     .unwrap();
     assert_eq!(receipt.data_records_copied, 1);
-    assert_eq!(promoted_records.get("orders.counter"), Some(&b"row-count-42".to_vec()));
+    assert_eq!(
+        promoted_records.get("orders.counter"),
+        Some(&b"row-count-42".to_vec())
+    );
     assert_eq!(
         receipt.secrets_requiring_configuration,
         vec!["payments.restricted_key".to_string()]
     );
 
     let after = backend.snapshot();
-    assert_eq!(before, after, "promotion must not add, remove, or alter any credential record");
+    assert_eq!(
+        before, after,
+        "promotion must not add, remove, or alter any credential record"
+    );
     assert_eq!(
         production_store.status(&secret).unwrap().state(),
         ProtectedSecretState::Missing
@@ -325,15 +337,15 @@ fn wrong_environment_denial_matrix_produces_stable_safe_codes() {
             EnvironmentErrorCode::CrossEnvironmentDenied
         );
     }
-    assert!(store
-        .scope_for_principal(&developer, ApplicationEnvironment::Development)
-        .is_ok());
+    assert!(
+        store
+            .scope_for_principal(&developer, ApplicationEnvironment::Development)
+            .is_ok()
+    );
 
-    let backward = PromotionPlan::build::<ProtectedSecretStatus>(
-        PromotionDirection::StagingToProduction,
-        [],
-    )
-    .unwrap();
+    let backward =
+        PromotionPlan::build::<ProtectedSecretStatus>(PromotionDirection::StagingToProduction, [])
+            .unwrap();
     let mismatch = apply_promotion(
         &backward,
         &store.scope(ApplicationEnvironment::Production),
@@ -341,7 +353,10 @@ fn wrong_environment_denial_matrix_produces_stable_safe_codes() {
         &BTreeMap::new(),
     )
     .unwrap_err();
-    assert_eq!(mismatch.code(), EnvironmentErrorCode::CrossEnvironmentDenied);
+    assert_eq!(
+        mismatch.code(),
+        EnvironmentErrorCode::CrossEnvironmentDenied
+    );
     assert_eq!(
         mismatch.stable_code(),
         "environment.cross_environment_denied"
@@ -352,9 +367,7 @@ fn wrong_environment_denial_matrix_produces_stable_safe_codes() {
 fn malformed_inputs_return_stable_safe_codes() {
     let store = EnvironmentDataStore::new("com.example.pos").unwrap();
     assert_eq!(
-        EnvironmentDataStore::new("")
-            .unwrap_err()
-            .stable_code(),
+        EnvironmentDataStore::new("").unwrap_err().stable_code(),
         "environment.request_invalid"
     );
     assert_eq!(

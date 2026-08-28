@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use studio_net::declaration::RouteGroupDeclaration;
 
 use crate::ManifestError;
 
@@ -64,6 +65,46 @@ pub struct ManifestV1 {
     /// Protected values required at runtime, declared without values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretDeclaration>,
+    /// Integration-plugin references enabled by this application package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub integrations: Vec<IntegrationReference>,
+    /// Signed host-mediated route groups contributed by enabled integrations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<RouteGroupDeclaration>,
+    /// Signed, forward-only application data migrations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<MigrationDeclaration>,
+}
+
+/// A version-pinned integration enabled by an application package.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IntegrationReference {
+    /// Stable integration/plugin id, for example `github`.
+    pub id: String,
+    /// Descriptor version selected by the package.
+    pub version: String,
+    /// Public configuration values; secrets remain named declarations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<Value>,
+}
+
+/// One signed, forward-only application data migration.
+///
+/// The executable migration document is an ordinary declared asset. Keeping the asset path in
+/// the signed manifest means [`crate::verify_bundle_signature`] authenticates both the migration
+/// identity and its exact bytes before a host can execute it.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MigrationDeclaration {
+    /// Stable migration identity.
+    pub id: String,
+    /// Schema version accepted by this migration.
+    pub from_version: u32,
+    /// Schema version produced by this migration.
+    pub to_version: u32,
+    /// Declared asset containing the host-defined migration document.
+    pub entry: String,
 }
 
 /// Signed publisher identity.
@@ -95,6 +136,9 @@ pub enum Capability {
     /// Host-owned receipt preview simulator.
     #[serde(rename = "printer.simulate")]
     PrinterSimulate,
+    /// Bounded, host-mediated `SurrealQL` over application data.
+    #[serde(rename = "data.surreal.query")]
+    DataSurrealQuery,
 }
 
 /// Guest-requested limits that cannot exceed host ceilings.
@@ -137,8 +181,10 @@ fn preflight_capabilities(value: &Value) -> Result<(), ManifestError> {
         let Some(capability) = capability.as_str() else {
             continue;
         };
-        if !matches!(capability, "payment.simulate" | "printer.simulate")
-            || !seen.insert(capability)
+        if !matches!(
+            capability,
+            "payment.simulate" | "printer.simulate" | "data.surreal.query"
+        ) || !seen.insert(capability)
         {
             return Err(ManifestError::CapabilityInvalid);
         }
@@ -171,6 +217,9 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
     }
     validate_assets(&manifest.assets)?;
     validate_secrets(&manifest.secrets)?;
+    validate_integrations(&manifest.integrations)?;
+    validate_routes(&manifest.routes)?;
+    validate_migrations(&manifest.migrations, &manifest.assets)?;
     let mut capabilities = HashSet::new();
     if manifest
         .capabilities
@@ -185,6 +234,66 @@ fn validate_manifest(manifest: &ManifestV1, policy: ManifestPolicy) -> Result<()
         || manifest.limits.event_fuel > policy.max_event_fuel
     {
         return Err(ManifestError::LimitInvalid);
+    }
+    Ok(())
+}
+
+fn validate_integrations(integrations: &[IntegrationReference]) -> Result<(), ManifestError> {
+    let mut ids = HashSet::new();
+    for integration in integrations {
+        if !valid_integration_id(&integration.id)
+            || Version::parse(&integration.version).is_err()
+            || !ids.insert(integration.id.as_str())
+        {
+            return Err(ManifestError::ManifestInvalid("integrations"));
+        }
+        if let Some(config) = &integration.config
+            && serde_json::to_vec(config).map_or(true, |bytes| bytes.len() > 16 * 1024)
+        {
+            return Err(ManifestError::ManifestInvalid("integrations.config"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_routes(
+    routes: &[studio_net::declaration::RouteGroupDeclaration],
+) -> Result<(), ManifestError> {
+    let mut ids = HashSet::new();
+    let ceilings = studio_net::limits::BrokerLimits::default();
+    for route in routes {
+        if !ids.insert(route.id.as_str()) || route.compile(&ceilings).is_err() {
+            return Err(ManifestError::ManifestInvalid("routes"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_migrations(
+    migrations: &[MigrationDeclaration],
+    assets: &[String],
+) -> Result<(), ManifestError> {
+    if migrations.len() > 128 {
+        return Err(ManifestError::ManifestInvalid("migrations"));
+    }
+    let mut ids = HashSet::new();
+    let mut versions = HashSet::new();
+    for migration in migrations {
+        if !valid_identifier(&migration.id, 128)
+            || migration.from_version == 0
+            || migration.from_version.checked_add(1) != Some(migration.to_version)
+            || !migration.entry.starts_with("assets/migrations/")
+            || !assets.iter().any(|asset| asset == &migration.entry)
+            || !ids.insert(migration.id.as_str())
+            || !versions.insert((migration.from_version, migration.to_version))
+        {
+            return Err(ManifestError::ManifestInvalid("migrations"));
+        }
+    }
+    if migrations.windows(2).any(|pair| {
+        pair[0].from_version >= pair[1].from_version || pair[0].to_version != pair[1].from_version
+    }) {
+        return Err(ManifestError::ManifestInvalid("migrations"));
     }
     Ok(())
 }
@@ -213,21 +322,46 @@ fn valid_secret_name(value: &str) -> bool {
         })
 }
 
-fn validate_plugin_id(id: &str) -> Result<(), ManifestError> {
-    let segments: Vec<_> = id.split('.').collect();
-    if segments.len() < 2
-        || id.len() > 128
-        || segments.iter().any(|segment| {
-            segment.is_empty()
-                || !segment.starts_with(char::is_alphanumeric)
-                || !segment.chars().all(|character| {
-                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-                })
+fn valid_identifier(value: &str, maximum_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum_bytes
+        && value.starts_with(|character: char| character.is_ascii_lowercase())
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-' | '_')
         })
-    {
+}
+
+fn validate_plugin_id(id: &str) -> Result<(), ManifestError> {
+    if !valid_plugin_id(id) {
         return Err(ManifestError::ManifestInvalid("id"));
     }
     Ok(())
+}
+
+fn valid_plugin_id(id: &str) -> bool {
+    let segments: Vec<_> = id.split('.').collect();
+    segments.len() >= 2
+        && id.len() <= 128
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment.starts_with(char::is_alphanumeric)
+                && segment.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+        })
+}
+
+fn valid_integration_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.starts_with(|character: char| character.is_ascii_lowercase())
+        && id.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-' | '_')
+        })
 }
 
 fn validate_safe_text(

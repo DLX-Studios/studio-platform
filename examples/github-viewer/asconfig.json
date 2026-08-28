@@ -1,0 +1,7 @@
+{
+  "targets": {
+    "release": { "outFile": "build/github-viewer.wasm", "optimizeLevel": 3, "shrinkLevel": 1 },
+    "debug": { "outFile": "build/github-viewer.wasm", "debug": true }
+  },
+  "options": { "bindings": "raw", "exportRuntime": false }
+}

@@ -32,15 +32,11 @@ use gpui_component::{
     switch::Switch,
     tag::Tag,
 };
-use studio_actions::{Checkout, Money};
-use studio_components::{InputAction, PropertyTransition, RuntimeControl};
+use studio_components::{InputAction, PropertyTransition, RuntimeControl, component_readiness};
 use studio_navigation::MotionPreference;
 use studio_protocol::NodeKind;
 
-use crate::{
-    NativeCheckoutShell,
-    plugin_surface::{PluginRenderNode, PluginSurface},
-};
+use crate::plugin_surface::{PluginRenderNode, PluginSurface};
 
 const ACCESSIBILITY_LABELS: [&str; 3] = ["Increment counter", "Operator note", "Open details"];
 
@@ -58,6 +54,10 @@ const COLOR_SUCCESS: u32 = 0x00dc_fce7;
 const COLOR_WARNING: u32 = 0x0085_3b00;
 const COLOR_ERROR: u32 = 0x00fe_f2f2;
 
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "opacity is clamped to [0, 1]"
+)]
 fn node_opacity(node: &PluginRenderNode) -> f32 {
     node.props
         .get("opacity")
@@ -74,37 +74,37 @@ fn node_accessibility_label(node: &PluginRenderNode) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn prop_bool(node: &PluginRenderNode, key: &str, default: bool) -> bool {
-    node.props
+fn prop_bool(props: &BTreeMap<String, serde_json::Value>, key: &str, default: bool) -> bool {
+    props
         .get(key)
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(default)
 }
 
-fn prop_str<'a>(node: &'a PluginRenderNode, key: &str) -> Option<&'a str> {
-    node.props
+fn prop_str<'a>(props: &'a BTreeMap<String, serde_json::Value>, key: &str) -> Option<&'a str> {
+    props
         .get(key)
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
 }
 
-fn prop_f64(node: &PluginRenderNode, key: &str, default: f64) -> f64 {
-    node.props
+fn prop_f64(props: &BTreeMap<String, serde_json::Value>, key: &str, default: f64) -> f64 {
+    props
         .get(key)
         .and_then(serde_json::Value::as_f64)
         .unwrap_or(default)
 }
 
-fn prop_u64(node: &PluginRenderNode, key: &str, default: u64) -> u64 {
-    node.props
+fn prop_u64(props: &BTreeMap<String, serde_json::Value>, key: &str, default: u64) -> u64 {
+    props
         .get(key)
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(default)
 }
 
 /// Declared string-list properties (`items`, `options`, `columns`, `commands`).
-fn prop_strings(node: &PluginRenderNode, key: &str) -> Vec<String> {
-    node.props
+fn prop_strings(props: &BTreeMap<String, serde_json::Value>, key: &str) -> Vec<String> {
+    props
         .get(key)
         .and_then(serde_json::Value::as_array)
         .map(|values| {
@@ -119,7 +119,10 @@ fn prop_strings(node: &PluginRenderNode, key: &str) -> Vec<String> {
 
 /// Parse one numeric input buffer for `NumberInput` change dispatch.
 fn parse_number_input(raw: &str) -> Option<f64> {
-    raw.trim().parse::<f64>().ok().filter(|value| value.is_finite())
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
 }
 
 /// Stable-ID handling for retained form widgets (ticket 32 decision): every stateful widget is
@@ -415,7 +418,6 @@ pub struct FoundationGallery {
     component_color_picker: Entity<ColorPickerState>,
     _component_subscriptions: Vec<Subscription>,
     plugin_surface: Option<PluginSurface>,
-    checkout_shell: Option<NativeCheckoutShell>,
 }
 
 impl FoundationGallery {
@@ -446,15 +448,11 @@ impl FoundationGallery {
             component_color_picker,
             _component_subscriptions: Vec::new(),
             plugin_surface: None,
-            checkout_shell: None,
         }
     }
 
     /// Creates the native shell while retaining a fully prepared plugin surface for its lifetime.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal money value is invalid (hard-coded valid amount).
     #[must_use]
     pub fn with_plugin_surface(
         reduced_motion: bool,
@@ -463,42 +461,8 @@ impl FoundationGallery {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut gallery = Self::new(reduced_motion, window, cx);
-        let reduced = gallery.model.reduced_motion();
-        let owner_id = plugin_surface.owner_id().as_str().to_owned();
         gallery.plugin_surface = Some(plugin_surface);
-        let checkout = Checkout::new(
-            format!("{owner_id}-sale"),
-            "Studio Barber",
-            "Verified POS",
-            Money::new("USD", 5_724).unwrap(),
-        )
-        .ok();
-        if let Some(checkout) = checkout
-            && let Some(surface) = gallery.plugin_surface.as_ref()
-            && let Ok(shell) = surface.checkout_shell(checkout, reduced)
-        {
-            gallery.checkout_shell = Some(shell);
-        }
         gallery
-    }
-
-    /// Current host-owned route (visible navigation state).
-    #[must_use]
-    pub fn checkout_route(&self) -> Option<&str> {
-        self.checkout_shell
-            .as_ref()
-            .map(NativeCheckoutShell::current_route)
-    }
-
-    /// Whether a host-owned checkout shell is active.
-    #[must_use]
-    pub fn has_checkout_shell(&self) -> bool {
-        self.checkout_shell.is_some()
-    }
-
-    /// Mutable access to the host-owned checkout shell for trusted flows.
-    pub fn checkout_shell_mut(&mut self) -> Option<&mut NativeCheckoutShell> {
-        self.checkout_shell.as_mut()
     }
 
     fn dispatch_input(&mut self, node_id: &str, action: InputAction, cx: &mut Context<Self>) {
@@ -550,8 +514,9 @@ impl FoundationGallery {
                     // Secret input values must never enter the protocol event path; only the
                     // separate HostSecretInput ready flow crosses the boundary.
                     InputBinding::Secret => None,
-                    InputBinding::Number => parse_number_input(&raw)
-                        .map(|value| InputAction::SliderDrag { value }),
+                    InputBinding::Number => {
+                        parse_number_input(&raw).map(|value| InputAction::SliderDrag { value })
+                    }
                     InputBinding::Text | InputBinding::Multiline => {
                         Some(InputAction::TextChanged { value: raw })
                     }
@@ -561,8 +526,7 @@ impl FoundationGallery {
                 }
             }
         });
-        self.plugin_inputs
-            .insert(node_id.to_owned(), state.clone());
+        self.plugin_inputs.insert(node_id.to_owned(), state.clone());
         self.plugin_state_subscriptions
             .entry(node_id.to_owned())
             .or_default()
@@ -584,9 +548,8 @@ impl FoundationGallery {
         if let Some(state) = self.plugin_selects.get(node_id) {
             return state.clone();
         }
-        let state = cx.new(|cx| {
-            SelectState::new(options, selected, window, cx).searchable(searchable)
-        });
+        let state =
+            cx.new(|cx| SelectState::new(options, selected, window, cx).searchable(searchable));
         let confirm_subscription = cx.subscribe_in(&state, window, {
             let node_id = node_id.to_owned();
             move |this, _, event: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -613,7 +576,10 @@ impl FoundationGallery {
 
     /// Retain (or create) one stable-ID slider state for a plugin node. A single-value slider
     /// passes `value_range: None` and its protocol `value` via `single`.
-    #[allow(clippy::too_many_arguments, reason = "closed schema mirrors every slider property")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "closed schema mirrors every slider property"
+    )]
     fn plugin_slider(
         &mut self,
         node_id: &str,
@@ -631,11 +597,7 @@ impl FoundationGallery {
         }
         let state = cx.new(|_| {
             let mut state = SliderState::new().min(min).max(max);
-            state = if step > 0.0 {
-                state.step(step)
-            } else {
-                state
-            };
+            state = if step > 0.0 { state.step(step) } else { state };
             match value_range {
                 Some((start, end)) => state.default_value((start, end)),
                 None => state.default_value(single),
@@ -717,12 +679,7 @@ impl FoundationGallery {
     /// Host-owned overlay gating: returns the stacking depth for a visible overlay, or `None`
     /// when the overlay is closed or host-dismissed. Dismissal state resets whenever the
     /// protocol reports the overlay closed so reopening works without remounts.
-    fn overlay_gate(
-        &mut self,
-        node_id: &str,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<usize> {
+    fn overlay_gate(&mut self, node_id: &str, open: bool, cx: &mut Context<Self>) -> Option<usize> {
         if !open {
             self.dismissed_overlays.remove(node_id);
             return None;
@@ -746,6 +703,10 @@ impl FoundationGallery {
     /// Shared empty-state placeholder used by data-display kinds when a declared collection
     /// (items/columns/children) is absent. Loading/error states are not expressible under the
     /// closed schema, so only empty and populated states exist.
+    #[allow(
+        clippy::unused_self,
+        reason = "keeps helper grouped with gallery renderers"
+    )]
     fn empty_state_element(&self, label: &str) -> AnyElement {
         div()
             .id(format!("empty:{label}"))
@@ -766,6 +727,10 @@ impl FoundationGallery {
 
     /// Full-screen overlay root with host-owned Escape dismissal. This gpui build has no
     /// z-index; stacking follows tree paint order, so the gate depth only disambiguates IDs.
+    #[allow(
+        clippy::unused_self,
+        reason = "keeps helper grouped with gallery renderers"
+    )]
     fn overlay_root(
         &self,
         node_id: &str,
@@ -778,9 +743,7 @@ impl FoundationGallery {
             .id(format!("{node_id}:overlay:{depth}"))
             .absolute()
             .inset_0()
-            .when(dimmed, |element| {
-                element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
-            })
+            .when(dimmed, |element| element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5)))
             .flex()
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key.as_str() == "escape" {
@@ -831,9 +794,13 @@ impl FoundationGallery {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let label = prop_str(node, "label").unwrap_or("Select").to_owned();
-        let value = prop_str(node, "value").unwrap_or_default().to_owned();
-        let enabled = prop_bool(node, "enabled", true);
+        let label = prop_str(&node.props, "label")
+            .unwrap_or("Select")
+            .to_owned();
+        let value = prop_str(&node.props, "value")
+            .unwrap_or_default()
+            .to_owned();
+        let enabled = prop_bool(&node.props, "enabled", true);
         let options = node
             .props
             .get("options")
@@ -850,8 +817,7 @@ impl FoundationGallery {
             .iter()
             .position(|option| option.as_str() == value.as_str())
             .map(IndexPath::new);
-        let state =
-            self.plugin_select(&node.id, options, selected, searchable, window, cx);
+        let state = self.plugin_select(&node.id, options, selected, searchable, window, cx);
         div()
             .id(node.id.clone())
             .opacity(opacity)
@@ -863,11 +829,7 @@ impl FoundationGallery {
             .flex_col()
             .gap_1()
             .child(div().text_sm().text_color(rgb(COLOR_MUTED)).child(label))
-            .child(
-                Select::new(&state)
-                    .placeholder(value)
-                    .disabled(!enabled),
-            )
+            .child(Select::new(&state).placeholder(value).disabled(!enabled))
             .into_any_element()
     }
 
@@ -959,6 +921,46 @@ impl FoundationGallery {
             .into_any_element()
     }
 
+    /// Render an unsupported catalog kind only for an explicitly selected development launch.
+    /// Production launches hide the node instead of silently presenting a generic surface. A
+    /// kind marked semantically rendered/verified is reported as a contract violation so release
+    /// certification cannot be bypassed by falling through this path.
+    fn development_fallback(
+        &self,
+        node_id: String,
+        kind: NodeKind,
+        children: Vec<AnyElement>,
+    ) -> AnyElement {
+        let readiness = component_readiness(kind);
+        let message = if readiness.verified {
+            format!("Renderer contract violation for {kind:?}")
+        } else {
+            format!("Development renderer fallback for {kind:?}")
+        };
+        let development = self
+            .plugin_surface
+            .as_ref()
+            .is_some_and(|surface| surface.mode() == crate::cli::LaunchMode::Development);
+        if !development {
+            return div().id(node_id).hidden().into_any_element();
+        }
+        div()
+            .id(node_id)
+            .role(Role::Alert)
+            .aria_label(message.clone())
+            .w_full()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(COLOR_WARNING))
+            .bg(rgb(COLOR_SURFACE_VARIANT))
+            .text_sm()
+            .text_color(rgb(COLOR_WARNING))
+            .child(message)
+            .children(children)
+            .into_any_element()
+    }
+
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -972,18 +974,6 @@ impl FoundationGallery {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let is_root = node.id == "root";
-        let is_order_pane = node.id == "order-pane";
-        let is_order_content = node.id == "order-content";
-        let is_order_summary = node.id == "order-summary";
-        let is_catalog_pane = node.id == "catalog-pane";
-        let is_product_image = node.id.ends_with("-img");
-        let is_cart_image = node.id.ends_with("-cart-img");
-        let is_product_meta = node.id.ends_with("-meta");
-        let is_summary_row = matches!(
-            node.id.as_str(),
-            "order-head" | "subtotal-row" | "taxes-row" | "discount-row" | "total-row"
-        );
         if node
             .props
             .get("visible")
@@ -1008,6 +998,7 @@ impl FoundationGallery {
             .unwrap_or(0.0) as f32;
         let children = node
             .children
+            .clone()
             .into_iter()
             .map(|child| self.plugin_node(child, window, cx))
             .collect::<Vec<_>>();
@@ -1019,30 +1010,26 @@ impl FoundationGallery {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("stretch");
                 div()
-                .id(node.id)
-                .opacity(opacity)
-                .when_some(accessibility_label.clone(), |element, label| {
-                    element.aria_label(label)
-                })
-                .w_full()
-                .min_h_0()
-                .flex_grow(flex)
-                .when(is_order_content, |element| {
-                    element.h_full().min_h_0().justify_between()
-                })
-                .flex()
-                .flex_col()
-                .when(alignment == "start", gpui::Styled::items_start)
-                .when(alignment == "center", gpui::Styled::items_center)
-                .when(alignment == "end", gpui::Styled::items_end)
-                .when(alignment == "stretch", gpui::Styled::items_stretch)
-                .when(alignment == "space_between", gpui::Styled::justify_between)
-                .gap(px(gap))
-                .children(children)
-                .into_any_element()
+                    .id(node.id)
+                    .opacity(opacity)
+                    .when_some(accessibility_label.clone(), |element, label| {
+                        element.aria_label(label)
+                    })
+                    .w_full()
+                    .min_h_0()
+                    .flex_grow(flex)
+                    .flex()
+                    .flex_col()
+                    .when(alignment == "start", gpui::Styled::items_start)
+                    .when(alignment == "center", gpui::Styled::items_center)
+                    .when(alignment == "end", gpui::Styled::items_end)
+                    .when(alignment == "stretch", gpui::Styled::items_stretch)
+                    .when(alignment == "space_between", gpui::Styled::justify_between)
+                    .gap(px(gap))
+                    .children(children)
+                    .into_any_element()
             }
             NodeKind::Row => {
-                let is_main_row = node.id == "main-row";
                 let alignment = node
                     .props
                     .get("alignment")
@@ -1054,16 +1041,10 @@ impl FoundationGallery {
                         element.aria_label(label)
                     })
                     .w_full()
-                    .when(is_root, gpui::Styled::h_full)
-                    .when(is_root, |element| element.min_h_0().flex_grow_1())
-                    .when(is_main_row, |el| el.h_full().min_h_0().items_stretch())
-                    .when(is_product_meta, gpui::Styled::justify_between)
-                    .when(is_summary_row, gpui::Styled::justify_between)
+                    .min_h_0()
+                    .flex_grow(flex)
                     .flex()
-                    .when(
-                        alignment.is_none() && !is_root && !is_main_row,
-                        gpui::Styled::items_center,
-                    )
+                    .when(alignment.is_none(), gpui::Styled::items_center)
                     .when(alignment == Some("start"), gpui::Styled::items_start)
                     .when(alignment == Some("center"), gpui::Styled::items_center)
                     .when(alignment == Some("end"), gpui::Styled::items_end)
@@ -1093,8 +1074,14 @@ impl FoundationGallery {
                     .flex_grow_1()
                     .flex_shrink_1()
                     .gap(px(gap))
-                    .when(horizontal, gpui::Styled::overflow_x_scroll)
-                    .when(!horizontal, gpui::Styled::overflow_y_scroll)
+                    .when(
+                        horizontal,
+                        gpui::StatefulInteractiveElement::overflow_x_scroll,
+                    )
+                    .when(
+                        !horizontal,
+                        gpui::StatefulInteractiveElement::overflow_y_scroll,
+                    )
                     .children(children)
                     .into_any_element()
             }
@@ -1111,8 +1098,14 @@ impl FoundationGallery {
                     .min_h_0()
                     .min_w_0()
                     .flex_grow_1()
-                    .when(horizontal, gpui::Styled::overflow_x_scroll)
-                    .when(!horizontal, gpui::Styled::overflow_y_scroll)
+                    .when(
+                        horizontal,
+                        gpui::StatefulInteractiveElement::overflow_x_scroll,
+                    )
+                    .when(
+                        !horizontal,
+                        gpui::StatefulInteractiveElement::overflow_y_scroll,
+                    )
                     .children(children)
                     .into_any_element()
             }
@@ -1199,13 +1192,22 @@ impl FoundationGallery {
                     .get("padding")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
-                let background = match node
+                let width = node
                     .props
-                    .get("background")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    value => semantic_background(value),
-                };
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let height = node
+                    .props
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let shrink = prop_bool(&node.props, "shrink", false);
+                let background = semantic_background(
+                    node.props
+                        .get("background")
+                        .and_then(serde_json::Value::as_str),
+                );
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -1213,26 +1215,14 @@ impl FoundationGallery {
                         element.aria_label(label)
                     })
                     .min_w_0()
-                    .when(is_order_pane, |element| {
-                        element.w(px(390.0)).h_full().flex_shrink_0()
-                    })
-                    .when(is_catalog_pane, |element| {
-                        element.h_full().min_w_0().flex_grow(1.0).flex_shrink(1.0)
-                    })
-                    .when(is_catalog_pane, |element| element.flex_grow(1.0))
-                    .when(is_order_pane, |element| element.flex_grow(0.0))
-                    .when(!is_catalog_pane && !is_order_pane, |el| el.flex_grow(flex))
+                    .when_some(width, |element, width| element.w(px(width)))
+                    .when_some(height, |element, height| element.h(px(height)))
+                    .flex_grow(flex)
                     .flex()
                     .flex_col()
-                    .when(is_order_summary, gpui::Styled::flex_shrink_0)
+                    .when(shrink, gpui::Styled::flex_shrink_0)
                     .p(px(padding))
                     .bg(background)
-                    .when(is_order_summary, |element| {
-                        element
-                            .rounded_xl()
-                            .border_1()
-                            .border_color(rgb(COLOR_BORDER_SUBTLE))
-                    })
                     .children(children)
                     .into_any_element()
             }
@@ -1410,6 +1400,16 @@ impl FoundationGallery {
                         image_format(path, bytes)
                             .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
                     });
+                let width = node
+                    .props
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
+                let height = node
+                    .props
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32);
                 match source {
                     Some(source) => img(source)
                         .id(node.id)
@@ -1424,13 +1424,9 @@ impl FoundationGallery {
                             }),
                             |element, label| element.aria_label(label),
                         )
-                        .w_full()
-                        .when(is_product_image || !is_cart_image, |element| {
-                            element.h(px(128.0))
-                        })
-                        .when(is_cart_image, |element| {
-                            element.w(px(72.0)).h(px(72.0)).flex_shrink_0()
-                        })
+                        .when(width.is_none(), gpui::Styled::w_full)
+                        .when_some(width, |element, width| element.w(px(width)))
+                        .when_some(height, |element, height| element.h(px(height)))
                         .object_fit(gpui::ObjectFit::Cover)
                         .rounded_md()
                         .into_any_element(),
@@ -1445,10 +1441,11 @@ impl FoundationGallery {
                                     .and_then(serde_json::Value::as_str)
                                     .map(ToOwned::to_owned)
                             }),
-                            |element, label| element.aria_label(label),
+                            gpui::StatefulInteractiveElement::aria_label,
                         )
-                        .w_full()
-                        .h(px(128.0))
+                        .when(width.is_none(), gpui::Styled::w_full)
+                        .when_some(width, |element, width| element.w(px(width)))
+                        .when_some(height, |element, height| element.h(px(height)))
                         .rounded_md()
                         .bg(rgb(COLOR_SURFACE_VARIANT))
                         .into_any_element(),
@@ -1511,21 +1508,18 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Popover => {
-                let requested_open = prop_bool(&node, "open", false);
+                let requested_open = prop_bool(&node.props, "open", false);
                 // Host-owned gating keeps Escape-dismissal consistent with other overlays;
                 // the native popover still handles trigger-anchored presentation.
                 let open = self.overlay_gate(&node.id, requested_open, cx).is_some();
-                let popover_id = node.id.clone();
+                // AnyElement is not Clone and the content closure runs per frame, so the
+                // declared children are attached eagerly; Popover renders `self.children`
+                // inside its popup content panel.
                 Popover::new(node.id)
                     .default_open(open)
                     .trigger(Button::new("popover-trigger").secondary().label("Open"))
-                    .content(move |_, _, _| {
-                        div().p_3().min_w(px(180.0)).children(children.clone())
-                    })
+                    .children(children)
                     .opacity(opacity)
-                    .when_some(accessibility_label.clone(), |element, aria| {
-                        element.aria_label(aria)
-                    })
                     .into_any_element()
             }
             NodeKind::Avatar => {
@@ -1576,7 +1570,7 @@ impl FoundationGallery {
                     .id(node.id)
                     .role(Role::Image)
                     .opacity(opacity)
-                    .when_some(alt, |element, label| element.aria_label(label))
+                    .when_some(alt, gpui::StatefulInteractiveElement::aria_label)
                     .child(content)
                     .into_any_element()
             }
@@ -1626,29 +1620,7 @@ impl FoundationGallery {
             | NodeKind::Command
             | NodeKind::NativeSelect
             | NodeKind::Message
-            | NodeKind::Sonner => {
-                let label = node
-                    .props
-                    .get("label")
-                    .or_else(|| node.props.get("title"))
-                    .or_else(|| node.props.get("content"))
-                    .or_else(|| node.props.get("message"))
-                    .or_else(|| node.props.get("value"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                div()
-                    .id(node.id)
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(COLOR_BORDER_SUBTLE))
-                    .bg(rgb(COLOR_SURFACE_VARIANT))
-                    .when(!label.is_empty(), |element| element.child(label))
-                    .children(children)
-                    .into_any_element()
-            }
+            | NodeKind::Sonner => self.development_fallback(node.id, node.kind, children),
             NodeKind::Sidebar => div()
                 .id(node.id)
                 .role(Role::Navigation)
@@ -1718,7 +1690,8 @@ impl FoundationGallery {
                 .children(children)
                 .into_any_element(),
             NodeKind::Tabs => {
-                let items = prop_strings(&node, "items");
+                let items = prop_strings(&node.props, "items");
+                let id_prefix = node.id.clone();
                 div()
                     .id(node.id)
                     .role(Role::TabList)
@@ -1744,7 +1717,11 @@ impl FoundationGallery {
                             // Tab selection is carried per-child via `selected`; this header
                             // renders only the declared item labels without inventing state.
                             .children(items.iter().map(|item| {
-                                div().id(format!("{}:tab:{item}", node.id)).role(Role::Tab).text_sm().child(item.clone())
+                                div()
+                                    .id(format!("{id_prefix}:tab:{item}"))
+                                    .role(Role::Tab)
+                                    .text_sm()
+                                    .child(item.clone())
                             })),
                     )
                     .children(children)
@@ -1802,7 +1779,7 @@ impl FoundationGallery {
                     .flex()
                     .when(vertical, gpui::Styled::flex_col)
                     .when(!vertical, gpui::Styled::flex_row)
-                    .when(vertical, |element| element.h_full())
+                    .when(vertical, gpui::Styled::h_full)
                     .items_center()
                     .gap_2()
                     .p_2()
@@ -1812,8 +1789,9 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Stepper => {
-                let items = prop_strings(&node, "items");
-                let step = prop_u64(&node, "step", 0) as usize;
+                let items = prop_strings(&node.props, "items");
+                let step = prop_u64(&node.props, "step", 0) as usize;
+                let id_prefix = node.id.clone();
                 div()
                     .id(node.id)
                     .role(Role::List)
@@ -1833,7 +1811,7 @@ impl FoundationGallery {
                     .children(items.iter().enumerate().map(|(index, label)| {
                         let current = index == step;
                         div()
-                            .id(format!("{}:step:{index}", node.id))
+                            .id(format!("{id_prefix}:step:{index}"))
                             .role(Role::ListItem)
                             .flex()
                             .items_center()
@@ -1850,8 +1828,8 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Pagination => {
-                let page = prop_u64(&node, "page", 1).max(1);
-                let pages = prop_u64(&node, "pages", 1).max(1);
+                let page = prop_u64(&node.props, "page", 1).max(1);
+                let pages = prop_u64(&node.props, "pages", 1).max(1);
                 div()
                     .id(node.id)
                     .role(Role::Navigation)
@@ -1893,10 +1871,11 @@ impl FoundationGallery {
                 .border_b_1()
                 .border_color(rgb(COLOR_BORDER_SUBTLE))
                 .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(prop_str(&node, "label").unwrap_or_default().to_owned()),
+                    div().min_w_0().overflow_hidden().child(
+                        prop_str(&node.props, "label")
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
                 )
                 .children(children)
                 .into_any_element(),
@@ -1920,8 +1899,9 @@ impl FoundationGallery {
                 .children(children)
                 .into_any_element(),
             NodeKind::DataTable => {
-                let columns = prop_strings(&node, "columns");
+                let columns = prop_strings(&node.props, "columns");
                 let populated = !columns.is_empty() || !children.is_empty();
+                let id_prefix = node.id.clone();
                 div()
                     .id(node.id)
                     .role(Role::Table)
@@ -1941,6 +1921,7 @@ impl FoundationGallery {
                     .when(!columns.is_empty(), |element| {
                         element.child(
                             div()
+                                .id(format!("{id_prefix}:columns-header"))
                                 .role(Role::Row)
                                 .flex()
                                 .gap_4()
@@ -1951,7 +1932,9 @@ impl FoundationGallery {
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(COLOR_MUTED))
                                 .children(columns.iter().map(|column| {
-                                    div().id(format!("{}:col:{column}", node.id)).child(column.clone())
+                                    div()
+                                        .id(format!("{id_prefix}:col:{column}"))
+                                        .child(column.clone())
                                 })),
                         )
                     })
@@ -2014,32 +1997,21 @@ impl FoundationGallery {
             | NodeKind::Item
             | NodeKind::MessageScroller
             | NodeKind::ToggleGroup
-            | NodeKind::TimePicker => div()
-                .id(node.id)
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .p_2()
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(COLOR_BORDER_SUBTLE))
-                .bg(rgb(COLOR_SURFACE))
-                .children(children)
-                .into_any_element(),
+            | NodeKind::TimePicker => self.development_fallback(node.id, node.kind, children),
             NodeKind::Dialog => {
-                let open = prop_bool(&node, "open", false);
-                let title = prop_str(&node, "title").unwrap_or("Dialog").to_owned();
+                let open = prop_bool(&node.props, "open", false);
+                let title = prop_str(&node.props, "title")
+                    .unwrap_or("Dialog")
+                    .to_owned();
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
                 let panel = Self::overlay_panel(title, None, 480.0, children)
+                    .id(format!("{}:panel", node.id))
+                    .role(Role::Dialog)
                     .when_some(accessibility_label.clone(), |element, aria| {
                         element.aria_label(aria)
-                    })
-                    .id(format!("{}:panel", node.id))
-                    .role(Role::Dialog);
+                    });
                 // UNVERIFIED: focus is tracked host-side (overlay_focus handles + tab order);
                 // full Tab cycling inside the overlay must be confirmed by the runner pass.
                 let root = self
@@ -2053,26 +2025,26 @@ impl FoundationGallery {
                     root.with_animation(
                         format!("{}:fade", node.id),
                         Animation::new(Duration::from_millis(150)),
-                        |element, delta| element.opacity(delta),
+                        gpui::Styled::opacity,
                     )
                     .into_any_element()
                 }
             }
             NodeKind::AlertDialog => {
-                let open = prop_bool(&node, "open", false);
-                let title = prop_str(&node, "title")
+                let open = prop_bool(&node.props, "open", false);
+                let title = prop_str(&node.props, "title")
                     .unwrap_or("Confirm")
                     .to_owned();
-                let message = prop_str(&node, "message").map(ToOwned::to_owned);
+                let message = prop_str(&node.props, "message").map(ToOwned::to_owned);
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
                 let panel = Self::overlay_panel(title, message, 420.0, children)
+                    .id(format!("{}:panel", node.id))
+                    .role(Role::AlertDialog)
                     .when_some(accessibility_label.clone(), |element, aria| {
                         element.aria_label(aria)
-                    })
-                    .id(format!("{}:panel", node.id))
-                    .role(Role::AlertDialog);
+                    });
                 let root = self
                     .overlay_root(&node.id, depth, true, cx)
                     .items_center()
@@ -2084,14 +2056,14 @@ impl FoundationGallery {
                     root.with_animation(
                         format!("{}:fade", node.id),
                         Animation::new(Duration::from_millis(150)),
-                        |element, delta| element.opacity(delta),
+                        gpui::Styled::opacity,
                     )
                     .into_any_element()
                 }
             }
             NodeKind::Sheet | NodeKind::BottomSheet | NodeKind::Drawer => {
-                let open = prop_bool(&node, "open", false);
-                let title = prop_str(&node, "title").unwrap_or("").to_owned();
+                let open = prop_bool(&node.props, "open", false);
+                let title = prop_str(&node.props, "title").unwrap_or("").to_owned();
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
@@ -2122,11 +2094,9 @@ impl FoundationGallery {
                     .children(children);
                 // Sheets anchor to their declared edge; drawers dock left like sheets.
                 let panel = match node.kind {
-                    NodeKind::BottomSheet => panel
-                        .w_full()
-                        .max_h(px(320.0))
-                        .rounded_t_xl()
-                        .border_t_1(),
+                    NodeKind::BottomSheet => {
+                        panel.w_full().max_h(px(320.0)).rounded_t_xl().border_t_1()
+                    }
                     NodeKind::Drawer => panel.w(px(280.0)).h_full().rounded_r_xl().border_r_1(),
                     _ => panel.w(px(360.0)).h_full().rounded_l_xl().border_l_1(),
                 };
@@ -2145,13 +2115,13 @@ impl FoundationGallery {
                     root.with_animation(
                         format!("{}:fade", node.id),
                         Animation::new(Duration::from_millis(150)),
-                        |element, delta| element.opacity(delta),
+                        gpui::Styled::opacity,
                     )
                     .into_any_element()
                 }
             }
             NodeKind::Toast => {
-                let message = prop_str(&node, "message");
+                let message = prop_str(&node.props, "message").map(ToOwned::to_owned);
                 if message.is_none() {
                     // No open property exists for toasts; a missing message means closed and
                     // clears any host-owned dismissal so the next message shows again.
@@ -2189,7 +2159,7 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Notification => {
-                let message = prop_str(&node, "message");
+                let message = prop_str(&node.props, "message").map(ToOwned::to_owned);
                 if message.is_none() {
                     self.dismissed_overlays.remove(&node.id);
                     return div().id(node.id).hidden().into_any_element();
@@ -2242,11 +2212,15 @@ impl FoundationGallery {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(prop_str(&node, "message").unwrap_or_default().to_owned())
+                .child(
+                    prop_str(&node.props, "message")
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
                 .children(children)
                 .into_any_element(),
             NodeKind::ContextMenu => {
-                let open = prop_bool(&node, "open", false);
+                let open = prop_bool(&node.props, "open", false);
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
@@ -2268,11 +2242,12 @@ impl FoundationGallery {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .when_some(prop_str(&node, "message"), |element, header| {
+                    .when_some(prop_str(&node.props, "message"), |element, header| {
                         element.child(
-                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
-                                header.to_owned(),
-                            ),
+                            div()
+                                .text_xs()
+                                .text_color(rgb(COLOR_MUTED))
+                                .child(header.to_owned()),
                         )
                     })
                     .children(children);
@@ -2283,10 +2258,11 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::CommandPalette => {
-                let open = prop_bool(&node, "open", false);
-                let placeholder =
-                    prop_str(&node, "placeholder").unwrap_or("Type a command").to_owned();
-                let commands = prop_strings(&node, "commands");
+                let open = prop_bool(&node.props, "open", false);
+                let placeholder = prop_str(&node.props, "placeholder")
+                    .unwrap_or("Type a command")
+                    .to_owned();
+                let commands = prop_strings(&node.props, "commands");
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
@@ -2308,7 +2284,14 @@ impl FoundationGallery {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().px_2().py_1().text_sm().text_color(rgb(COLOR_MUTED)).child(placeholder))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(placeholder),
+                    )
                     .when(commands.is_empty(), |element| {
                         element.child(self.empty_state_element("No commands"))
                     })
@@ -2330,7 +2313,9 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Tooltip => {
-                let tip = prop_str(&node, "message").unwrap_or_default().to_owned();
+                let tip = prop_str(&node.props, "message")
+                    .unwrap_or_default()
+                    .to_owned();
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2338,7 +2323,7 @@ impl FoundationGallery {
                         element.aria_label(aria)
                     })
                     .min_w_0()
-                    .inline_flex()
+                    .flex()
                     .children(children)
                     .when(!tip.is_empty(), |element| {
                         element.tooltip(move |window, cx| {
@@ -2360,12 +2345,7 @@ impl FoundationGallery {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
-                // Host displays dot while wasm emits comma to stay under 10M fuel
-                let value = if raw.contains('$') {
-                    raw.replace(',', ".")
-                } else {
-                    raw
-                };
+                let value = raw;
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2395,21 +2375,17 @@ impl FoundationGallery {
             NodeKind::Button if node.control == Some(RuntimeControl::Button) => {
                 let node_id = node.id;
                 let click_id = node_id.clone();
-                let label = prop_str(&node, "label").unwrap_or("Button").to_owned();
-                let variant = prop_str(&node, "variant").unwrap_or("primary");
-                let enabled = prop_bool(&node, "enabled", true);
-                // UNVERIFIED: the closed protocol declares a "selected" button variant but
-                // gpui-component's Button has no selected style; it renders as primary until the
-                // runner/fixer pass confirms host styling policy.
-                let is_card_action = node_id.starts_with("add-");
+                let label = prop_str(&node.props, "label")
+                    .unwrap_or("Button")
+                    .to_owned();
+                let variant = prop_str(&node.props, "variant").unwrap_or("primary");
+                let enabled = prop_bool(&node.props, "enabled", true);
+                let full_width = prop_str(&node.props, "width") == Some("full");
                 let button = Button::new(node_id)
                     .label(label)
                     .disabled(!enabled)
                     .opacity(opacity)
-                    .when_some(accessibility_label.clone(), |element, label| {
-                        element.aria_label(label)
-                    })
-                    .when(is_card_action, gpui::Styled::w_full);
+                    .when(full_width, gpui::Styled::w_full);
                 let button = match variant {
                     "secondary" => button.secondary(),
                     _ => button.primary(),
@@ -2421,8 +2397,8 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::IconButton if node.control == Some(RuntimeControl::Button) => {
-                let icon = prop_str(&node, "icon").unwrap_or("").to_owned();
-                let enabled = prop_bool(&node, "enabled", true);
+                let icon = prop_str(&node.props, "icon").unwrap_or("").to_owned();
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let click_id = node.id.clone();
                 let key_id = click_id.clone();
                 div()
@@ -2462,9 +2438,11 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Checkbox | NodeKind::Radio | NodeKind::Switch | NodeKind::Toggle => {
-                let label = prop_str(&node, "label").unwrap_or_default().to_owned();
-                let checked = prop_bool(&node, "value", false);
-                let enabled = prop_bool(&node, "enabled", true);
+                let label = prop_str(&node.props, "label")
+                    .unwrap_or_default()
+                    .to_owned();
+                let checked = prop_bool(&node.props, "value", false);
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let change_id = node.id.clone();
                 let on_change = cx.listener(move |this, checked: &bool, _, cx| {
                     this.dispatch_input(
@@ -2507,7 +2485,7 @@ impl FoundationGallery {
             }
             NodeKind::ButtonGroup => {
                 let vertical =
-                    prop_str(&node, "orientation").unwrap_or("horizontal") == "vertical";
+                    prop_str(&node.props, "orientation").unwrap_or("horizontal") == "vertical";
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2524,21 +2502,16 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Slider if node.control == Some(RuntimeControl::Slider) => {
-                let label = prop_str(&node, "label").unwrap_or("Slider").to_owned();
-                let min = prop_f64(&node, "min", 0.0) as f32;
-                let max = prop_f64(&node, "max", 1.0) as f32;
-                let value = prop_f64(&node, "value", min.into()).clamp(min.into(), max.into());
-                let enabled = prop_bool(&node, "enabled", true);
-                let state = self.plugin_slider(
-                    &node.id,
-                    min,
-                    max,
-                    0.0,
-                    value as f32,
-                    None,
-                    window,
-                    cx,
-                );
+                let label = prop_str(&node.props, "label")
+                    .unwrap_or("Slider")
+                    .to_owned();
+                let min = prop_f64(&node.props, "min", 0.0) as f32;
+                let max = prop_f64(&node.props, "max", 1.0) as f32;
+                let value =
+                    prop_f64(&node.props, "value", min.into()).clamp(min.into(), max.into());
+                let enabled = prop_bool(&node.props, "enabled", true);
+                let state =
+                    self.plugin_slider(&node.id, min, max, 0.0, value as f32, None, window, cx);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2551,26 +2524,28 @@ impl FoundationGallery {
                     .flex_col()
                     .gap_2()
                     .child(
-                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
-                            "{label}: {value:.2}"
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(format!("{label}: {value:.2}")),
                     )
                     .child(Slider::new(&state).horizontal().disabled(!enabled))
                     .into_any_element()
             }
             NodeKind::RangeSlider => {
-                let label = prop_str(&node, "label").unwrap_or("Range").to_owned();
-                let min = prop_f64(&node, "min", 0.0) as f32;
-                let max = prop_f64(&node, "max", 1.0) as f32;
-                let start = prop_f64(&node, "start", min.into()).clamp(min.into(), max.into());
-                let end = prop_f64(&node, "end", max.into()).clamp(start, max.into());
-                let enabled = prop_bool(&node, "enabled", true);
+                let label = prop_str(&node.props, "label").unwrap_or("Range").to_owned();
+                let min = prop_f64(&node.props, "min", 0.0) as f32;
+                let max = prop_f64(&node.props, "max", 1.0) as f32;
+                let start =
+                    prop_f64(&node.props, "start", min.into()).clamp(min.into(), max.into());
+                let end = prop_f64(&node.props, "end", max.into()).clamp(start, max.into());
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let state = self.plugin_slider(
                     &node.id,
                     min,
                     max,
                     0.0,
-                    start,
+                    start as f32,
                     Some((start as f32, end as f32)),
                     window,
                     cx,
@@ -2587,9 +2562,10 @@ impl FoundationGallery {
                     .flex_col()
                     .gap_2()
                     .child(
-                        div().text_sm().text_color(rgb(COLOR_MUTED)).child(format!(
-                            "{label}: {start:.2} – {end:.2}"
-                        )),
+                        div()
+                            .text_sm()
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(format!("{label}: {start:.2} – {end:.2}")),
                     )
                     .child(Slider::new(&state).horizontal().disabled(!enabled))
                     .into_any_element()
@@ -2603,9 +2579,13 @@ impl FoundationGallery {
                 self.select_like_element(&node, opacity, accessibility_label, true, window, cx)
             }
             NodeKind::TextInput if node.control == Some(RuntimeControl::Input) => {
-                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
-                let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
-                let enabled = prop_bool(&node, "enabled", true);
+                let placeholder = prop_str(&node.props, "placeholder")
+                    .unwrap_or_default()
+                    .to_owned();
+                let initial_value = prop_str(&node.props, "value")
+                    .unwrap_or_default()
+                    .to_owned();
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let state = self.plugin_input(
                     &node.id,
                     &placeholder,
@@ -2626,9 +2606,13 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::TextArea => {
-                let placeholder = prop_str(&node, "placeholder").unwrap_or_default().to_owned();
-                let initial_value = prop_str(&node, "value").unwrap_or_default().to_owned();
-                let enabled = prop_bool(&node, "enabled", true);
+                let placeholder = prop_str(&node.props, "placeholder")
+                    .unwrap_or_default()
+                    .to_owned();
+                let initial_value = prop_str(&node.props, "value")
+                    .unwrap_or_default()
+                    .to_owned();
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let state = self.plugin_input(
                     &node.id,
                     &placeholder,
@@ -2649,9 +2633,11 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::NumberInput => {
-                let placeholder = prop_str(&node, "label").unwrap_or_default().to_owned();
-                let initial_value = format!("{}", prop_f64(&node, "value", 0.0));
-                let enabled = prop_bool(&node, "enabled", true);
+                let placeholder = prop_str(&node.props, "label")
+                    .unwrap_or_default()
+                    .to_owned();
+                let initial_value = format!("{}", prop_f64(&node.props, "value", 0.0));
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let state = self.plugin_input(
                     &node.id,
                     &placeholder,
@@ -2672,18 +2658,11 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::SecretInput if node.control == Some(RuntimeControl::Input) => {
-                let label = prop_str(&node, "label")
+                let label = prop_str(&node.props, "label")
                     .unwrap_or("Trusted input")
                     .to_owned();
-                let enabled = prop_bool(&node, "enabled", true);
-                let state = self.plugin_input(
-                    &node.id,
-                    "",
-                    "",
-                    InputBinding::Secret,
-                    window,
-                    cx,
-                );
+                let enabled = prop_bool(&node.props, "enabled", true);
+                let state = self.plugin_input(&node.id, "", "", InputBinding::Secret, window, cx);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2699,9 +2678,9 @@ impl FoundationGallery {
                     .into_any_element()
             }
             NodeKind::Field | NodeKind::InputGroup => {
-                let label = prop_str(&node, "label");
-                let description = prop_str(&node, "description");
-                let error = prop_str(&node, "error");
+                let label = prop_str(&node.props, "label").map(ToOwned::to_owned);
+                let description = prop_str(&node.props, "description").map(ToOwned::to_owned);
+                let error = prop_str(&node.props, "error").map(ToOwned::to_owned);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2718,38 +2697,42 @@ impl FoundationGallery {
                             div()
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(label.to_owned()),
+                                .child(label.clone()),
                         )
                     })
                     .children(children)
                     .when_some(description, |element, description| {
                         element.child(
-                            div().text_xs().text_color(rgb(COLOR_MUTED)).child(
-                                description.to_owned(),
-                            ),
+                            div()
+                                .text_xs()
+                                .text_color(rgb(COLOR_MUTED))
+                                .child(description.clone()),
                         )
                     })
                     .when_some(error, |element, error| {
                         element.child(
                             div()
+                                .id("error")
                                 .text_xs()
                                 .text_color(rgb(COLOR_ERROR))
                                 .role(Role::Alert)
-                                .child(error.to_owned()),
+                                .child(error.clone()),
                         )
                     })
                     .into_any_element()
             }
             NodeKind::OtpInput => {
-                let label = prop_str(&node, "label").unwrap_or("Code").to_owned();
+                let label = prop_str(&node.props, "label").unwrap_or("Code").to_owned();
                 let length = node
                     .props
                     .get("length")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(6)
                     .clamp(1, 12) as usize;
-                let value = prop_str(&node, "value").unwrap_or_default().to_owned();
-                let enabled = prop_bool(&node, "enabled", true);
+                let value = prop_str(&node.props, "value")
+                    .unwrap_or_default()
+                    .to_owned();
+                let enabled = prop_bool(&node.props, "enabled", true);
                 let state = self.plugin_otp(&node.id, length, &value, window, cx);
                 div()
                     .id(node.id)
@@ -2772,7 +2755,7 @@ impl FoundationGallery {
             NodeKind::ColorPicker => {
                 ColorPicker::new(&self.component_color_picker).into_any_element()
             }
-            _ => div().id(node.id).children(children).into_any_element(),
+            _ => self.development_fallback(node.id, node.kind, children),
         };
         match transition {
             Some(transition) if !transition.duration.is_zero() => {
@@ -2786,7 +2769,7 @@ impl FoundationGallery {
                         transition_id,
                         Animation::new(transition.duration)
                             .with_easing(move |delta| transition.curve.sample(delta)),
-                        |element, delta| element.opacity(delta),
+                        gpui::Styled::opacity,
                     )
                     .into_any_element()
             }
@@ -2813,83 +2796,12 @@ impl Render for FoundationGallery {
                 .and_then(PluginSurface::warning)
                 .unwrap_or_default()
                 .to_owned();
-            let checkout_route = self
-                .checkout_shell
-                .as_ref()
-                .map(|shell| shell.current_route().to_owned());
             self.visited_input_ids.clear();
             self.overlay_depth = 0;
             let plugin = self.plugin_node(root, window, cx);
             // Retained form-widget states are keyed by stable node ID; states whose nodes left
             // the render tree are pruned so removals do not leak native widgets or buffers.
             self.prune_retired_widget_states();
-            let route_bar = checkout_route.clone().map(|route| {
-                div()
-                    .id("checkout-route")
-                    .role(Role::Navigation)
-                    .aria_label(format!("Current route {route}"))
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(rgb(COLOR_SURFACE_VARIANT))
-                    .border_1()
-                    .border_color(rgb(COLOR_BORDER_SUBTLE))
-                    .flex()
-                    .justify_between()
-                    .child(div().child(format!("Route: {route}")))
-                    .child(div().text_xs().text_color(rgb(COLOR_MUTED)).child(
-                        if route.starts_with("/receipts/") {
-                            "Receipt — host-owned immutable record"
-                        } else if route == "/checkout/payment" {
-                            "Checkout — trusted confirmation required"
-                        } else if route == "/cart" {
-                            "Cart — host-owned route state"
-                        } else {
-                            "Host-owned navigation"
-                        },
-                    ))
-                    .into_any_element()
-            });
-            let confirmation_overlay = checkout_route
-                .as_deref()
-                .filter(|route| *route == "/checkout/payment")
-                .map(|_| {
-                    div()
-                        .id("trusted-confirmation-overlay")
-                        .role(Role::Dialog)
-                        .aria_label("Trusted Studio confirmation")
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .bg(gpui::hsla(0.0, 0.0, 0.0, 0.35))
-                        .child(
-                            div()
-                                .w(px(420.0))
-                                .p_6()
-                                .rounded_xl()
-                                .bg(rgb(COLOR_SURFACE))
-                                .border_1()
-                                .border_color(rgb(COLOR_BORDER))
-                                .shadow_lg()
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child("Studio — trusted confirmation"),
-                                )
-                                .child(
-                                    div()
-                                        .mt_2()
-                                        .text_sm()
-                                        .text_color(rgb(COLOR_MUTED))
-                                        .child("Verified merchant, exact amount, and offline simulator status are host-owned."),
-                                ),
-                        )
-                        .into_any_element()
-                });
             return div()
                 .id("plugin-gallery")
                 .size_full()
@@ -2912,9 +2824,7 @@ impl Render for FoundationGallery {
                             .child(warning),
                     )
                 })
-                .children(route_bar)
-                .child(plugin)
-                .children(confirmation_overlay);
+                .child(plugin);
         }
         let snapshot = self.model.snapshot();
         let button = Self::increment_button(snapshot.button_activations, cx);
@@ -3003,9 +2913,7 @@ impl Render for FoundationGallery {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        image_format, parse_number_input, prop_strings, prop_u64, ImageFormat, PluginRenderNode,
-    };
+    use super::{ImageFormat, PluginRenderNode, image_format, parse_number_input};
     use studio_protocol::NodeKind;
 
     #[test]
@@ -3045,10 +2953,7 @@ mod tests {
     fn reads_declared_string_list_properties_for_data_display() {
         use std::collections::BTreeMap;
         let props: BTreeMap<String, serde_json::Value> = BTreeMap::from([
-            (
-                "columns".to_owned(),
-                serde_json::json!(["Name", "Price"]),
-            ),
+            ("columns".to_owned(), serde_json::json!(["Name", "Price"])),
             ("items".to_owned(), serde_json::json!([])),
         ]);
         let node = PluginRenderNode {
@@ -3059,11 +2964,11 @@ mod tests {
             children: Vec::new(),
         };
         assert_eq!(
-            super::prop_strings(&node, "columns"),
+            super::prop_strings(&node.props, "columns"),
             vec!["Name".to_owned(), "Price".to_owned()]
         );
-        assert!(super::prop_strings(&node, "items").is_empty());
-        assert!(super::prop_strings(&node, "missing").is_empty());
-        assert_eq!(super::prop_u64(&node, "pages", 1), 1);
+        assert!(super::prop_strings(&node.props, "items").is_empty());
+        assert!(super::prop_strings(&node.props, "missing").is_empty());
+        assert_eq!(super::prop_u64(&node.props, "pages", 1), 1);
     }
 }

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "com.studio.github-viewer",
+  "name": "Studio GitHub Viewer",
+  "version": "0.1.0",
+  "publisher": { "id": "studio-first-party", "keyId": "github-viewer-1" },
+  "entry": "module.wasm",
+  "sdkVersion": "^0.1.0",
+  "protocolVersion": 1,
+  "capabilities": [],
+  "limits": { "memoryMiB": 16, "eventFuel": 1000000 },
+  "assets": ["assets/github.svg"],
+  "integrations": [
+    {
+      "id": "github",
+      "version": "1.0.0",
+      "config": {
+        "clientId": "REPLACE_WITH_GITHUB_CLIENT_ID",
+        "scopes": ["read:user", "user:email"]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "github.user",
+      "origins": ["https://api.github.com"],
+      "methods": ["GET"],
+      "paths": ["/user"],
+      "allowedHeaders": ["accept", "x-github-api-version", "user-agent"],
+      "credential": { "source": "oauthProviderSession", "provider": "github" },
+      "responseSchema": {
+        "type": "object",
+        "required": ["id", "login"],
+        "properties": { "id": { "type": "integer" }, "login": { "type": "string" } },
+        "additionalProperties": true
+      }
+    },
+    {
+      "id": "github.repositories",
+      "origins": ["https://api.github.com"],
+      "methods": ["GET"],
+      "paths": ["/user/repos"],
+      "allowedHeaders": ["accept", "x-github-api-version", "user-agent"],
+      "credential": { "source": "oauthProviderSession", "provider": "github" },
+      "responseSchema": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": true } }
+    },
+    {
+      "id": "github.repository",
+      "origins": ["https://api.github.com"],
+      "methods": ["GET"],
+      "paths": ["/repos/{owner}/{repo}"],
+      "allowedHeaders": ["accept", "x-github-api-version", "user-agent"],
+      "credential": { "source": "oauthProviderSession", "provider": "github" },
+      "responseSchema": { "type": "object", "required": ["id", "name", "full_name", "html_url", "owner"], "properties": { "id": { "type": "integer" }, "name": { "type": "string" }, "full_name": { "type": "string" }, "html_url": { "type": "string" }, "owner": { "type": "object", "additionalProperties": true } }, "additionalProperties": true }
+    }
+  ]
+}

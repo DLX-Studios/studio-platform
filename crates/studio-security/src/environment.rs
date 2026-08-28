@@ -10,9 +10,8 @@ use std::{collections::BTreeMap, error::Error, fmt};
 
 use sha2::{Digest, Sha256};
 
-use crate::protected::{
-    ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus,
-    TrustMode,
+use crate::{
+    ApplicationEnvironment, PluginPrincipal, ProtectedSecretState, ProtectedSecretStatus, TrustMode,
 };
 
 const DATA_PARTITION_DOMAIN: &[u8] = b"studio.environment.data-partition.v1";
@@ -88,9 +87,7 @@ impl fmt::Display for EnvironmentError {
             EnvironmentErrorCode::ConfigAmbiguous => {
                 "conflicting active environment configuration entries"
             }
-            EnvironmentErrorCode::CrossEnvironmentDenied => {
-                "cross-environment access denied"
-            }
+            EnvironmentErrorCode::CrossEnvironmentDenied => "cross-environment access denied",
         })
     }
 }
@@ -286,7 +283,7 @@ pub struct EnvironmentDataScope<'a> {
     partition: [u8; 32],
 }
 
-impl EnvironmentDataScope<'_> {
+impl<'a> EnvironmentDataScope<'a> {
     /// This scope's environment.
     #[must_use]
     pub const fn environment(self) -> ApplicationEnvironment {
@@ -449,14 +446,12 @@ impl PromotionPlan {
     ) -> Result<Self, EnvironmentError> {
         let entries: Vec<PromotionEntry> = statuses
             .into_iter()
-            .map(SecretFreeMetadata::describe)
+            .map(|status| status.describe())
             .collect();
         match direction {
-            PromotionDirection::DevelopmentToStaging
-            | PromotionDirection::StagingToProduction => Ok(Self {
-                direction,
-                entries,
-            }),
+            PromotionDirection::DevelopmentToStaging | PromotionDirection::StagingToProduction => {
+                Ok(Self { direction, entries })
+            }
         }
     }
 
@@ -523,8 +518,11 @@ pub fn apply_promotion(
     }
     let mut copied = 0usize;
     for logical in source_records.keys() {
-        let minted = source.key(logical)?;
-        target.admit(&minted)?;
+        // Validate the logical name in both partitions. The source and target keys intentionally
+        // differ by environment, so admitting a source key directly into the target would reject
+        // every legitimate promotion rather than proving the target namespace can represent it.
+        source.key(logical)?;
+        target.key(logical)?;
         copied += 1;
     }
     Ok((
@@ -548,9 +546,9 @@ fn derive_data_partition(application: &str, environment: ApplicationEnvironment)
 fn validate_logical_key(logical: &str) -> Result<(), EnvironmentError> {
     let valid = !logical.is_empty()
         && logical.len() <= 256
-        && logical
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'));
+        && logical.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        });
     if valid {
         Ok(())
     } else {

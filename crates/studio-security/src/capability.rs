@@ -11,6 +11,8 @@ pub enum CapabilityId {
     PaymentSimulate,
     /// Structured printer-preview simulator.
     PrinterSimulate,
+    /// Bounded host-mediated `SurrealQL` over application data.
+    DataSurrealQuery,
 }
 
 impl CapabilityId {
@@ -23,6 +25,7 @@ impl CapabilityId {
         match value {
             "payment.simulate" => Ok(Self::PaymentSimulate),
             "printer.simulate" => Ok(Self::PrinterSimulate),
+            "data.surreal.query" => Ok(Self::DataSurrealQuery),
             _ => Err(SecurityError::capability_denied()),
         }
     }
@@ -167,6 +170,8 @@ impl ActionGate {
 fn valid_operation(capability: CapabilityId, operation: &str) -> bool {
     matches!(
         (capability, operation),
-        (CapabilityId::PaymentSimulate, "charge") | (CapabilityId::PrinterSimulate, "preview")
+        (CapabilityId::PaymentSimulate, "charge")
+            | (CapabilityId::PrinterSimulate, "preview")
+            | (CapabilityId::DataSurrealQuery, "query")
     )
 }

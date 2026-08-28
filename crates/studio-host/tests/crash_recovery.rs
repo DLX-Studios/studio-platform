@@ -23,7 +23,9 @@ const INTERRUPTED_BATCH_ID: &str = "forced-termination";
 fn forced_termination_recovers_the_last_durable_transaction_without_partial_batch() {
     let directory = tempfile::tempdir().expect("temporary RocksDB directory");
     let marker = directory.path().join(PAUSE_MARKER_FILE);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_localstore-crash-worker"))
+    let worker = std::env::var("CARGO_BIN_EXE_localstore_crash_worker")
+        .expect("Cargo provides the crash-worker binary path");
+    let mut child = Command::new(worker)
         .arg(directory.path())
         .spawn()
         .expect("crash worker starts");

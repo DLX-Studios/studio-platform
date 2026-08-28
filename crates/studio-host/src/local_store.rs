@@ -5,7 +5,11 @@
 //! recover typed batches, but cannot obtain a Surreal handle or execute
 //! SurrealQL.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use std::{
+    collections::BTreeMap,
     future::Future,
     path::{Path, PathBuf},
     time::Duration,
@@ -20,11 +24,11 @@ use surrealdb::{
     types::SurrealValue,
 };
 use thiserror::Error;
+use tokio::time as tokio_time;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::oneshot,
 };
-use tokio::time as tokio_time;
 
 /// File marking a fully initialized Studio store next to the engine data.
 const ENGINE_MANIFEST_FILE: &str = ".studio-localstore-engine.json";
@@ -100,6 +104,8 @@ pub enum LocalStoreDiagnosticCode {
     BatchInvalid,
     /// A storage operation did not complete.
     OperationFailed,
+    /// A bounded query exceeded its host execution deadline.
+    QueryTimedOut,
     /// The background executor could not start.
     ExecutorUnavailable,
 }
@@ -112,7 +118,7 @@ pub struct LocalStoreDiagnostic {
 }
 
 impl LocalStoreDiagnostic {
-    const fn new(code: LocalStoreDiagnosticCode) -> Self {
+    pub(crate) const fn new(code: LocalStoreDiagnosticCode) -> Self {
         let message = match code {
             LocalStoreDiagnosticCode::DirectoryInvalid => {
                 "Choose an existing writable application-data directory."
@@ -141,6 +147,9 @@ impl LocalStoreDiagnostic {
             LocalStoreDiagnosticCode::BatchInvalid => "The requested storage batch is invalid.",
             LocalStoreDiagnosticCode::OperationFailed => {
                 "The local store operation did not complete. No partial batch was accepted."
+            }
+            LocalStoreDiagnosticCode::QueryTimedOut => {
+                "The application data query exceeded its host time limit."
             }
             LocalStoreDiagnosticCode::ExecutorUnavailable => {
                 "The storage worker could not start. Restart the host process."
@@ -171,12 +180,17 @@ pub struct LocalStoreError {
 }
 
 impl LocalStoreError {
-    const fn new(code: LocalStoreDiagnosticCode) -> Self {
+    pub(crate) const fn new(code: LocalStoreDiagnosticCode) -> Self {
         let diagnostic = LocalStoreDiagnostic::new(code);
         Self {
             diagnostic_message: diagnostic.message,
             diagnostic,
         }
+    }
+
+    /// Construct a sanitized store error for a typed host adapter.
+    pub fn new_for_adapter(code: LocalStoreDiagnosticCode) -> Self {
+        Self::new(code)
     }
 
     /// The safe diagnostic suitable for UI, logs, and automation results.
@@ -313,9 +327,7 @@ fn persisted_batch(batch: &StoreBatch) -> PersistedBatch {
 }
 
 /// Selects the Studio namespace and database on a freshly opened engine.
-async fn select_session(
-    database: &Surreal<Db>,
-) -> Result<(), LocalStoreDiagnosticCode> {
+async fn select_session(database: &Surreal<Db>) -> Result<(), LocalStoreDiagnosticCode> {
     database
         .use_ns(NAMESPACE)
         .await
@@ -344,9 +356,7 @@ async fn connect_rocksdb(
 }
 
 /// Reads the engine manifest, returning `None` when no store was initialized.
-fn read_manifest(
-    directory: &Path,
-) -> Result<Option<EngineManifest>, LocalStoreDiagnosticCode> {
+fn read_manifest(directory: &Path) -> Result<Option<EngineManifest>, LocalStoreDiagnosticCode> {
     let Ok(raw) = std::fs::read_to_string(directory.join(ENGINE_MANIFEST_FILE)) else {
         return Ok(None);
     };
@@ -356,9 +366,7 @@ fn read_manifest(
 }
 
 /// Rejects manifests recorded by other engines or unsupported formats.
-fn validate_manifest(
-    manifest: &EngineManifest,
-) -> Result<(), LocalStoreDiagnosticCode> {
+fn validate_manifest(manifest: &EngineManifest) -> Result<(), LocalStoreDiagnosticCode> {
     if manifest.engine == ENGINE_MANIFEST_ROCKSDB
         && manifest.format_version == ENGINE_FORMAT_VERSION
     {
@@ -374,11 +382,10 @@ fn write_manifest(directory: &Path) -> Result<(), LocalStoreDiagnosticCode> {
         engine: ENGINE_MANIFEST_ROCKSDB.to_owned(),
         format_version: ENGINE_FORMAT_VERSION,
     };
-    let raw = serde_json::to_string(&manifest)
-        .map_err(|_| LocalStoreDiagnosticCode::OperationFailed)?;
+    let raw =
+        serde_json::to_string(&manifest).map_err(|_| LocalStoreDiagnosticCode::OperationFailed)?;
     let temporary = directory.join(ENGINE_MANIFEST_TEMPORARY_FILE);
-    std::fs::write(&temporary, raw)
-        .map_err(|_| LocalStoreDiagnosticCode::DirectoryInvalid)?;
+    std::fs::write(&temporary, raw).map_err(|_| LocalStoreDiagnosticCode::DirectoryInvalid)?;
     std::fs::rename(&temporary, directory.join(ENGINE_MANIFEST_FILE))
         .map_err(|_| LocalStoreDiagnosticCode::DirectoryInvalid)?;
     Ok(())
@@ -388,17 +395,17 @@ fn write_manifest(directory: &Path) -> Result<(), LocalStoreDiagnosticCode> {
 async fn read_schema_metadata(
     database: &Surreal<Db>,
 ) -> Result<Option<StoredMetadata>, LocalStoreDiagnosticCode> {
-    let stored: Option<StoredMetadata> = database
-        .select((TABLE_METADATA, METADATA_KEY))
-        .await
-        .map_err(|_| LocalStoreDiagnosticCode::SchemaMetadataCorrupt)?;
+    let stored: Option<StoredMetadata> = match database.select((TABLE_METADATA, METADATA_KEY)).await
+    {
+        Ok(stored) => stored,
+        Err(error) if error.is_not_found() => return Ok(None),
+        Err(_) => return Err(LocalStoreDiagnosticCode::SchemaMetadataCorrupt),
+    };
     Ok(stored)
 }
 
 /// Rejects schema metadata written by newer hosts or other engine formats.
-fn validate_schema_metadata(
-    metadata: &StoredMetadata,
-) -> Result<(), LocalStoreDiagnosticCode> {
+fn validate_schema_metadata(metadata: &StoredMetadata) -> Result<(), LocalStoreDiagnosticCode> {
     if metadata.schema_version > STORE_SCHEMA_VERSION
         || metadata.engine_format_version != ENGINE_FORMAT_VERSION
     {
@@ -459,6 +466,21 @@ pub trait LocalStore: Send + Sync {
         Self: Sized;
 }
 
+/// Host-only execution seam for the opt-in bounded application query capability.
+///
+/// Implementations keep the engine private and accept parameters separately from the query
+/// source. The application-data layer performs authorization, namespace rewriting, and policy
+/// checks before calling this trait.
+pub trait SurrealQueryStore: LocalStore {
+    /// Execute one already-authorized query with host-owned variable binding.
+    fn execute_surreal_query(
+        &self,
+        query: &str,
+        parameters: BTreeMap<String, Value>,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Value, LocalStoreError>> + Send;
+}
+
 /// RocksDB-backed SurrealDB implementation of [`LocalStore`].
 ///
 /// The embedded client is never exposed. The chosen directory and durability
@@ -493,13 +515,22 @@ impl EmbeddedLocalStore {
             .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::DirectoryInvalid))?;
         // A missing manifest marks a fresh store; a present one is validated so
         // an incompatible store never gets silently reopened by `open`.
-        let fresh_store = read_manifest(&directory)
-            .map_err(LocalStoreError::new)?
-            .is_none();
-        let database =
-            connect_rocksdb(&directory, durability).await.map_err(LocalStoreError::new)?;
-        select_session(&database).await.map_err(LocalStoreError::new)?;
-        ensure_schema_metadata(&database).await.map_err(LocalStoreError::new)?;
+        let fresh_store = match read_manifest(&directory).map_err(LocalStoreError::new)? {
+            Some(manifest) => {
+                validate_manifest(&manifest).map_err(LocalStoreError::new)?;
+                false
+            }
+            None => true,
+        };
+        let database = connect_rocksdb(&directory, durability)
+            .await
+            .map_err(LocalStoreError::new)?;
+        select_session(&database)
+            .await
+            .map_err(LocalStoreError::new)?;
+        ensure_schema_metadata(&database)
+            .await
+            .map_err(LocalStoreError::new)?;
         if fresh_store {
             write_manifest(&directory).map_err(LocalStoreError::new)?;
         }
@@ -540,9 +571,12 @@ impl EmbeddedLocalStore {
             }
             Err(code) => return Err(LocalStoreError::new(code)),
         }
-        let database =
-            connect_rocksdb(&directory, durability).await.map_err(LocalStoreError::new)?;
-        select_session(&database).await.map_err(LocalStoreError::new)?;
+        let database = connect_rocksdb(&directory, durability)
+            .await
+            .map_err(LocalStoreError::new)?;
+        select_session(&database)
+            .await
+            .map_err(LocalStoreError::new)?;
         // A manifest exists but schema metadata does not: the store is damaged.
         match read_schema_metadata(&database).await {
             Ok(Some(found)) => {
@@ -573,6 +607,43 @@ impl EmbeddedLocalStore {
     pub const fn durability(&self) -> Durability {
         self.durability
     }
+
+    /// Open a store from a synchronous native bootstrap boundary.
+    ///
+    /// GPUI startup is synchronous, while the storage engine is intentionally
+    /// asynchronous. Keeping this bridge here prevents application code from
+    /// depending on the storage engine or creating an executor of its own.
+    pub fn open_blocking(
+        directory: impl Into<PathBuf>,
+        durability: Durability,
+    ) -> Result<Self, LocalStoreError> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
+        runtime.block_on(Self::open(directory, durability))
+    }
+
+    /// Read one typed batch from a synchronous host adapter.
+    pub fn batch_entries_blocking(
+        &self,
+        batch_id: &str,
+    ) -> Result<Vec<StoreBatchEntry>, LocalStoreError> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
+        runtime.block_on(self.batch_entries(batch_id))
+    }
+
+    /// Persist one typed batch from a synchronous host adapter.
+    pub fn write_batch_blocking(&self, batch: &StoreBatch) -> Result<(), LocalStoreError> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::ExecutorUnavailable))?;
+        runtime.block_on(self.write_batch(batch))
+    }
 }
 
 impl LocalStore for EmbeddedLocalStore {
@@ -599,8 +670,7 @@ impl LocalStore for EmbeddedLocalStore {
                 .upsert((TABLE_BATCH, batch.id()))
                 .content(record)
                 .await;
-            written
-                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
+            written.map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
             Ok(())
         }
     }
@@ -613,11 +683,16 @@ impl LocalStore for EmbeddedLocalStore {
             if !batch_id_is_valid(batch_id) {
                 return Err(LocalStoreError::new(LocalStoreDiagnosticCode::BatchInvalid));
             }
-            let stored: Option<PersistedBatch> = self
-                .database
-                .select((TABLE_BATCH, batch_id))
-                .await
-                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
+            let stored: Option<PersistedBatch> =
+                match self.database.select((TABLE_BATCH, batch_id)).await {
+                    Ok(stored) => stored,
+                    Err(error) if error.is_not_found() => None,
+                    Err(_) => {
+                        return Err(LocalStoreError::new(
+                            LocalStoreDiagnosticCode::OperationFailed,
+                        ));
+                    }
+                };
             Ok(stored
                 .map(|record| {
                     record
@@ -638,7 +713,32 @@ impl LocalStore for EmbeddedLocalStore {
             // Durability::Every has already synced every accepted transaction;
             // releasing the handle lets the engine stop its background workers.
             drop(self.database);
+            // SurrealDB delivers the session-drop event to its local router asynchronously. Give
+            // that router enough time to finish its datastore shutdown so a caller that immediately
+            // reopens the same RocksDB directory does not race it while releasing the file lock.
+            tokio_time::sleep(Duration::from_millis(500)).await;
             Ok(())
+        }
+    }
+}
+
+impl SurrealQueryStore for EmbeddedLocalStore {
+    fn execute_surreal_query(
+        &self,
+        query: &str,
+        parameters: BTreeMap<String, Value>,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Value, LocalStoreError>> + Send {
+        async move {
+            let query = self.database.query(query).bind(parameters);
+            let mut response = tokio_time::timeout(timeout, query)
+                .await
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::QueryTimedOut))?
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
+            response
+                .take::<surrealdb::types::Value>(0)
+                .map(|value| value.into_json_value())
+                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))
         }
     }
 }
@@ -745,12 +845,9 @@ impl EmbeddedLocalStore {
         // UNVERIFIED(runtime): killing the process while this client-side
         // transaction is open must leave no visible record; the kill-recovery
         // harness asserts exactly that.
-        let transaction = match self.database.clone().begin().await {
-            Ok(transaction) => transaction,
-            Err(_) => {
-                let _ = std::fs::write(marker, b"begin-failed");
-                return;
-            }
+        let Ok(transaction) = self.database.clone().begin().await else {
+            let _ = std::fs::write(marker, b"begin-failed");
+            return;
         };
         let record = persisted_batch(batch);
         let written: Result<Option<PersistedBatch>, surrealdb::Error> = transaction
@@ -842,7 +939,9 @@ mod tests {
             "fresh engine has no schema metadata yet"
         );
 
-        ensure_schema_metadata(&database).await.expect("initializes metadata");
+        ensure_schema_metadata(&database)
+            .await
+            .expect("initializes metadata");
         let stored = read_schema_metadata(&database).await.unwrap();
         let found = stored.as_ref().expect("metadata record exists");
         validate_schema_metadata(found).expect("fresh metadata is supported");
@@ -877,11 +976,15 @@ mod tests {
     async fn typed_batches_persist_and_read_back_atomically_on_the_memory_engine() {
         let database = memory_database().await;
         select_session(&database).await.expect("session selects");
-        ensure_schema_metadata(&database).await.expect("schema initializes");
+        ensure_schema_metadata(&database)
+            .await
+            .expect("schema initializes");
 
-        let batch =
-            StoreBatch::new("round-trip", [sample_entry(0), sample_entry(1), sample_entry(2)])
-                .expect("batch is valid");
+        let batch = StoreBatch::new(
+            "round-trip",
+            [sample_entry(0), sample_entry(1), sample_entry(2)],
+        )
+        .expect("batch is valid");
         let record = persisted_batch(&batch);
         let written: Result<Option<PersistedBatch>, surrealdb::Error> = database
             .upsert((TABLE_BATCH, batch.id()))
@@ -889,13 +992,17 @@ mod tests {
             .await;
         assert!(written.is_ok(), "batch record upserts");
 
-        let stored: Option<PersistedBatch> =
-            database.select((TABLE_BATCH, "round-trip")).await.expect("reads back");
+        let stored: Option<PersistedBatch> = database
+            .select((TABLE_BATCH, "round-trip"))
+            .await
+            .expect("reads back");
         let stored = stored.expect("record exists");
         assert_eq!(stored.batch_id, "round-trip");
         assert_eq!(stored.entries.len(), 3);
-        let missing: Option<PersistedBatch> =
-            database.select((TABLE_BATCH, "absent")).await.expect("missing reads");
+        let missing: Option<PersistedBatch> = database
+            .select((TABLE_BATCH, "absent"))
+            .await
+            .expect("missing reads");
         assert!(missing.is_none());
 
         assert!(batch_id_is_valid("ordinary-batch"));

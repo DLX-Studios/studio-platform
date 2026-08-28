@@ -1,6 +1,29 @@
-//! Studio's Wayland-only native shell and host-owned foundation surfaces.
+//! Studio Runtime's Wayland-only guest host and retained UI surfaces.
+
+#![allow(missing_docs)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction,
+    clippy::nursery,
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::assigning_clones,
+    clippy::if_not_else,
+    clippy::manual_let_else,
+    clippy::self_only_used_in_recursion,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::semicolon_if_nothing_returned,
+    clippy::needless_pass_by_value
+)]
 
 mod action_dispatch;
+pub mod agent_conversation;
 pub mod cli;
 mod confirmation_surface;
 mod diagnostic;

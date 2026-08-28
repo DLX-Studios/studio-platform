@@ -6,11 +6,11 @@ use std::path::Path;
 
 use studio_script::ir::{IrNavigationOperation, IrNode, IrProperty, IrTriggerEvent};
 use studio_script::lower::{
-    CODE_IR_BEHAVIOR_SYNTAX, CODE_IR_DUPLICATE_TRIGGER, CODE_IR_UNKNOWN_KIND,
-    CODE_IR_UNKNOWN_KEYWORD, CODE_IR_UNKNOWN_TARGET, CODE_IR_UNKNOWN_TRIGGER_NODE,
+    CODE_IR_BEHAVIOR_SYNTAX, CODE_IR_DUPLICATE_TRIGGER, CODE_IR_UNKNOWN_KEYWORD,
+    CODE_IR_UNKNOWN_KIND, CODE_IR_UNKNOWN_TARGET, CODE_IR_UNKNOWN_TRIGGER_NODE,
     CODE_IR_UNRESOLVED_TOKEN, CODE_IR_UNSUPPORTED_BINDING,
 };
-use studio_script::{compile, CompileError, Severity, STUDIO_SCRIPT_VERSION};
+use studio_script::{CompileError, STUDIO_SCRIPT_VERSION, Severity, compile};
 
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -73,10 +73,7 @@ fn lowers_static_screens_and_navigation_into_versioned_ir() {
             route: "/detail".to_owned()
         }
     );
-    assert_eq!(
-        module.actions[2].operation,
-        IrNavigationOperation::Pop
-    );
+    assert_eq!(module.actions[2].operation, IrNavigationOperation::Pop);
 }
 
 #[test]
@@ -90,20 +87,23 @@ fn document_tree_constructs_outside_the_subset_are_rejected_with_stable_codes() 
     assert_eq!(error.diagnostics[0].severity, Severity::Error);
     assert_eq!(error.diagnostics[0].span.start.line, 2);
 
-    let token_error =
-        compile("studio 1\n<Box id=\"box\" tone={token.colors.primary} />\n")
-            .expect_err("tokens must be rejected");
-    assert!(token_error
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == CODE_IR_UNRESOLVED_TOKEN));
+    let token_error = compile("studio 1\n<Box id=\"box\" tone={token.colors.primary} />\n")
+        .expect_err("tokens must be rejected");
+    assert!(
+        token_error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == CODE_IR_UNRESOLVED_TOKEN)
+    );
 
     let kind_error = compile("studio 1\n<Frobnicator id=\"frob\" />\n")
         .expect_err("unknown catalog kinds must be rejected");
-    assert!(kind_error
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == CODE_IR_UNKNOWN_KIND));
+    assert!(
+        kind_error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == CODE_IR_UNKNOWN_KIND)
+    );
 }
 
 #[test]
@@ -112,10 +112,7 @@ fn behavior_statements_are_source_linked_and_stable() {
         "studio 1\n<script lang=\"studio\">\non pressed go push(/missing)\n</script>\n<Button id=\"go\" label=\"Go\" />\n",
     )
     .expect_err("unknown targets must be rejected");
-    assert_eq!(
-        unknown_target.diagnostics()[0].code,
-        CODE_IR_UNKNOWN_TARGET
-    );
+    assert_eq!(unknown_target.diagnostics()[0].code, CODE_IR_UNKNOWN_TARGET);
     assert_eq!(unknown_target.diagnostics()[0].span.start.line, 3);
 
     let unknown_node = compile(

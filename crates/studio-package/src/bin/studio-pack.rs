@@ -40,14 +40,16 @@ fn run(arguments: &[String]) -> Result<Option<&'static str>, &'static str> {
     let root = Path::new(&manifest_path)
         .parent()
         .unwrap_or_else(|| Path::new("."));
-    let assets = parsed
-        .assets
-        .iter()
-        .try_fold(BTreeMap::new(), |mut files, path| {
-            let bytes = fs::read(root.join(path)).map_err(|_| "unable to read declared asset")?;
-            files.insert(path.clone(), bytes);
-            Ok(files)
-        })?;
+    let assets =
+        parsed
+            .assets
+            .iter()
+            .try_fold(BTreeMap::<String, Vec<u8>>::new(), |mut files, path| {
+                let bytes =
+                    fs::read(root.join(path)).map_err(|_| "unable to read declared asset")?;
+                files.insert(path.clone(), bytes);
+                Ok::<_, &'static str>(files)
+            })?;
     let mode = if development {
         PackMode::DevelopmentUnsigned
     } else {

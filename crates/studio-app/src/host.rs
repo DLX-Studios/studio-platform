@@ -5,9 +5,12 @@ use std::{ffi::OsStr, fs};
 use serde_json::Value;
 use studio_actions::Checkout;
 use studio_components::{HostEventDispatcher, NativeStateStore};
+use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
+use studio_net::{BrokerError, RestBroker, RestBrokerConfig};
 use studio_package::{
-    ArchivePolicy, CanonicalBundleInput, ManifestPolicy, TrustStore, canonical_bundle_document,
-    inspect_archive, parse_manifest, verify_bundle_signature,
+    ArchivePolicy, CanonicalBundleInput, ManifestPolicy, ProviderRegistry, TrustStore,
+    TrustStoreError, VerifiedMigrationBundle, canonical_bundle_document, inspect_archive,
+    parse_manifest, verify_bundle_signature,
 };
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
 use studio_security::PluginPrincipal;
@@ -58,6 +61,8 @@ pub struct HostConfig {
     pub manifest_policy: ManifestPolicy,
     /// Host–guest message and UI ceilings.
     pub protocol_limits: ProtocolLimits,
+    /// Host-maintained provider descriptor and capability policy.
+    pub provider_registry: ProviderRegistry,
 }
 
 impl HostConfig {
@@ -69,6 +74,7 @@ impl HostConfig {
             archive_policy: ArchivePolicy::default(),
             manifest_policy: ManifestPolicy::default(),
             protocol_limits: ProtocolLimits::default(),
+            provider_registry: ProviderRegistry::maintained(),
         }
     }
 }
@@ -86,10 +92,16 @@ pub enum LaunchErrorCode {
     BundleInvalid,
     /// Production publisher signature/trust validation failed.
     IntegrityInvalid,
+    /// Operator publisher trust configuration is absent or unusable.
+    TrustConfigurationInvalid,
     /// WebAssembly policy, instantiation, or initialization failed.
     GuestInvalid,
     /// Initial guest output or retained tree is invalid.
     UiInvalid,
+    /// A signed application migration must run before guest access.
+    MigrationRequired,
+    /// A required application migration failed or was quarantined.
+    MigrationInvalid,
 }
 
 /// Detailed host-owned startup rejection.
@@ -110,12 +122,21 @@ pub enum LaunchError {
     /// Trust or signature admission failed.
     #[error("plugin integrity verification failed")]
     IntegrityInvalid,
+    /// Operator publisher trust configuration is absent or unusable.
+    #[error("publisher trust configuration rejected: {0}")]
+    TrustConfigurationInvalid(TrustStoreError),
     /// Module policy or runtime startup failed.
     #[error("plugin guest startup failed: {0}")]
     GuestInvalid(String),
     /// Initial protocol mount admission failed.
     #[error("plugin UI mount failed: {0}")]
     UiInvalid(String),
+    /// The selected signed bundle declares migrations but no lifecycle was provided.
+    #[error("plugin application migration must complete before launch")]
+    MigrationRequired,
+    /// Migration failed safely; the application remains unavailable until recovery.
+    #[error("plugin application migration failed: {0}")]
+    MigrationInvalid(MigrationError),
 }
 
 impl LaunchError {
@@ -128,8 +149,11 @@ impl LaunchError {
             Self::WaylandUnavailable => LaunchErrorCode::WaylandUnavailable,
             Self::BundleInvalid(_) => LaunchErrorCode::BundleInvalid,
             Self::IntegrityInvalid => LaunchErrorCode::IntegrityInvalid,
+            Self::TrustConfigurationInvalid(_) => LaunchErrorCode::TrustConfigurationInvalid,
             Self::GuestInvalid(_) => LaunchErrorCode::GuestInvalid,
             Self::UiInvalid(_) => LaunchErrorCode::UiInvalid,
+            Self::MigrationRequired => LaunchErrorCode::MigrationRequired,
+            Self::MigrationInvalid(_) => LaunchErrorCode::MigrationInvalid,
         }
     }
 }
@@ -161,6 +185,22 @@ impl StudioHost {
     #[must_use]
     pub const fn new(config: HostConfig, wayland: WaylandAvailability) -> Self {
         Self { config, wayland }
+    }
+
+    /// Construct the host-owned REST broker for one admitted package.
+    ///
+    /// Callers provide the package's already admitted route declarations and host-only resolver
+    /// seams. The factory compiles every route atomically before returning, so a package cannot
+    /// observe a broker with only a subset of its routes installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable broker admission error when a declaration or host limit is invalid.
+    pub fn prepare_broker<'store>(
+        &self,
+        config: RestBrokerConfig<'store>,
+    ) -> Result<std::sync::Arc<RestBroker<'store>>, BrokerError> {
+        RestBroker::from_config(config)
     }
 
     /// Compose an instance-owned protected payment session from verified host identities.
@@ -196,6 +236,70 @@ impl StudioHost {
     ///
     /// Returns a host-owned [`LaunchError`] before exposing any partially prepared surface.
     pub fn prepare(&self, request: LaunchRequest) -> Result<PluginSurface, LaunchError> {
+        self.prepare_internal(request, false)
+    }
+
+    /// Run signed application migrations and launch only after the lifecycle commits.
+    ///
+    /// The runner receives a host-owned LocalStore and a host callback for the migration document;
+    /// no database or guest capability crosses into migration code. Unsigned development bundles
+    /// are rejected because migrations are an authenticated package authority.
+    pub async fn prepare_with_migrations<S, F>(
+        &self,
+        request: LaunchRequest,
+        store: &S,
+        action: F,
+    ) -> Result<PluginSurface, LaunchError>
+    where
+        S: LocalStore,
+        F: FnMut(
+                &studio_package::MigrationDeclaration,
+                &[u8],
+                &mut Value,
+            ) -> Result<(), MigrationStepError>
+            + Send,
+    {
+        if self.wayland == WaylandAvailability::Unavailable {
+            return Err(LaunchError::WaylandUnavailable);
+        }
+        if request.mode() != LaunchMode::Production {
+            return Err(LaunchError::MigrationRequired);
+        }
+        let path = request.path();
+        if !path.is_absolute()
+            || !path.metadata().is_ok_and(|metadata| {
+                metadata.file_type().is_file()
+                    && metadata.len() <= self.config.archive_policy.max_archive_bytes as u64
+            })
+        {
+            return Err(LaunchError::PathInvalid);
+        }
+        let bytes = fs::read(path).map_err(|_| LaunchError::PathInvalid)?;
+        let archive = inspect_archive(&bytes, self.config.archive_policy)
+            .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+        if self.config.trust_store.is_empty() {
+            return Err(LaunchError::TrustConfigurationInvalid(
+                TrustStoreError::NoActiveKeys,
+            ));
+        }
+        let package = VerifiedMigrationBundle::admit(
+            &archive,
+            self.config.manifest_policy,
+            &self.config.trust_store,
+        )
+        .map_err(|error| LaunchError::MigrationInvalid(MigrationError::Admission(error)))?;
+        MigrationRunner::new(store)
+            .run(&package, action)
+            .await
+            .map_err(LaunchError::MigrationInvalid)?;
+        self.prepare_internal(request, true)
+    }
+
+    fn prepare_internal(
+        &self,
+        request: LaunchRequest,
+        migrations_complete: bool,
+    ) -> Result<PluginSurface, LaunchError> {
         if self.wayland == WaylandAvailability::Unavailable {
             return Err(LaunchError::WaylandUnavailable);
         }
@@ -230,6 +334,11 @@ impl StudioHost {
         };
         let render_assets = canonical_input.assets.clone();
         if mode == LaunchMode::Production {
+            if self.config.trust_store.is_empty() {
+                return Err(LaunchError::TrustConfigurationInvalid(
+                    TrustStoreError::NoActiveKeys,
+                ));
+            }
             verify_bundle_signature(
                 &canonical_input,
                 &archive.signature,
@@ -242,6 +351,15 @@ impl StudioHost {
             canonical_bundle_document(&canonical_input)
                 .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
         }
+        if !manifest.migrations.is_empty() && !migrations_complete {
+            return Err(LaunchError::MigrationRequired);
+        }
+
+        let provider_plan = self
+            .config
+            .provider_registry
+            .admit(&manifest, &studio_net::limits::BrokerLimits::default())
+            .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
 
         let engine =
             SandboxEngine::new().map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
@@ -282,6 +400,7 @@ impl StudioHost {
             instance,
             render_assets,
             self.config.protocol_limits,
+            provider_plan,
         ))
     }
 }

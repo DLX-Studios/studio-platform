@@ -52,11 +52,12 @@ fn validate_specific(
 ) -> Result<bool, ProtocolError> {
     let valid = match kind {
         NodeKind::Box => match property {
-            "padding" => nonnegative_number(value),
+            "padding" | "width" | "height" => nonnegative_number(value),
             "background" => semantic_color(value),
             "flex" => value
                 .as_f64()
                 .is_some_and(|value| value.is_finite() && (0.0..=10.0).contains(&value)),
+            "shrink" => value.is_boolean(),
             _ => false,
         },
         NodeKind::Column | NodeKind::Row => match property {
@@ -97,6 +98,7 @@ fn validate_specific(
         NodeKind::Image => match property {
             "asset" => asset_path(value),
             "alt" => nonempty_string(value, limits)?,
+            "width" | "height" => nonnegative_number(value),
             _ => false,
         },
         NodeKind::Card => property == "padding" && nonnegative_number(value),
@@ -128,6 +130,7 @@ fn validate_specific(
             "enabled" => value.is_boolean(),
             "on_pressed" => event_name(value),
             "variant" => matches_string(value, &["primary", "secondary", "selected"]),
+            "width" => matches_string(value, &["intrinsic", "full"]),
             _ => false,
         },
         NodeKind::IconButton => match property {

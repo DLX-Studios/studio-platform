@@ -94,7 +94,7 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 | Carousel | Deferred display | yes | yes | no | no |
 | DragDrop | Deferred input/display | yes | yes | no | no |
 | Theme | Deferred display | yes | yes | no | no |
-| AspectRatio | Container | yes | yes | yes | yes |
+| AspectRatio | Container | yes | yes | no | no |
 | Alert | Deferred feedback | yes | yes | no | no |
 | Attachment | Deferred data display | yes | yes | no | no |
 | Bubble | Deferred data display | yes | yes | no | no |
@@ -111,7 +111,9 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 ## Notes
 
 - `TimePicker` is protocol-declared and native-mapped but has no native time widget mapping yet;
-  it renders through the generic surface and stays unrendered.
+  production rendering hides it and development rendering emits an explicit fallback diagnostic.
+- Release certification is derived from the readiness table and fails when any approved kind is
+  not semantically rendered and verified. Development fallback diagnostics never satisfy it.
 - Data-display kinds express empty and populated states only. Loading/error states are not
   representable under the closed protocol schema; no renderer-side state semantics were invented.
 - Overlay kinds (Dialog/AlertDialog/Popover/Sheet/BottomSheet/Drawer/Toast/Notification/

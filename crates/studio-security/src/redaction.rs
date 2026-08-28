@@ -28,6 +28,7 @@ const SENSITIVE_LABELS: &[&str] = &[
     "signing-key",
     "credential",
     "secret",
+    "token",
 ];
 
 /// Observable host artifact being sanitized.
@@ -181,6 +182,7 @@ fn sensitive_field(field: &str) -> bool {
             | b"credential"
             | b"credentials"
             | b"secret"
+            | b"token"
     )
 }
 

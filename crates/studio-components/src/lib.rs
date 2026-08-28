@@ -11,7 +11,8 @@ mod update;
 
 pub use catalog::{
     COMPONENT_RENDERER_READINESS, CatalogError, CatalogErrorCode, ComponentCatalog,
-    ComponentReadiness, NativeComponent, NativeLayer, TargetSize, component_readiness,
+    ComponentReadiness, NativeComponent, NativeLayer, TargetSize, certify_renderer_readiness,
+    component_readiness, uncertified_renderer_kinds,
 };
 pub use controls::RuntimeControl;
 pub use events::{DispatchError, DispatchErrorCode, HostEventDispatcher, InputAction};

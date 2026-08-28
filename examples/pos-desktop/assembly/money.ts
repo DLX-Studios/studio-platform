@@ -21,7 +21,7 @@ export class Money {
     const dollars = abs / 100;
     const cents = abs % 100;
     const centsStr = cents < 10 ? "0" + cents.toString() : cents.toString();
-    // keep comma for host fuel 10M — host will display dot
-    return sign + "$" + dollars.toString() + "," + centsStr;
+    // Emit the decimal format consumed directly by generic text rendering.
+    return sign + "$" + dollars.toString() + "." + centsStr;
   }
 }

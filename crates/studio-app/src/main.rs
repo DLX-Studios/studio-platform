@@ -1,4 +1,4 @@
-//! Wayland-only native shell and platform feasibility probe.
+//! Wayland-only Runtime guest host and platform feasibility probe.
 
 use std::ffi::OsStr;
 
@@ -21,7 +21,6 @@ fn has_wayland_endpoint(display: Option<&OsStr>, socket: Option<&OsStr>) -> bool
 fn run(application: Application, plugin_surface: Option<PluginSurface>) {
     application.run(move |cx: &mut App| {
         gpui_component::init(cx);
-        // The desktop business shell follows the light Pospay reference palette.
         Theme::change(ThemeMode::Light, None, cx);
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(
@@ -31,13 +30,14 @@ fn run(application: Application, plugin_surface: Option<PluginSurface>) {
             },
             move |window, cx| {
                 let reduced_motion = cx.reduce_motion();
-                let gallery = cx.new(|cx| match plugin_surface {
-                    Some(surface) => {
+                let shell = cx.new(|cx| {
+                    if let Some(surface) = plugin_surface {
                         FoundationGallery::with_plugin_surface(reduced_motion, surface, window, cx)
+                    } else {
+                        FoundationGallery::new(reduced_motion, window, cx)
                     }
-                    None => FoundationGallery::new(reduced_motion, window, cx),
                 });
-                cx.new(|cx| Root::new(gallery, window, cx).bordered(false))
+                cx.new(|cx| Root::new(shell, window, cx).bordered(false))
             },
         )
         .expect("Studio could not create its Wayland window");
@@ -57,11 +57,20 @@ fn main() {
     };
 
     let arguments = std::env::args_os().collect::<Vec<_>>();
+    if arguments.len() == 1 {
+        eprintln!("usage: studio-app (--bundle <absolute-path> | --dev <local-path>)");
+        std::process::exit(2);
+    }
     let plugin_surface = if arguments.len() == 1 {
         None
     } else {
         let result = LaunchRequest::parse_from(arguments).and_then(|request| {
-            StudioHost::new(HostConfig::new(TrustStore::default()), wayland).prepare(request)
+            let trust_store = match request.mode() {
+                studio_app::cli::LaunchMode::Production => TrustStore::load_from_environment()
+                    .map_err(studio_app::host::LaunchError::TrustConfigurationInvalid)?,
+                studio_app::cli::LaunchMode::Development => TrustStore::default(),
+            };
+            StudioHost::new(HostConfig::new(trust_store), wayland).prepare(request)
         });
         match result {
             Ok(surface) => {

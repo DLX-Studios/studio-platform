@@ -59,7 +59,7 @@ pub enum ApplicationEnvironment {
 }
 
 impl ApplicationEnvironment {
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Development => "development",
             Self::Staging => "staging",
@@ -569,6 +569,28 @@ impl<B: CredentialBackend> ApplicationSecretStore<'_, B> {
                 Ok(status(key, ProtectedSecretState::Revoked, Some(revision)))
             }
         }
+    }
+
+    /// Run a host-owned operation over one configured value without returning or cloning it.
+    ///
+    /// This is intentionally available only on the host configuration surface. The callback is
+    /// executed synchronously while the value is held in zeroizing memory, and the value cannot
+    /// cross either the guest status handle or the broker injection interface. OAuth token
+    /// transports use this seam for refresh and profile requests without putting tokens in guest
+    /// memory or diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a value-free error for undeclared/missing/revoked values or backend failures.
+    pub fn with_configured_secret<T>(
+        &self,
+        key: &ProtectedSecretKey,
+        operation: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, ProtectedSecretError> {
+        let StoredSecret::Configured { secret, .. } = self.load(key)? else {
+            return Err(ProtectedSecretError::secret_unavailable());
+        };
+        Ok(operation(secret.as_slice()))
     }
 
     /// Create the only guest-facing handle, restricted to signed declarations.

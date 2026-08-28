@@ -86,6 +86,69 @@ fn manifests_without_secret_declarations_remain_valid() {
 }
 
 #[test]
+fn signed_migrations_are_forward_only_ordered_and_asset_backed() {
+    let mut value = valid_manifest();
+    value["assets"] = json!([
+        "assets/migrations/v1-to-v2.json",
+        "assets/migrations/v2-to-v3.json"
+    ]);
+    value["migrations"] = json!([
+        {
+            "id": "v1-to-v2",
+            "fromVersion": 1,
+            "toVersion": 2,
+            "entry": "assets/migrations/v1-to-v2.json"
+        },
+        {
+            "id": "v2-to-v3",
+            "fromVersion": 2,
+            "toVersion": 3,
+            "entry": "assets/migrations/v2-to-v3.json"
+        }
+    ]);
+    let manifest = decode(&value).unwrap();
+    assert_eq!(manifest.migrations.len(), 2);
+    assert_eq!(manifest.migrations[0].from_version, 1);
+    assert_eq!(manifest.migrations[1].to_version, 3);
+
+    for migrations in [
+        json!([{
+            "id": "v1-to-v3",
+            "fromVersion": 1,
+            "toVersion": 3,
+            "entry": "assets/migrations/v1-to-v3.json"
+        }]),
+        json!([{
+            "id": "v1-to-v2",
+            "fromVersion": 1,
+            "toVersion": 2,
+            "entry": "assets/not-a-migration.json"
+        }]),
+        json!([
+            {
+                "id": "v2-to-v3",
+                "fromVersion": 2,
+                "toVersion": 3,
+                "entry": "assets/migrations/v2-to-v3.json"
+            },
+            {
+                "id": "v1-to-v2",
+                "fromVersion": 1,
+                "toVersion": 2,
+                "entry": "assets/migrations/v1-to-v2.json"
+            }
+        ]),
+    ] {
+        let mut invalid = value.clone();
+        invalid["migrations"] = migrations;
+        assert_eq!(
+            decode(&invalid).unwrap_err().code(),
+            ManifestErrorCode::ManifestInvalid
+        );
+    }
+}
+
+#[test]
 fn rejects_missing_unknown_duplicate_and_noncanonical_input_fields() {
     let mut missing = valid_manifest();
     missing.as_object_mut().unwrap().remove("publisher");

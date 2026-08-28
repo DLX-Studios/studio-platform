@@ -1,0 +1,22 @@
+[package]
+name = "studio-oauth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+sha2.workspace = true
+studio-net = { path = "../studio-net" }
+studio-security = { path = "../studio-security" }
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

@@ -5,6 +5,7 @@ use studio_components::{
     ComponentCatalog, DispatchError, HostEventDispatcher, InputAction, NativeStateStore,
     RuntimeControl, UpdateError, UpdateReport,
 };
+use studio_package::ProviderAdmissionPlan;
 use studio_protocol::{
     GuestMessage, HostEvent, NodeKind, ProtocolError, ProtocolLimits, UiNode, decode_guest_message,
 };
@@ -38,6 +39,7 @@ pub struct PluginSurface {
     instance: PluginInstance,
     assets: std::collections::BTreeMap<String, Vec<u8>>,
     protocol_limits: ProtocolLimits,
+    provider_plan: ProviderAdmissionPlan,
     guest_event_calls: u64,
     guest_patch_messages: u64,
 }
@@ -51,6 +53,7 @@ impl PluginSurface {
         instance: PluginInstance,
         assets: std::collections::BTreeMap<String, Vec<u8>>,
         protocol_limits: ProtocolLimits,
+        provider_plan: ProviderAdmissionPlan,
     ) -> Self {
         Self {
             mode,
@@ -61,6 +64,7 @@ impl PluginSurface {
             instance,
             assets,
             protocol_limits,
+            provider_plan,
             guest_event_calls: 0,
             guest_patch_messages: 0,
         }
@@ -82,6 +86,12 @@ impl PluginSurface {
     #[must_use]
     pub const fn warning(&self) -> Option<&'static str> {
         self.warning
+    }
+
+    /// Resolved provider capability plan admitted before guest startup.
+    #[must_use]
+    pub const fn provider_plan(&self) -> &ProviderAdmissionPlan {
+        &self.provider_plan
     }
 
     /// Atomically committed retained tree.

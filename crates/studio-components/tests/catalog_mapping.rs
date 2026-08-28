@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use studio_components::{
-    component_readiness, ComponentCatalog, DispatchErrorCode, HostEventDispatcher, InputAction,
-    NativeLayer, RuntimeControl, COMPONENT_RENDERER_READINESS,
+    COMPONENT_RENDERER_READINESS, ComponentCatalog, DispatchErrorCode, HostEventDispatcher,
+    InputAction, NativeLayer, RuntimeControl, component_readiness,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;
@@ -416,11 +416,13 @@ fn dispatches_typed_non_secret_events_from_host_owner_context() {
         };
         assert_eq!(event.node_id, node_id);
         assert_eq!(event.event, expected_event);
-        assert!(!serde_json::to_value(event)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .contains_key("owner"));
+        assert!(
+            !serde_json::to_value(event)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("owner")
+        );
     }
 
     assert_eq!(

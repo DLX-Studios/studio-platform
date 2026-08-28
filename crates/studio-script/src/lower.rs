@@ -26,12 +26,13 @@
 
 use std::collections::BTreeSet;
 
+use crate::{AttributeValue, Diagnostic, Element, Location, Node, Severity, Span, StudioDocument};
 use studio_protocol::NodeKind;
-use studio_script::{
-    AttributeValue, Diagnostic, Element, Location, Node, Severity, Span, StudioDocument,
-};
 
-use crate::ir::{IrElement, IrNavigationAction, IrNavigationOperation, IrProperty, IrScreen, IrText, IrNode, IrTriggerEvent};
+use crate::ir::{
+    IrElement, IrNavigationAction, IrNavigationOperation, IrNode, IrProperty, IrScreen, IrText,
+    IrTriggerEvent,
+};
 
 /// Stable diagnostic code for a `$item.*` binding outside the static subset.
 pub const CODE_IR_UNSUPPORTED_BINDING: &str = "STUDIO201";
@@ -97,7 +98,7 @@ pub fn lower_document(
 
     let mut ids = BTreeSet::new();
     for root in &document.nodes {
-        collect_ids(root, &mut ids);
+        collect_ids_from_element(root, &mut ids);
     }
 
     for root in &document.nodes {
@@ -125,18 +126,18 @@ pub fn lower_document(
 
 fn collect_ids(node: &Node, ids: &mut BTreeSet<String>) {
     if let Node::Element(element) = node {
-        ids.insert(element.id.clone());
-        for child in &element.children {
-            collect_ids(child, ids);
-        }
+        collect_ids_from_element(element, ids);
     }
 }
 
-fn lower_screen(
-    root: &Element,
-    source: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> IrScreen {
+fn collect_ids_from_element(element: &Element, ids: &mut BTreeSet<String>) {
+    ids.insert(element.id.clone());
+    for child in &element.children {
+        collect_ids(child, ids);
+    }
+}
+
+fn lower_screen(root: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>) -> IrScreen {
     let root_node = lower_node(root, source, diagnostics);
     IrScreen {
         id: root.id.clone(),
@@ -145,11 +146,7 @@ fn lower_screen(
     }
 }
 
-fn lower_node(
-    element: &Element,
-    source: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> IrNode {
+fn lower_node(element: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>) -> IrNode {
     let span = locate_element(source, &element.id);
     validate_kind(&element.kind, span, diagnostics);
 
@@ -192,6 +189,23 @@ fn lower_node(
     let mut text_ordinal = 0;
     for child in &element.children {
         match child {
+            Node::Element(child) if child.kind.eq_ignore_ascii_case("text") => {
+                validate_kind(&child.kind, locate_element(source, &child.id), diagnostics);
+                text_ordinal += 1;
+                let text = child
+                    .children
+                    .iter()
+                    .find_map(|nested| match nested {
+                        Node::Text(text) => Some(text.text.clone()),
+                        Node::Element(_) => None,
+                    })
+                    .unwrap_or_default();
+                children.push(IrNode::Text(IrText {
+                    id: format!("{}-text-{text_ordinal}", element.id),
+                    span: locate_text(source, &text),
+                    text,
+                }));
+            }
             Node::Element(child) => children.push(lower_node(child, source, diagnostics)),
             Node::Text(text) => {
                 text_ordinal += 1;
@@ -203,18 +217,29 @@ fn lower_node(
             }
         }
     }
+    children.sort_by(|left, right| node_identity(left).cmp(node_identity(right)));
 
     IrNode::Element(IrElement {
         id: element.id.clone(),
-        kind: element.kind.to_lowercase(),
+        kind: catalog_kind_name(&element.kind),
         properties,
         children,
         span,
     })
 }
 
+fn node_identity(node: &IrNode) -> &str {
+    match node {
+        IrNode::Element(element) => &element.id,
+        IrNode::Text(text) => &text.id,
+    }
+}
+
 fn validate_kind(kind: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {
-    let quoted = format!("\"{}\"", kind.to_lowercase());
+    if kind.eq_ignore_ascii_case("screen") {
+        return;
+    }
+    let quoted = format!("\"{}\"", catalog_kind_name(kind));
     if serde_json::from_str::<NodeKind>(&quoted).is_err() {
         diagnostics.push(Diagnostic {
             code: CODE_IR_UNKNOWN_KIND,
@@ -223,6 +248,23 @@ fn validate_kind(kind: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {
             span,
         });
     }
+}
+
+fn catalog_kind_name(kind: &str) -> String {
+    if kind.eq_ignore_ascii_case("screen") {
+        return "screen".to_owned();
+    }
+    if kind.eq_ignore_ascii_case("list") {
+        return "list_view".to_owned();
+    }
+    let mut name = String::with_capacity(kind.len() + 4);
+    for (index, character) in kind.chars().enumerate() {
+        if character.is_ascii_uppercase() && index != 0 {
+            name.push('_');
+        }
+        name.push(character.to_ascii_lowercase());
+    }
+    name
 }
 
 struct RawBehavior {
@@ -285,16 +327,16 @@ fn lower_behaviors(
             });
             continue;
         }
-        if let Some(route) = statement.operation.route() {
-            if !routes.contains(route) {
-                diagnostics.push(Diagnostic {
-                    code: CODE_IR_UNKNOWN_TARGET,
-                    severity: Severity::Error,
-                    message: format!("navigation target `{route}` matches no screen"),
-                    span: statement.span,
-                });
-                continue;
-            }
+        if let Some(route) = statement.operation.route()
+            && !routes.contains(route)
+        {
+            diagnostics.push(Diagnostic {
+                code: CODE_IR_UNKNOWN_TARGET,
+                severity: Severity::Error,
+                message: format!("navigation target `{route}` matches no screen"),
+                span: statement.span,
+            });
+            continue;
         }
         let key = format!(
             "{event}|{node}",
@@ -439,15 +481,15 @@ fn parse_action(action: &str) -> Option<IrNavigationOperation> {
 fn is_valid_route(route: &str) -> bool {
     route.len() <= MAX_ROUTE_BYTES
         && route.starts_with('/')
-        && route[1..]
-            .split('/')
-            .all(|segment| is_route_segment(segment))
+        && route[1..].split('/').all(is_route_segment)
 }
 
 fn is_route_segment(segment: &str) -> bool {
     let mut characters = segment.chars();
     matches!(characters.next(), Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit())
-        && characters.all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }
 
 /// Locate the `<script>` body region as absolute `(start_offset, text)`.
