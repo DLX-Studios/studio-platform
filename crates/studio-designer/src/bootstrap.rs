@@ -12,14 +12,19 @@ use std::{path::PathBuf, sync::Arc};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    Window, div,
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Window, div,
 };
-use gpui_component::button::Button;
+use gpui_component::button::{Button, ButtonVariants};
 use serde::{Serialize, de::DeserializeOwned};
+use studio_design::{
+    Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, NodeId, NodeKind, NodeParent,
+    OperationId, ProjectId, PropertyValue, Screen, ScreenId, StudioDesign, UndoGroupId,
+};
 use studio_host::{
     Durability, EmbeddedLocalStore, IdentityError, IdentityService, IdentitySession,
-    IdentitySnapshot, IdentityState, LocalStoreDiagnosticCode, LocalStoreError,
+    IdentitySnapshot, IdentityState, LocalStoreDesignerPersistence, LocalStoreDiagnosticCode,
+    LocalStoreError,
 };
 use studio_security::OsSessionCredentialStore;
 
@@ -27,8 +32,7 @@ use crate::connection::{
     CachedProject, ConnectionIndicator, ConnectionState, SyncCoordinator, SyncReceipt, SyncWorker,
     SyncWorkerError, SyncWorkerErrorCode,
 };
-use crate::foundation::FoundationGallery;
-use crate::plugin_surface::PluginSurface;
+use crate::focus_view::{FocusOpenError, FocusView, FocusViewModel};
 use crate::project_dashboard::{
     DashboardError, DashboardPersistence as DashboardPersistenceTrait, DashboardPersistenceError,
     DashboardPersistenceErrorCode, DashboardState, ProjectDashboard,
@@ -42,6 +46,13 @@ use crate::{
 const DASHBOARD_BATCH_PREFIX: &str = "studio-dashboard-v1-";
 const SETTINGS_GLOBAL_BATCH: &str = "studio-settings-global-v1";
 const SETTINGS_PROJECT_BATCH_PREFIX: &str = "studio-settings-project-v1-";
+
+/// Whether a native Wayland endpoint is available for the Designer launch.
+#[must_use]
+pub fn wayland_available() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
+        || std::env::var_os("WAYLAND_SOCKET").is_some_and(|value| !value.is_empty())
+}
 
 /// Offline-first worker used until a cloud transport is provisioned.
 ///
@@ -537,42 +548,79 @@ pub enum BootstrapError {
 /// Minimal GPUI application shell for the product routes.
 pub struct NativeProductShell {
     bootstrap: NativeProductBootstrap,
-    plugin_surface: Option<PluginSurface>,
-    plugin_gallery: Option<Entity<FoundationGallery>>,
-    reduced_motion: bool,
+    focus_view: Option<Entity<FocusView<LocalStoreDesignerPersistence>>>,
+    focus_project_id: Option<String>,
+    focus_loading: bool,
+    focus_error: Option<String>,
 }
 
 impl NativeProductShell {
-    /// Create the route shell and retain an optional verified guest surface.
-    pub fn new(
-        mut bootstrap: NativeProductBootstrap,
-        plugin_surface: Option<PluginSurface>,
-        reduced_motion: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut pending_surface = plugin_surface;
-        let plugin_gallery = if bootstrap.state().is_authenticated() {
-            pending_surface.take().map(|surface| {
-                cx.new(|cx| {
-                    FoundationGallery::with_plugin_surface(reduced_motion, surface, window, cx)
-                })
-            })
-        } else {
-            None
-        };
-        // A plugin launch still starts behind the authenticated product gate;
-        // this also prevents an untrusted bundle from constructing a project
-        // shell before identity restore succeeds.
-        if plugin_gallery.is_some() && bootstrap.state().is_authenticated() {
-            let _ = bootstrap.state_mut().open_project("runtime-launch");
-        }
+    /// Create the authenticated Designer route shell.
+    pub fn new(bootstrap: NativeProductBootstrap, _reduced_motion: bool) -> Self {
         Self {
             bootstrap,
-            plugin_surface: pending_surface,
-            plugin_gallery,
-            reduced_motion,
+            focus_view: None,
+            focus_project_id: None,
+            focus_loading: false,
+            focus_error: None,
         }
+    }
+
+    fn start_focus_open(&mut self, project_id: String, cx: &mut Context<Self>) {
+        if self.focus_loading {
+            return;
+        }
+        let Some(identity) = self.bootstrap.state().session().cloned() else {
+            self.focus_error =
+                Some("Authentication is required before opening a project.".to_owned());
+            return;
+        };
+        let Ok(project_id_typed) = ProjectId::new(project_id.clone()) else {
+            self.focus_error = Some("The project identity is invalid.".to_owned());
+            return;
+        };
+        let Ok(actor_id) = ActorId::new(format!("designer-{}", identity.identity_id())) else {
+            self.focus_error =
+                Some("The authenticated identity cannot author this project.".to_owned());
+            return;
+        };
+        let actor = Actor {
+            id: actor_id,
+            kind: ActorKind::Human,
+            display_name: "Designer".to_owned(),
+        };
+        let store = Arc::clone(&self.bootstrap.store);
+        self.focus_loading = true;
+        self.focus_error = None;
+        self.focus_project_id = Some(project_id);
+        cx.spawn(async move |this, cx| {
+            let result = open_or_create_focus(store, project_id_typed, actor).await;
+            this.update(cx, |shell, cx| {
+                shell.focus_loading = false;
+                match result {
+                    Ok(model) => {
+                        shell.focus_view = Some(cx.new(|cx| FocusView::new(model, cx)));
+                        shell.focus_error = None;
+                    }
+                    Err(error) => {
+                        shell.focus_view = None;
+                        shell.focus_error = Some(safe_focus_error(&error));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn retry_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(project_id) = self.focus_project_id.clone() else {
+            return;
+        };
+        self.focus_error = None;
+        self.focus_view = None;
+        self.start_focus_open(project_id, cx);
     }
 
     fn route_button(
@@ -591,8 +639,113 @@ impl NativeProductShell {
     }
 }
 
+async fn open_or_create_focus(
+    store: Arc<EmbeddedLocalStore>,
+    project_id: ProjectId,
+    actor: Actor,
+) -> Result<FocusViewModel<LocalStoreDesignerPersistence>, FocusOpenError> {
+    let persistence =
+        LocalStoreDesignerPersistence::new_shared(Arc::clone(&store)).map_err(|error| {
+            FocusOpenError::Session(studio_design::SessionError::Persistence(error))
+        })?;
+    match FocusViewModel::open(persistence.clone(), &project_id, None).await {
+        Ok(model) => Ok(model),
+        Err(FocusOpenError::Session(studio_design::SessionError::NotFound(_))) => {
+            let operation_id =
+                OperationId::new(format!("create-{project_id}")).map_err(|error| {
+                    FocusOpenError::Session(studio_design::SessionError::InvalidState(
+                        error.to_string(),
+                    ))
+                })?;
+            let undo_group_id =
+                UndoGroupId::new(format!("create-{project_id}")).map_err(|error| {
+                    FocusOpenError::Session(studio_design::SessionError::InvalidState(
+                        error.to_string(),
+                    ))
+                })?;
+            let session = DefaultDesignerSession::create(
+                persistence,
+                starter_design(project_id.clone()),
+                operation_id,
+                actor,
+                undo_group_id,
+            )
+            .await
+            .map_err(FocusOpenError::Session)?;
+            Ok(FocusViewModel::from_session(session, None))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn starter_design(project_id: ProjectId) -> StudioDesign {
+    let screen_id = ScreenId::new("home").expect("static screen identity is valid");
+    let root_id = NodeId::new("canvas").expect("static node identity is valid");
+    let headline_id = NodeId::new("headline").expect("static node identity is valid");
+    let mut root = DesignNode::primitive(root_id.clone(), "Canvas", NodeKind::Box);
+    root.children.push(headline_id.clone());
+    root.properties.insert(
+        crate::focus_view::CANVAS_RECT_PROPERTY.to_owned(),
+        studio_design::CanvasRect::new(0.0, 0.0, 640.0, 480.0)
+            .to_property_value()
+            .expect("static canvas geometry is valid"),
+    );
+    let mut headline = DesignNode::primitive(headline_id.clone(), "Headline", NodeKind::Text);
+    headline.properties.insert(
+        "text".to_owned(),
+        PropertyValue::String("Welcome to Studio Designer".to_owned()),
+    );
+    headline.properties.insert(
+        crate::focus_view::CANVAS_RECT_PROPERTY.to_owned(),
+        studio_design::CanvasRect::new(32.0, 32.0, 320.0, 48.0)
+            .to_property_value()
+            .expect("static canvas geometry is valid"),
+    );
+    let mut design = StudioDesign::empty(project_id, "Studio Designer project");
+    design.nodes.insert(root_id.clone(), root);
+    design.nodes.insert(headline_id.clone(), headline);
+    design.parents.insert(
+        root_id.clone(),
+        NodeParent::Screen {
+            screen_id: screen_id.clone(),
+        },
+    );
+    design.parents.insert(
+        headline_id,
+        NodeParent::Node {
+            node_id: root_id.clone(),
+        },
+    );
+    design.screens.insert(
+        screen_id.clone(),
+        Screen {
+            schema_version: studio_design::STUDIO_DESIGN_SCHEMA_VERSION,
+            id: screen_id.clone(),
+            name: "Home".to_owned(),
+            route: "/home".to_owned(),
+            root_node_id: root_id,
+        },
+    );
+    design.screen_order.push(screen_id);
+    design
+}
+
+fn safe_focus_error(error: &FocusOpenError) -> String {
+    match error {
+        FocusOpenError::Session(studio_design::SessionError::NotFound(_)) => {
+            "The project has no durable Designer revision.".to_owned()
+        }
+        FocusOpenError::Session(studio_design::SessionError::InvalidState(_)) => {
+            "The durable Designer revision failed validation.".to_owned()
+        }
+        FocusOpenError::Session(studio_design::SessionError::Persistence(error)) => {
+            format!("Designer persistence is unavailable ({:?}).", error.code)
+        }
+    }
+}
+
 impl Render for NativeProductShell {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = self.bootstrap.state().route().clone();
         let indicator = self.bootstrap.state().indicator().clone();
         let mut content = div()
@@ -663,25 +816,43 @@ impl Render for NativeProductShell {
                         cx,
                     ));
             }
-            ProductRoute::Project { .. } => {
-                if self.plugin_gallery.is_none() && self.bootstrap.state().is_authenticated() {
-                    if let Some(surface) = self.plugin_surface.take() {
-                        self.plugin_gallery = Some(cx.new(|cx| {
-                            FoundationGallery::with_plugin_surface(
-                                self.reduced_motion,
-                                surface,
-                                window,
-                                cx,
-                            )
-                        }));
-                    }
+            ProductRoute::Project { project_id } => {
+                if self.focus_project_id.as_deref() != Some(project_id.as_str()) {
+                    self.focus_project_id = Some(project_id.clone());
+                    self.focus_view = None;
+                    self.focus_error = None;
+                    self.focus_loading = false;
                 }
-                let project = self.plugin_gallery.clone();
-                if let Some(project) = project {
+                if self.focus_view.is_none() && self.focus_error.is_none() && !self.focus_loading {
+                    self.start_focus_open(project_id.clone(), cx);
+                }
+                if let Some(project) = self.focus_view.clone() {
                     content = content.child(project);
-                } else {
-                    content =
-                        content.child("Project editor is ready for a local or cached project.");
+                } else if self.focus_loading {
+                    content = content.child(
+                        div()
+                            .id("designer-project-loading")
+                            .role(gpui::Role::Status)
+                            .child("Opening the durable Designer project…"),
+                    );
+                } else if let Some(error) = self.focus_error.clone() {
+                    content = content
+                        .child(
+                            div()
+                                .id("designer-project-error")
+                                .role(gpui::Role::Alert)
+                                .child("Project editor unavailable")
+                                .child(div().text_sm().child(error)),
+                        )
+                        .child(
+                            Button::new("retry-project-open")
+                                .label("Retry project open")
+                                .primary()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.retry_focus(cx);
+                                    cx.notify();
+                                })),
+                        );
                 }
                 content = content.child(self.route_button(
                     "back-dashboard",

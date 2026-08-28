@@ -1,0 +1,16 @@
+{
+  "sprint": "02-remediation-01",
+  "base_commit": "0530e765070a9b4e27bc985e43068657896868cc",
+  "breadcrumbs": [
+    {
+      "tried": "resume previous app-shell remediation",
+      "found": "requirements moved the Designer shell out of studio-app",
+      "fix": "extracted product modules into studio-designer and restored studio-app Runtime-only"
+    },
+    {
+      "tried": "compose Project route",
+      "found": "FocusViewModel needs durable LocalStoreDesignerPersistence and async open",
+      "fix": "Designer shell opens or durably seeds a project through the host persistence adapter"
+    }
+  ]
+}

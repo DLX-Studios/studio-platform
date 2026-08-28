@@ -1,4 +1,4 @@
-//! Wayland-only native shell and platform feasibility probe.
+//! Wayland-only Runtime guest host and platform feasibility probe.
 
 use std::ffi::OsStr;
 
@@ -7,8 +7,8 @@ use gpui_component::{Root, Theme, ThemeMode};
 use gpui_component_assets::Assets;
 use gpui_platform::application;
 use studio_app::{
-    bootstrap::{NativeProductBootstrap, NativeProductShell},
     cli::LaunchRequest,
+    foundation::FoundationGallery,
     host::{HostConfig, StudioHost, WaylandAvailability},
     plugin_surface::PluginSurface,
 };
@@ -18,11 +18,7 @@ fn has_wayland_endpoint(display: Option<&OsStr>, socket: Option<&OsStr>) -> bool
     display.is_some_and(|value| !value.is_empty()) || socket.is_some_and(|value| !value.is_empty())
 }
 
-fn run(
-    application: Application,
-    bootstrap: NativeProductBootstrap,
-    plugin_surface: Option<PluginSurface>,
-) {
+fn run(application: Application, plugin_surface: Option<PluginSurface>) {
     application.run(move |cx: &mut App| {
         gpui_component::init(cx);
         Theme::change(ThemeMode::Light, None, cx);
@@ -35,7 +31,11 @@ fn run(
             move |window, cx| {
                 let reduced_motion = cx.reduce_motion();
                 let shell = cx.new(|cx| {
-                    NativeProductShell::new(bootstrap, plugin_surface, reduced_motion, window, cx)
+                    if let Some(surface) = plugin_surface {
+                        FoundationGallery::with_plugin_surface(reduced_motion, surface, window, cx)
+                    } else {
+                        FoundationGallery::new(reduced_motion, window, cx)
+                    }
                 });
                 cx.new(|cx| Root::new(shell, window, cx).bordered(false))
             },
@@ -56,15 +56,11 @@ fn main() {
         std::process::exit(2);
     };
 
-    let bootstrap =
-        match NativeProductBootstrap::open(NativeProductBootstrap::default_data_directory()) {
-            Ok(bootstrap) => bootstrap,
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        };
     let arguments = std::env::args_os().collect::<Vec<_>>();
+    if arguments.len() == 1 {
+        eprintln!("usage: studio-app (--bundle <absolute-path> | --dev <local-path>)");
+        std::process::exit(2);
+    }
     let plugin_surface = if arguments.len() == 1 {
         None
     } else {
@@ -89,7 +85,7 @@ fn main() {
             }
         }
     };
-    run(application().with_assets(Assets), bootstrap, plugin_surface);
+    run(application().with_assets(Assets), plugin_surface);
 }
 
 #[cfg(test)]

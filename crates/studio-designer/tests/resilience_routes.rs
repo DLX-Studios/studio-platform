@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use studio_app::resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute};
+use studio_designer::resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute};
 
 #[test]
 fn dashboard_centers_are_reachable_without_opening_a_project() {

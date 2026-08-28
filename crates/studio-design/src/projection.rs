@@ -23,6 +23,7 @@ use studio_protocol::{
     GuestMessage, MountTree, ProtocolError, ProtocolLimits, UiNode, validate_guest_message,
 };
 
+use crate::manipulation::CANVAS_RECT_PROPERTY;
 use crate::model::{
     ColorValue, DesignNode, DesignNodeSource, LayoutProperties, Length, LengthUnit, LibraryAssetId,
     NodeId, Paint, PropertyValue, ResponsiveVariantId, RevisionId, StudioDesign,
@@ -416,6 +417,13 @@ fn project_node(
     };
     let mut props = BTreeMap::new();
     for (property, value) in &node.properties {
+        // Canvas geometry is Designer metadata consumed by the manipulation
+        // algebra; it is not a guest-facing protocol property. Keeping it in
+        // the source snapshot while omitting it here lets persisted Focus
+        // documents remain valid under the closed Runtime property contract.
+        if property == CANVAS_RECT_PROPERTY {
+            continue;
+        }
         match property_value(design, node, property, value, library, revision_id) {
             Ok(value) => {
                 props.insert(property.clone(), value);
@@ -444,6 +452,9 @@ fn project_node(
         && let Some(override_value) = node.responsive_overrides.get(variant_id)
     {
         for (property, value) in &override_value.properties {
+            if property == CANVAS_RECT_PROPERTY {
+                continue;
+            }
             match property_value(design, node, property, value, library, revision_id) {
                 Ok(value) => {
                     props.insert(property.clone(), value);
