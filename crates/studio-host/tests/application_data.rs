@@ -77,6 +77,13 @@ fn id(value: &str) -> RecordId {
     RecordId::new(value).expect("fixture id is valid")
 }
 
+fn p95_ms(samples: &mut [f64]) -> f64 {
+    assert!(!samples.is_empty(), "timing samples are required");
+    samples.sort_by(|a, b| a.partial_cmp(b).expect("finite duration"));
+    let rank = samples.len().saturating_mul(95).div_ceil(100);
+    samples[rank.saturating_sub(1).min(samples.len() - 1)]
+}
+
 #[tokio::test]
 async fn namespaces_isolate_apps_and_forbidden_guest_paths_fail_closed() {
     let directory = tempdir().expect("temporary directory is created");
@@ -569,17 +576,7 @@ async fn cross_principal_denial_is_deterministic_and_diagnostics_are_safe() {
 
 #[tokio::test]
 async fn throughput_smoke_evidence_is_conservative_and_reported() {
-    use std::time::{Duration, Instant};
-
-    fn percentile(sorted_ms: &mut [f64], p: f64) -> f64 {
-        if sorted_ms.is_empty() {
-            return 0.0;
-        }
-        sorted_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let rank = (p / 100.0 * sorted_ms.len() as f64).ceil() as usize;
-        let idx = rank.saturating_sub(1).min(sorted_ms.len() - 1);
-        sorted_ms[idx]
-    }
+    use std::time::Instant;
 
     let directory = tempdir().expect("temporary directory is created");
     let store = EmbeddedLocalStore::open(directory.path(), Durability::Every)
@@ -733,30 +730,22 @@ async fn throughput_smoke_evidence_is_conservative_and_reported() {
             + list_ms.len()
             + delete_ms.len();
 
-        let mut s = select_ms.clone();
-        let mut c = create_ms.clone();
-        let mut m = merge_ms.clone();
-        let mut p = patch_ms.clone();
-        let mut l = list_ms.clone();
-        let mut d = delete_ms.clone();
-        let p95_select = percentile(&mut s, 95.0);
-        let p95_create = percentile(&mut c, 95.0);
-        let p95_merge = percentile(&mut m, 95.0);
-        let p95_patch = percentile(&mut p, 95.0);
-        let p95_list = percentile(&mut l, 95.0);
-        let p95_delete = percentile(&mut d, 95.0);
-        let ops_per_sec = total_ops as f64 / total_elapsed.as_secs_f64();
+        let p95_select = p95_ms(&mut select_ms);
+        let p95_create = p95_ms(&mut create_ms);
+        let p95_merge = p95_ms(&mut merge_ms);
+        let p95_patch = p95_ms(&mut patch_ms);
+        let p95_list = p95_ms(&mut list_ms);
+        let p95_delete = p95_ms(&mut delete_ms);
 
         eprintln!(
-            "application-data throughput evidence (Durability::Every, corpus={}, total_ops={}, total_wall_ms={:.1}, ops_per_sec={:.1}): \
+            "application-data throughput evidence (Durability::Every, corpus={}, total_ops={}, total_wall_ms={:.1}): \
              select p95={:.2}ms (n={}), create p95={:.2}ms (n={}), update_merge p95={:.2}ms (n={}), \
              update_patch p95={:.2}ms (n={}), delete p95={:.2}ms (n={}), list p95={:.2}ms (n={}) | \
-             preliminary targets (STUDIO-BENCH-1, 1k records): select<=10ms create/update/delete<=25ms list<=75ms | \
-             smoke thresholds (conservative, CI-safe): select<=200ms create/update/delete<=500ms list<=1000ms total_wall<=30000ms",
+             original qualification targets (STUDIO-BENCH-1, 1k records): select<=10ms create/update/delete<=25ms list<=75ms | \
+             timing is informational smoke evidence only",
             corpus_size,
             total_ops,
             total_elapsed.as_secs_f64() * 1000.0,
-            ops_per_sec,
             p95_select,
             select_ms.len(),
             p95_create,
@@ -771,47 +760,310 @@ async fn throughput_smoke_evidence_is_conservative_and_reported() {
             list_ms.len(),
         );
 
-        const SMOKE_SELECT_P95_MS: f64 = 200.0;
-        const SMOKE_WRITE_P95_MS: f64 = 500.0;
-        const SMOKE_LIST_P95_MS: f64 = 1000.0;
-        const SMOKE_TOTAL_WALL: Duration = Duration::from_secs(30);
-
-        assert!(
-            p95_select <= SMOKE_SELECT_P95_MS,
-            "select p95 {p95_select:.2}ms exceeds conservative smoke threshold {SMOKE_SELECT_P95_MS}ms"
-        );
-        assert!(
-            p95_create <= SMOKE_WRITE_P95_MS,
-            "create p95 {p95_create:.2}ms exceeds conservative threshold {SMOKE_WRITE_P95_MS}ms"
-        );
-        assert!(
-            p95_merge <= SMOKE_WRITE_P95_MS,
-            "update_merge p95 {p95_merge:.2}ms exceeds threshold"
-        );
-        assert!(
-            p95_patch <= SMOKE_WRITE_P95_MS,
-            "update_patch p95 {p95_patch:.2}ms exceeds threshold"
-        );
-        assert!(
-            p95_delete <= SMOKE_WRITE_P95_MS,
-            "delete p95 {p95_delete:.2}ms exceeds threshold"
-        );
-        assert!(
-            p95_list <= SMOKE_LIST_P95_MS,
-            "list p95 {p95_list:.2}ms exceeds threshold {SMOKE_LIST_P95_MS}ms"
-        );
-        assert!(
-            total_elapsed <= SMOKE_TOTAL_WALL,
-            "total wall {:?} exceeds smoke budget {:?}",
-            total_elapsed,
-            SMOKE_TOTAL_WALL
-        );
-
         let remaining = data.list("bench").await.expect("final list");
         assert_eq!(
             remaining.len(),
             corpus_size - 50,
             "delete count reflected in final list"
+        );
+    }
+
+    host.into_inner().close().await.expect("store closes");
+}
+
+/// The only in-repo path that can claim STUDIO-BENCH-1 qualification.
+///
+/// This test is intentionally ignored and must be run as a serialized test process with explicit
+/// baseline designation and hardware metadata, for example:
+///
+/// ```text
+/// STUDIO_BENCH_PROFILE=STUDIO-BENCH-1 \
+/// STUDIO_BENCH_MACHINE='Intel N100 / 8 GiB / Intel UHD / Weston' \
+/// STUDIO_BENCH_STORAGE='NVMe' \
+/// STUDIO_BENCH_DURABILITY=Every \
+/// CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/home/sir/.cache/studio-platform-target \
+/// cargo test --locked -p studio-host --test application_data studio_bench_1_qualification \
+/// -- --ignored --exact --test-threads=1 --nocapture
+/// ```
+///
+/// A generic host cannot silently become the baseline: the test refuses to start without the
+/// explicit profile gate and all required metadata.
+#[tokio::test]
+#[ignore = "explicit STUDIO-BENCH-1 qualification; requires serialized invocation and metadata"]
+#[allow(clippy::too_many_lines)]
+async fn studio_bench_1_qualification() {
+    use std::{env, time::Instant};
+
+    const PROFILE_ENV: &str = "STUDIO_BENCH_PROFILE";
+    const MACHINE_ENV: &str = "STUDIO_BENCH_MACHINE";
+    const STORAGE_ENV: &str = "STUDIO_BENCH_STORAGE";
+    const DURABILITY_ENV: &str = "STUDIO_BENCH_DURABILITY";
+    const PROFILE: &str = "STUDIO-BENCH-1";
+    const CORPUS_SIZE: usize = 1_000;
+    const SAMPLES_PER_VERB: usize = 1_000;
+    const SELECT_P95_TARGET_MS: f64 = 10.0;
+    const WRITE_P95_TARGET_MS: f64 = 25.0;
+    const LIST_P95_TARGET_MS: f64 = 75.0;
+
+    let profile = env::var(PROFILE_ENV)
+        .unwrap_or_else(|_| panic!("{PROFILE_ENV}={PROFILE:?} is required for qualification"));
+    assert_eq!(
+        profile, PROFILE,
+        "qualification refuses non-baseline profile {profile:?}"
+    );
+    let machine = env::var(MACHINE_ENV)
+        .unwrap_or_else(|_| panic!("{MACHINE_ENV} metadata is required for qualification"));
+    let storage = env::var(STORAGE_ENV)
+        .unwrap_or_else(|_| panic!("{STORAGE_ENV} metadata is required for qualification"));
+    let durability = env::var(DURABILITY_ENV)
+        .unwrap_or_else(|_| panic!("{DURABILITY_ENV} metadata is required for qualification"));
+    assert_eq!(
+        durability, "Every",
+        "qualification target requires Durability::Every, got {durability:?}"
+    );
+    assert!(
+        !machine.trim().is_empty(),
+        "{MACHINE_ENV} metadata cannot be empty"
+    );
+    assert!(
+        !storage.trim().is_empty(),
+        "{STORAGE_ENV} metadata cannot be empty"
+    );
+
+    let directory = tempdir().expect("temporary directory is created");
+    let store = EmbeddedLocalStore::open(directory.path(), Durability::Every)
+        .await
+        .expect("store opens");
+    let host = ApplicationDataHost::new(store);
+
+    {
+        let app = principal("bench.example", "bench-key", "throughput-app");
+        let bench_schema = RecordSchema::new(
+            1,
+            BTreeMap::from([
+                (
+                    "name".to_owned(),
+                    FieldDeclaration::required(FieldType::String),
+                ),
+                (
+                    "price_cents".to_owned(),
+                    FieldDeclaration::required(FieldType::Integer),
+                ),
+                (
+                    "available".to_owned(),
+                    FieldDeclaration::required(FieldType::Boolean),
+                ),
+            ]),
+        )
+        .expect("bench schema is valid");
+        let bench_decl =
+            CollectionDeclaration::new("bench", bench_schema).expect("bench collection is valid");
+        let data = host.bind(&app, [bench_decl]).expect("bench binds");
+
+        // Warm up the engine before recording the required 1,000 samples per verb.
+        for i in 0..5 {
+            data.create(
+                "bench",
+                id(&format!("warm-{i}")),
+                json!({"name": "Warm", "price_cents": 100, "available": true}),
+            )
+            .await
+            .expect("warmup create");
+        }
+        for i in 0..5 {
+            data.select("bench", id(&format!("warm-{i}")))
+                .await
+                .expect("warmup select");
+        }
+        for _ in 0..5 {
+            data.list("bench").await.expect("warmup list");
+        }
+        for i in 0..5 {
+            data.update_merge(
+                "bench",
+                id(&format!("warm-{i}")),
+                json!({"price_cents": 101}),
+            )
+            .await
+            .expect("warmup merge");
+            data.update_patch(
+                "bench",
+                id(&format!("warm-{i}")),
+                vec![PatchOperation::Set {
+                    field: "available".to_owned(),
+                    value: json!(false),
+                }],
+            )
+            .await
+            .expect("warmup patch");
+        }
+        for i in 0..5 {
+            data.delete("bench", id(&format!("warm-{i}")))
+                .await
+                .expect("warmup cleanup");
+        }
+
+        let mut create_ms = Vec::with_capacity(SAMPLES_PER_VERB);
+        for i in 0..CORPUS_SIZE {
+            let start = Instant::now();
+            data.create(
+                "bench",
+                id(&format!("item-{i:04}")),
+                json!({"name": "Bench Item", "price_cents": 999, "available": true}),
+            )
+            .await
+            .expect("qualification create");
+            create_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        let mut select_ms = Vec::with_capacity(SAMPLES_PER_VERB);
+        for i in 0..SAMPLES_PER_VERB {
+            let start = Instant::now();
+            let record = data
+                .select("bench", id(&format!("item-{i:04}")))
+                .await
+                .expect("qualification select")
+                .expect("qualification record exists");
+            assert_eq!(record.value["name"], "Bench Item");
+            select_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        let mut merge_ms = Vec::with_capacity(SAMPLES_PER_VERB);
+        for i in 0..SAMPLES_PER_VERB {
+            let start = Instant::now();
+            data.update_merge(
+                "bench",
+                id(&format!("item-{i:04}")),
+                json!({"price_cents": 1234}),
+            )
+            .await
+            .expect("qualification update_merge");
+            merge_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        let mut patch_ms = Vec::with_capacity(SAMPLES_PER_VERB);
+        for i in 0..SAMPLES_PER_VERB {
+            let start = Instant::now();
+            data.update_patch(
+                "bench",
+                id(&format!("item-{i:04}")),
+                vec![PatchOperation::Set {
+                    field: "available".to_owned(),
+                    value: json!(false),
+                }],
+            )
+            .await
+            .expect("qualification update_patch");
+            patch_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        let mut list_ms = Vec::with_capacity(SAMPLES_PER_VERB);
+        for _ in 0..SAMPLES_PER_VERB {
+            let start = Instant::now();
+            let records = data.list("bench").await.expect("qualification list");
+            assert_eq!(records.len(), CORPUS_SIZE);
+            assert_eq!(
+                records.first().expect("first record").id.as_str(),
+                "item-0000"
+            );
+            assert_eq!(
+                records.last().expect("last record").id.as_str(),
+                "item-0999"
+            );
+            list_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        let mut delete_ms = Vec::with_capacity(SAMPLES_PER_VERB);
+        for i in 0..SAMPLES_PER_VERB {
+            let start = Instant::now();
+            assert!(
+                data.delete("bench", id(&format!("item-{i:04}")))
+                    .await
+                    .expect("qualification delete")
+            );
+            delete_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        for (verb, samples) in [
+            ("create", create_ms.len()),
+            ("select", select_ms.len()),
+            ("update_merge", merge_ms.len()),
+            ("update_patch", patch_ms.len()),
+            ("list", list_ms.len()),
+            ("delete", delete_ms.len()),
+        ] {
+            assert!(
+                samples >= SAMPLES_PER_VERB,
+                "{verb} has {samples} samples; qualification requires at least {SAMPLES_PER_VERB}"
+            );
+        }
+
+        let p95_create = p95_ms(&mut create_ms);
+        let p95_select = p95_ms(&mut select_ms);
+        let p95_merge = p95_ms(&mut merge_ms);
+        let p95_patch = p95_ms(&mut patch_ms);
+        let p95_list = p95_ms(&mut list_ms);
+        let p95_delete = p95_ms(&mut delete_ms);
+        let report = json!({
+            "qualification": PROFILE,
+            "machine": machine,
+            "storage": storage,
+            "durability": durability,
+            "runtime": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
+            "serialization": "--test-threads=1 (required)",
+            "corpus_records": CORPUS_SIZE,
+            "samples_per_verb": {
+                "create": create_ms.len(),
+                "select": select_ms.len(),
+                "update_merge": merge_ms.len(),
+                "update_patch": patch_ms.len(),
+                "list": list_ms.len(),
+                "delete": delete_ms.len(),
+            },
+            "p95_ms": {
+                "create": p95_create,
+                "select": p95_select,
+                "update_merge": p95_merge,
+                "update_patch": p95_patch,
+                "list": p95_list,
+                "delete": p95_delete,
+            },
+            "targets_p95_ms": {
+                "select": SELECT_P95_TARGET_MS,
+                "create": WRITE_P95_TARGET_MS,
+                "update_merge": WRITE_P95_TARGET_MS,
+                "update_patch": WRITE_P95_TARGET_MS,
+                "delete": WRITE_P95_TARGET_MS,
+                "list": LIST_P95_TARGET_MS,
+            },
+        });
+        eprintln!("STUDIO-BENCH-1 qualification report: {report}");
+
+        assert!(
+            p95_select <= SELECT_P95_TARGET_MS,
+            "select p95 {p95_select:.2}ms exceeds original target {SELECT_P95_TARGET_MS}ms"
+        );
+        for (verb, p95) in [
+            ("create", p95_create),
+            ("update_merge", p95_merge),
+            ("update_patch", p95_patch),
+            ("delete", p95_delete),
+        ] {
+            assert!(
+                p95 <= WRITE_P95_TARGET_MS,
+                "{verb} p95 {p95:.2}ms exceeds original target {WRITE_P95_TARGET_MS}ms"
+            );
+        }
+        assert!(
+            p95_list <= LIST_P95_TARGET_MS,
+            "list p95 {p95_list:.2}ms exceeds original target {LIST_P95_TARGET_MS}ms"
+        );
+        assert!(
+            data.list("bench").await.expect("final list").is_empty(),
+            "qualification deletes the complete corpus"
         );
     }
 
