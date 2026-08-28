@@ -5,14 +5,12 @@
 //! renderer/preview caller share. UI/GPUI and Library asset integration are
 //! intentionally narrow: callers pass owned snapshots and receive owned values.
 //!
-//! ## Seams and gaps (tickets 38/48)
+//! ## Seams and gaps (ticket 48)
 //!
-//! - **Ticket 38 (command families II)** is not yet landed on `main`/`tt/38-command-families-ii`.
-//!   This crate therefore implements its own `Command` variants (`CreateCollection`,
-//!   `UpsertBinding`, `UpsertForm`, …) and inverse-command logic. When 38 lands, these
-//!   variants should be re-homed under the 38 command-family registry without changing
-//!   the preview/validation/diagnostics contracts in this module. The session seam
-//!   (`DesignerSession::submit`) is already the correct integration point.
+//! Ticket 38 command families are landed in the shared command registry; content
+//! collection and binding variants below execute through the same
+//! `DesignerSession::submit` seam and retain their preview/validation/
+//! diagnostics contracts.
 //! - **Ticket 48 (Library asset APIs)** is not yet landed. `LibraryAssetId` field kind
 //!   (`ContentFieldKind::Asset`) is reserved for Library collections, but this crate does
 //!   not depend on any 48 Library admission or asset-resolution API. Content collections

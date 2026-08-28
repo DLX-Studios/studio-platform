@@ -639,6 +639,34 @@ fn closed_source_schema_rejects_unknown_fields() {
         .expect("design is an object")
         .insert("future_field".to_owned(), serde_json::json!(true));
     assert!(serde_json::from_value::<StudioDesign>(encoded).is_err());
+
+    let mut nested_design = serde_json::to_value(seed_design()).expect("design serializes");
+    nested_design["nodes"]["item"]["future_field"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<StudioDesign>(nested_design).is_err());
+
+    let command = Command::RenameNode {
+        node_id: node_id("item"),
+        name: "Renamed".to_owned(),
+    };
+    let mut encoded_command = serde_json::to_value(command).expect("command serializes");
+    encoded_command
+        .as_object_mut()
+        .expect("command is an object")
+        .insert("future_field".to_owned(), serde_json::json!(true));
+    assert!(serde_json::from_value::<Command>(encoded_command).is_err());
+
+    let mut encoded_batch = serde_json::to_value(batch(
+        RevisionId::INITIAL,
+        "closed-schema",
+        "closed-schema",
+        vec![Command::RenameNode {
+            node_id: node_id("item"),
+            name: "Renamed".to_owned(),
+        }],
+    ))
+    .expect("batch serializes");
+    encoded_batch["commands"][0]["future_field"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CommandBatch>(encoded_batch).is_err());
 }
 
 #[test]

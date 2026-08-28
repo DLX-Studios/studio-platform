@@ -8081,6 +8081,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "studio-design",
  "studio-package",
  "studio-script",
  "walkdir",
