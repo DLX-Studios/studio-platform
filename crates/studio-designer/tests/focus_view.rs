@@ -194,3 +194,62 @@ fn ticket_40_controls_submit_through_the_session_authority() {
         );
     }
 }
+
+#[test]
+fn delete_retains_a_tombstone_selection_for_restore_and_refreshes_persistence() {
+    let persistence = InMemoryDesignerPersistence::default();
+    let project_id = ProjectId::new("focus-project").unwrap();
+    let session = block_on(DefaultDesignerSession::create(
+        persistence.clone(),
+        seed(),
+        OperationId::new("create-delete-restore").unwrap(),
+        actor(),
+        UndoGroupId::new("create-delete-restore").unwrap(),
+    ))
+    .unwrap();
+    let mut model = FocusViewModel::from_session(session, None);
+    let node_id = studio_design::NodeId::new("headline").unwrap();
+    model.select(&node_id).unwrap();
+
+    let deleted = block_on(model.delete_selected(
+        OperationId::new("delete-headline").unwrap(),
+        actor(),
+        UndoGroupId::new("delete-headline").unwrap(),
+    ));
+    assert!(matches!(
+        deleted,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    assert_eq!(model.snapshot().selected_node_id, Some(node_id.clone()));
+    assert!(model.snapshot().selected_node.is_none());
+    assert_eq!(model.selected_tombstones(), vec![node_id.clone()]);
+    let durable_after_delete = persistence.transaction(&project_id).unwrap();
+    assert!(
+        durable_after_delete
+            .state
+            .current
+            .tombstones
+            .contains_key(&node_id)
+    );
+
+    let restored = block_on(model.restore_selected(
+        OperationId::new("restore-headline").unwrap(),
+        actor(),
+        UndoGroupId::new("restore-headline").unwrap(),
+    ));
+    assert!(matches!(
+        restored,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    assert_eq!(model.snapshot().selected_node_id, Some(node_id.clone()));
+    assert!(model.snapshot().selected_node.is_some());
+    assert!(model.selected_tombstones().is_empty());
+    assert_eq!(model.snapshot().revision_id.get(), 2);
+
+    let reopened = block_on(FocusViewModel::open(persistence, &project_id, None)).unwrap();
+    let reopened_snapshot = reopened.snapshot();
+    assert!(reopened_snapshot.canvas.is_some());
+    assert!(reopened_snapshot.selected_node_id.is_none());
+    assert!(reopened_snapshot.selected_node.is_none());
+    assert!(!reopened.source_snapshot().tombstones.contains_key(&node_id));
+}

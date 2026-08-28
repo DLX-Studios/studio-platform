@@ -523,6 +523,7 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
         actor: Actor,
         undo_group_id: UndoGroupId,
     ) -> CommandOutcome {
+        let selection = self.selection_ids();
         let batch = self.manipulation_batch(
             operation_id,
             actor,
@@ -531,7 +532,15 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
                 delete_batch(context, &design, selection).map_err(|error| (design, error))
             },
         );
-        self.submit_manipulation(batch).await
+        let outcome = self.submit_manipulation(batch).await;
+        if matches!(outcome, CommandOutcome::Accepted(_)) {
+            // The domain session intentionally clears selections that no
+            // longer exist. Re-select only the exact roots represented by
+            // current tombstones so Restore remains an explicit, safe,
+            // session-authorized follow-up rather than an implicit undo.
+            self.retain_tombstone_selection(&selection);
+        }
+        outcome
     }
 
     /// Build and submit a restore operation from the exact session tombstones.
@@ -605,6 +614,65 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
             DesignerQueryResult::Snapshot(snapshot) => snapshot,
             _ => unreachable!("DesignerSession returned the wrong query result"),
         }
+    }
+
+    /// Return the current session selection, including deleted identities.
+    #[must_use]
+    pub fn selection_ids(&self) -> Vec<NodeId> {
+        match self.session.query(DesignerQuery::SessionState) {
+            DesignerQueryResult::SessionState(state) => state.selection.node_ids,
+            _ => unreachable!("DesignerSession returned the wrong query result"),
+        }
+    }
+
+    /// Return selected tombstone roots that can be restored from the current
+    /// durable snapshot.
+    #[must_use]
+    pub fn selected_tombstones(&self) -> Vec<NodeId> {
+        let snapshot = self.source_snapshot();
+        self.selection_ids()
+            .into_iter()
+            .filter_map(|selected| {
+                if snapshot.tombstones.contains_key(&selected) {
+                    Some(selected)
+                } else {
+                    snapshot
+                        .tombstones
+                        .iter()
+                        .find(|(_, tombstone)| tombstone.nodes.contains_key(&selected))
+                        .map(|(root_id, _)| root_id.clone())
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn retain_tombstone_selection(&mut self, candidates: &[NodeId]) {
+        let snapshot = self.source_snapshot();
+        let roots = candidates
+            .iter()
+            .filter_map(|selected| {
+                if snapshot.tombstones.contains_key(selected) {
+                    Some(selected.clone())
+                } else {
+                    snapshot
+                        .tombstones
+                        .iter()
+                        .find(|(_, tombstone)| tombstone.nodes.contains_key(selected))
+                        .map(|(root_id, _)| root_id.clone())
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        self.session.update_context(SessionContextUpdate {
+            selection: Some(SelectionSnapshot {
+                primary: roots.first().cloned(),
+                node_ids: roots,
+            }),
+            ..SessionContextUpdate::default()
+        });
     }
 
     /// Hit-test the current source geometry and return the stable source identity.
@@ -973,7 +1041,13 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             FocusViewState::Conflict(_) => "Edit conflict".to_owned(),
             FocusViewState::PersistenceFailed(_) => "Persistence failed".to_owned(),
         };
-        let can_edit = snapshot.selected_node_id.is_some();
+        let can_edit = snapshot.selected_node_id.is_some() && snapshot.selected_node.is_some();
+        let restore_selection = self
+            .model
+            .as_ref()
+            .map(FocusViewModel::selected_tombstones)
+            .unwrap_or_default();
+        let can_restore = !restore_selection.is_empty();
         let diagnostic_details = match &snapshot.state {
             FocusViewState::ProjectionFailed(diagnostics) => diagnostics
                 .iter()
@@ -1083,6 +1157,14 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     )
                     .child(div().text_sm().child(status))
                     .child(div().text_sm().child("Hierarchy and canvas controls"))
+                    .children(restore_selection.iter().map(|node_id| {
+                        div()
+                            .id(format!("focus-tombstone-{node_id}"))
+                            .role(Role::ListItem)
+                            .aria_label(format!("Deleted layer {node_id}"))
+                            .text_sm()
+                            .child(format!("Deleted layer · {node_id}"))
+                    }))
                     .children(
                         hierarchy
                             .as_ref()
@@ -1183,7 +1265,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                         "focus-restore",
                         "Restore layer",
                         FocusAction::Restore,
-                        !can_edit,
+                        !can_restore,
                         cx,
                     ))
                     .when(!diagnostic_details.is_empty(), |panel| {
