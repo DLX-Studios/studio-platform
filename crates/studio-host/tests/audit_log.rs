@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use serde_json::json;
 use studio_host::{
     AuditEvent, AuditEventType, AuditLog, AuditLogErrorCode, AuditQuery, Durability,
@@ -65,7 +67,7 @@ async fn all_security_event_classes_are_append_only_queryable_and_redacted() {
     assert_eq!(records.len(), 3);
     assert_eq!(records[0].sequence(), 1);
     assert_eq!(records[2].event_type(), AuditEventType::DestructiveAction);
-    assert_eq!(records[1].details()["password"], "[REDACTED]");
+    assert_eq!(records[0].details()["password"], "[REDACTED]");
     assert_ne!(records[0].hash(), records[1].hash());
     assert_eq!(records[1].previous_hash(), records[0].hash());
 

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use serde_json::json;
 use studio_host::{
     ManualWorkflowClock, MemoryWorkflowAuditLog, MemoryWorkflowRuntime, MissedFirePolicy,
@@ -25,9 +27,20 @@ fn interval_drift_uses_declared_missed_fire_bound_and_absolute_boundaries() {
     assert_eq!(engine.runtime().state()["count"], 2);
 
     clock.set(500);
-    assert!(engine.tick(&clock, &mut source).expect("backward tick succeeds").is_empty());
+    assert!(
+        engine
+            .tick(&clock, &mut source)
+            .expect("backward tick succeeds")
+            .is_empty()
+    );
     clock.set(650);
-    assert_eq!(engine.tick(&clock, &mut source).expect("tick succeeds").len(), 1);
+    assert_eq!(
+        engine
+            .tick(&clock, &mut source)
+            .expect("tick succeeds")
+            .len(),
+        1
+    );
     assert_eq!(engine.runtime().state()["count"], 3);
 }
 
@@ -45,12 +58,8 @@ fn event_trigger_delivers_only_validated_trigger_payload_to_plugin() {
     )
     .expect("definition is valid");
     let runtime = MemoryWorkflowRuntime::new(json!({})).expect("state is valid");
-    let mut engine = WorkflowEngine::new(
-        [definition],
-        runtime,
-        MemoryWorkflowAuditLog::new(),
-    )
-    .expect("engine is valid");
+    let mut engine = WorkflowEngine::new([definition], runtime, MemoryWorkflowAuditLog::new())
+        .expect("engine is valid");
     let event = WorkflowEvent::new(
         WorkflowEventSourceKind::Webhook,
         "report.ready",
@@ -61,7 +70,10 @@ fn event_trigger_delivers_only_validated_trigger_payload_to_plugin() {
     let reports = engine.run_due(42).expect("run succeeds");
     assert_eq!(reports[0].status(), WorkflowRunStatus::Succeeded);
     assert_eq!(engine.runtime().plugin_events()[0].plugin(), "reports");
-    assert_eq!(engine.runtime().plugin_events()[0].payload(), &json!({ "report_id": "r-7" }));
+    assert_eq!(
+        engine.runtime().plugin_events()[0].payload(),
+        &json!({ "report_id": "r-7" })
+    );
 }
 
 #[test]
@@ -75,20 +87,20 @@ fn rejected_commit_isolated_and_retried_without_partial_state() {
     .expect("definition is valid");
     let mut runtime = MemoryWorkflowRuntime::new(json!({ "count": 0 })).expect("state is valid");
     runtime.reject_next_commits(1);
-    let mut engine = WorkflowEngine::new(
-        [definition],
-        runtime,
-        MemoryWorkflowAuditLog::new(),
-    )
-    .expect("engine is valid");
+    let mut engine = WorkflowEngine::new([definition], runtime, MemoryWorkflowAuditLog::new())
+        .expect("engine is valid");
     let mut clock = ManualWorkflowClock::new(100);
     let mut source = QueueWorkflowEventSource::new();
 
-    let failed = engine.tick(&clock, &mut source).expect("failed tick is reported");
+    let failed = engine
+        .tick(&clock, &mut source)
+        .expect("failed tick is reported");
     assert_eq!(failed[0].status(), WorkflowRunStatus::RetryScheduled);
     assert_eq!(engine.runtime().state()["count"], 0);
     clock.set(110);
-    let retried = engine.tick(&clock, &mut source).expect("retry tick succeeds");
+    let retried = engine
+        .tick(&clock, &mut source)
+        .expect("retry tick succeeds");
     assert_eq!(retried[0].status(), WorkflowRunStatus::Succeeded);
     assert_eq!(engine.runtime().state()["count"], 1);
     assert_eq!(engine.audit().entries().len(), 2);
@@ -105,12 +117,8 @@ fn skipped_missed_fixed_time_is_audited_without_running_actions() {
     )
     .expect("definition is valid");
     let runtime = MemoryWorkflowRuntime::new(json!({ "ran": false })).expect("state is valid");
-    let mut engine = WorkflowEngine::new(
-        [definition],
-        runtime,
-        MemoryWorkflowAuditLog::new(),
-    )
-    .expect("engine is valid");
+    let mut engine = WorkflowEngine::new([definition], runtime, MemoryWorkflowAuditLog::new())
+        .expect("engine is valid");
     let mut clock = ManualWorkflowClock::new(101);
     let mut source = QueueWorkflowEventSource::new();
     let reports = engine.tick(&clock, &mut source).expect("tick succeeds");
@@ -118,5 +126,10 @@ fn skipped_missed_fixed_time_is_audited_without_running_actions() {
     assert_eq!(engine.runtime().state()["ran"], false);
     assert_eq!(engine.audit().entries()[0].actor(), "workflow:stale-report");
     clock.set(1000);
-    assert!(engine.tick(&clock, &mut source).expect("one-shot stays complete").is_empty());
+    assert!(
+        engine
+            .tick(&clock, &mut source)
+            .expect("one-shot stays complete")
+            .is_empty()
+    );
 }

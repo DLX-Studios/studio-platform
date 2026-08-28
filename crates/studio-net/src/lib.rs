@@ -38,9 +38,9 @@ pub mod transport;
 pub mod webhook;
 pub mod websocket;
 
-pub use error::{BrokerError, BrokerErrorCode};
 pub use broker::{RestBroker, RestBrokerConfig};
-pub use guest::{GuestRestApi, StreamHandle, StreamEvent, TypedResponse};
+pub use error::{BrokerError, BrokerErrorCode};
+pub use guest::{GuestRestApi, StreamEvent, StreamHandle, TypedResponse};
 pub use transport::{
     HttpsClient, IncomingResponse, OutgoingRequest, ProductionHttpTransport, TransportConfigError,
     TransportError, TransportLimits,

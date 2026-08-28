@@ -1,4 +1,9 @@
 #![allow(missing_docs)]
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::manual_let_else,
+    clippy::match_wild_err_arm
+)]
 
 use std::{
     process::Command as ProcessCommand,

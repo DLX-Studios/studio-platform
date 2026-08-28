@@ -1,5 +1,16 @@
 //! Closed guest contract for host-owned application data.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::manual_async_fn,
+    clippy::too_many_lines
+)]
+
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -14,9 +25,7 @@ use sha2::{Digest, Sha256};
 use studio_security::PluginPrincipal;
 use tokio::sync::Mutex;
 
-use crate::{
-    LocalStore, LocalStoreDiagnosticCode, StoreBatch, StoreBatchEntry, SurrealQueryStore,
-};
+use crate::{LocalStore, LocalStoreDiagnosticCode, StoreBatch, StoreBatchEntry, SurrealQueryStore};
 
 /// Current derivation version for application data namespaces.
 pub const APPLICATION_DATA_NAMESPACE_VERSION: u16 = 1;
@@ -414,7 +423,7 @@ impl SurrealQueryLimits {
         })
     }
 
-    const fn is_valid(self) -> bool {
+    fn is_valid(self) -> bool {
         self.max_query_bytes > 0
             && self.max_result_bytes > 0
             && !self.max_duration.is_zero()
@@ -492,7 +501,7 @@ impl SurrealQueryRequest {
 
     /// Attach a source location for diagnostics.
     #[must_use]
-    pub const fn with_source(mut self, source: QuerySource) -> Self {
+    pub fn with_source(mut self, source: QuerySource) -> Self {
         self.source = QuerySource {
             line: source.line.max(1),
             column: source.column.max(1),
@@ -671,7 +680,9 @@ impl fmt::Display for ApplicationDataError {
             ApplicationDataErrorCode::SchemaVersionMismatch => {
                 "application data schema migration required"
             }
-            ApplicationDataErrorCode::AuthorizationDenied => "application data authorization denied",
+            ApplicationDataErrorCode::AuthorizationDenied => {
+                "application data authorization denied"
+            }
         })
     }
 }
@@ -1123,25 +1134,28 @@ impl<S: SurrealQueryStore> ApplicationDataHandle<'_, S> {
             ));
         }
         validate_parameters(&request.parameters, source)?;
-        let scoped = scope_query(&request.query, self.namespace, &self.collections, &request.parameters)
-            .map_err(|code| SurrealQueryError::new(code, source))?;
+        let scoped = scope_query(
+            &request.query,
+            self.namespace,
+            &self.collections,
+            &request.parameters,
+        )
+        .map_err(|code| SurrealQueryError::new(code, source))?;
         let value = self
             .host
             .store
             .execute_surreal_query(&scoped, request.parameters, limits.max_duration)
             .await
             .map_err(|error| {
-                let code = if error.diagnostic().code() == LocalStoreDiagnosticCode::QueryTimedOut
-                {
+                let code = if error.diagnostic().code() == LocalStoreDiagnosticCode::QueryTimedOut {
                     SurrealQueryErrorCode::TimedOut
                 } else {
                     SurrealQueryErrorCode::ExecutionFailed
                 };
                 SurrealQueryError::new(code, source)
             })?;
-        let bytes = serde_json::to_vec(&value).map_err(|_| {
-            SurrealQueryError::new(SurrealQueryErrorCode::ExecutionFailed, source)
-        })?;
+        let bytes = serde_json::to_vec(&value)
+            .map_err(|_| SurrealQueryError::new(SurrealQueryErrorCode::ExecutionFailed, source))?;
         if bytes.len() > limits.max_result_bytes {
             return Err(SurrealQueryError::new(
                 SurrealQueryErrorCode::ResultTooLarge,
@@ -1441,19 +1455,15 @@ fn validate_parameters(
             source,
         ));
     }
-    let encoded = serde_json::to_vec(parameters).map_err(|_| {
-        SurrealQueryError::new(SurrealQueryErrorCode::QueryInvalid, source)
-    })?;
+    let encoded = serde_json::to_vec(parameters)
+        .map_err(|_| SurrealQueryError::new(SurrealQueryErrorCode::QueryInvalid, source))?;
     if encoded.len() > HOST_MAX_RESULT_BYTES {
         return Err(SurrealQueryError::new(
             SurrealQueryErrorCode::QueryInvalid,
             source,
         ));
     }
-    if parameters
-        .keys()
-        .any(|name| !valid_identifier(name, 64))
-    {
+    if parameters.keys().any(|name| !valid_identifier(name, 64)) {
         return Err(SurrealQueryError::new(
             SurrealQueryErrorCode::QueryInvalid,
             source,
@@ -1473,24 +1483,48 @@ fn scope_query(
         return Err(SurrealQueryErrorCode::QueryInvalid);
     }
     let first = tokens[0].text.to_ascii_lowercase();
-    if !matches!(first.as_str(), "select" | "create" | "update" | "upsert" | "delete") {
+    if !matches!(
+        first.as_str(),
+        "select" | "create" | "update" | "upsert" | "delete"
+    ) {
         return Err(SurrealQueryErrorCode::Forbidden);
     }
-    if first == "delete" && !tokens.iter().any(|token| token.text.eq_ignore_ascii_case("from")) {
+    if first == "delete"
+        && !tokens
+            .iter()
+            .any(|token| token.text.eq_ignore_ascii_case("from"))
+    {
         return Err(SurrealQueryErrorCode::QueryInvalid);
     }
     let forbidden = [
-        "use", "info", "define", "remove", "option", "live", "kill", "sleep", "system",
-        "information_schema", "meta", "auth", "session", "file", "http", "https", "script",
-        "javascript", "js", "function", "fn", "os", "process", "filesystem",
+        "use",
+        "info",
+        "define",
+        "remove",
+        "option",
+        "live",
+        "kill",
+        "sleep",
+        "system",
+        "information_schema",
+        "meta",
+        "auth",
+        "session",
+        "file",
+        "http",
+        "https",
+        "script",
+        "javascript",
+        "js",
+        "function",
+        "fn",
+        "os",
+        "process",
+        "filesystem",
     ];
     for (index, token) in tokens.iter().enumerate() {
         let lower = token.text.to_ascii_lowercase();
-        if token.text == ":"
-            && tokens
-                .get(index + 1)
-                .is_some_and(|next| next.text == ":")
-        {
+        if token.text == ":" && tokens.get(index + 1).is_some_and(|next| next.text == ":") {
             return Err(SurrealQueryErrorCode::Forbidden);
         }
         if !token.quoted && forbidden.contains(&lower.as_str()) {
@@ -1513,7 +1547,11 @@ fn scope_query(
             if token.quoted || !collections.contains_key(token.text) {
                 return Err(SurrealQueryErrorCode::CollectionUndeclared);
             }
-            replacements.push((token.start, token.end, scoped_table_name(namespace, token.text)));
+            replacements.push((
+                token.start,
+                token.end,
+                scoped_table_name(namespace, token.text),
+            ));
             expect_table = false;
             table_list = true;
         } else if table_list && token.text == "," {
@@ -1554,7 +1592,12 @@ fn scope_query(
 }
 
 fn scoped_table_name(namespace: ApplicationDataNamespace, collection: &str) -> String {
-    format!("appdata_v{}_{}_{}", namespace.version, hex_digest(namespace.digest), collection)
+    format!(
+        "appdata_v{}_{}_{}",
+        namespace.version,
+        hex_digest(namespace.digest),
+        collection
+    )
 }
 
 fn hex_digest(digest: [u8; 32]) -> String {

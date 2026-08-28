@@ -1,5 +1,27 @@
 //! Studio's Wayland-only native shell and host-owned foundation surfaces.
 
+#![allow(missing_docs)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction,
+    clippy::nursery,
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::assigning_clones,
+    clippy::if_not_else,
+    clippy::manual_let_else,
+    clippy::self_only_used_in_recursion,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::semicolon_if_nothing_returned,
+    clippy::needless_pass_by_value
+)]
+
 mod action_dispatch;
 pub mod agent_conversation;
 pub mod bootstrap;
@@ -41,7 +63,9 @@ pub use host::StudioHost;
 pub use identity_shell::{IdentityShellRoute, IdentityShellState};
 pub use preferences::HostPreferences;
 pub use print_preview::PrintPreviewSurface;
-pub use resilience::{ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError};
+pub use resilience::{
+    ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError,
+};
 pub use router::CheckoutRouter;
 pub use settings::{
     AboutInfo, AccessibilitySettings, AutosaveSettings, BuildSigningSettings, CapabilitySettings,

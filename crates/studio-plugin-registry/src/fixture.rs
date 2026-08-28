@@ -5,11 +5,11 @@
 use ed25519_dalek::SigningKey;
 
 use crate::descriptor::{
-    ActionContribution, ActionOperation, BrandSlotContribution, CommandContribution, CompatibilityRange,
-    CompositionContribution, CompositionNode, Contributions, DeclaredCapability, HookBudget,
-    HookDeclaration, LifecycleHook, PluginDescriptorV1, PrimitiveInputValue, SelectOption,
-    SettingsField, SettingsFieldType, SettingsGroup, SignedDescriptorEnvelope, TemplateContribution,
-    TemplateScreen, TemplateToken,
+    ActionContribution, ActionOperation, BrandSlotContribution, CommandContribution,
+    CompatibilityRange, CompositionContribution, CompositionNode, Contributions,
+    DeclaredCapability, HookBudget, HookDeclaration, LifecycleHook, PluginDescriptorV1,
+    PrimitiveInputValue, SelectOption, SettingsField, SettingsFieldType, SettingsGroup,
+    SignedDescriptorEnvelope, TemplateContribution, TemplateScreen, TemplateToken,
 };
 use serde_json::json;
 use studio_package::{TrustStore, TrustedPublisherKey};
@@ -305,6 +305,11 @@ pub fn pos_pack_template_descriptor() -> PluginDescriptorV1 {
 }
 
 /// Sign the deterministic template-bearing fixture descriptor.
+///
+/// # Panics
+///
+/// Panics only if the checked-in fixture descriptor cannot be signed with its
+/// deterministic test key.
 #[must_use]
 pub fn pos_pack_template_envelope() -> SignedDescriptorEnvelope {
     SignedDescriptorEnvelope::sign(&pos_pack_template_descriptor(), &pos_pack_seed())

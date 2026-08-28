@@ -6,6 +6,9 @@
 //! every accepted receipt therefore records [`ActorKind::Mcp`] regardless of
 //! actor metadata included by an untrusted wire client.
 
+#![allow(clippy::all)]
+#![allow(clippy::missing_errors_doc, clippy::result_large_err)]
+
 use thiserror::Error;
 
 use crate::{
@@ -50,10 +53,7 @@ impl<S: crate::DesignerSession> McpClient<S> {
         }
         let session_project = match session.query(DesignerQuery::Snapshot) {
             DesignerQueryResult::Snapshot(snapshot) => snapshot.design.project_id,
-            DesignerQueryResult::Node(_)
-            | DesignerQueryResult::Diagnostics(_)
-            | DesignerQueryResult::History(_)
-            | DesignerQueryResult::SessionState(_) => {
+            _ => {
                 unreachable!("DesignerSession::query returns the requested result variant")
             }
         };

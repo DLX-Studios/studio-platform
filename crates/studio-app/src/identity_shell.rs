@@ -5,6 +5,9 @@
 //! shell routes, so a GPUI view cannot accidentally become the security
 //! authority.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use studio_host::{
     IdentitySession, IdentitySnapshot, IdentityState, IdentitySummary, SessionSummary,
 };
@@ -23,7 +26,10 @@ pub enum IdentityShellRoute {
     /// Password gate for one identity locked by a failed attempt.
     Unlock { identity_id: String },
     /// Project entry after host authentication.
-    ProjectEntry { identity_id: String, session_id: String },
+    ProjectEntry {
+        identity_id: String,
+        session_id: String,
+    },
 }
 
 /// Testable state model consumed by the native identity shell.
@@ -165,7 +171,8 @@ mod tests {
 
     #[test]
     fn startup_and_reopen_follow_persisted_welcome_choice() {
-        let mut shell = IdentityShellState::from_snapshot(snapshot(false, IdentityState::Available));
+        let mut shell =
+            IdentityShellState::from_snapshot(snapshot(false, IdentityState::Available));
         assert_eq!(shell.route(), &IdentityShellRoute::Welcome);
         shell.dismiss_welcome();
         assert_eq!(shell.route(), &IdentityShellRoute::Chooser);

@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![allow(clippy::default_trait_access)]
 
 use serde_json::json;
 use studio_net::declaration::{
@@ -9,18 +10,27 @@ use studio_package::{
     ProviderRegistry, Publisher, SecretDeclaration,
 };
 
-fn manifest(integrations: Vec<IntegrationReference>, routes: Vec<RouteGroupDeclaration>) -> ManifestV1 {
+fn manifest(
+    integrations: Vec<IntegrationReference>,
+    routes: Vec<RouteGroupDeclaration>,
+) -> ManifestV1 {
     ManifestV1 {
         schema_version: 1,
         id: "com.example.provider-admission".to_owned(),
         name: "Provider admission fixture".to_owned(),
         version: "0.1.0".to_owned(),
-        publisher: Publisher { id: "example".to_owned(), key_id: "fixture".to_owned() },
+        publisher: Publisher {
+            id: "example".to_owned(),
+            key_id: "fixture".to_owned(),
+        },
         entry: "module.wasm".to_owned(),
         sdk_version: "^0.1.0".to_owned(),
         protocol_version: 1,
         capabilities: vec![Capability::DataSurrealQuery],
-        limits: BundleLimits { memory_mib: 16, event_fuel: 1_000_000 },
+        limits: BundleLimits {
+            memory_mib: 16,
+            event_fuel: 1_000_000,
+        },
         assets: Vec::new(),
         secrets: vec![SecretDeclaration {
             name: "github.oauth.client_secret".to_owned(),
@@ -43,7 +53,9 @@ fn github_route(id: &str, path: &str) -> RouteGroupDeclaration {
             "x-github-api-version".to_owned(),
             "user-agent".to_owned(),
         ],
-        credential: CredentialSource::OauthProviderSession { provider: "github".to_owned() },
+        credential: CredentialSource::OauthProviderSession {
+            provider: "github".to_owned(),
+        },
         request_schema: None,
         response_schema: None,
         streaming: None,
@@ -60,13 +72,19 @@ fn ai_route(streaming: bool) -> RouteGroupDeclaration {
         }
         .to_owned(),
         origins: vec!["https://api.openai.com".to_owned()],
-        methods: vec![if streaming { HttpMethod::Get } else { HttpMethod::Post }],
-        paths: vec![if streaming {
-            "/v1/chat/completions/stream"
+        methods: vec![if streaming {
+            HttpMethod::Get
         } else {
-            "/v1/chat/completions"
-        }
-        .to_owned()],
+            HttpMethod::Post
+        }],
+        paths: vec![
+            if streaming {
+                "/v1/chat/completions/stream"
+            } else {
+                "/v1/chat/completions"
+            }
+            .to_owned(),
+        ],
         allowed_headers: if streaming {
             vec!["accept".to_owned()]
         } else {
@@ -132,7 +150,10 @@ fn ai_fixture_resolves_dynamic_origin_and_secret_route_policy() {
         .admit(&package, &Default::default())
         .expect("maintained AI provider admits fixture");
     assert_eq!(plan.providers()[0].id, "ai");
-    assert_eq!(plan.providers()[0].secrets, vec!["openai.api_key".to_owned()]);
+    assert_eq!(
+        plan.providers()[0].secrets,
+        vec!["openai.api_key".to_owned()]
+    );
     assert_eq!(plan.route_groups().len(), 2);
 }
 
@@ -157,19 +178,42 @@ fn unknown_revoked_outdated_and_incompatible_descriptors_fail_closed() {
     let outdated = registry
         .resolve("github", "9.0.0")
         .expect_err("unknown version must fail closed");
-    assert_eq!(outdated.code(), ProviderAdmissionErrorCode::OutdatedProvider);
+    assert_eq!(
+        outdated.code(),
+        ProviderAdmissionErrorCode::OutdatedProvider
+    );
 
     let mut revoked_registry = registry.clone();
     revoked_registry
-        .set_state("github", "1.0.0", studio_package::ProviderDescriptorState::Revoked)
+        .set_state(
+            "github",
+            "1.0.0",
+            studio_package::ProviderDescriptorState::Revoked,
+        )
         .expect("fixture descriptor exists");
-    assert_eq!(revoked_registry.admit(&package, &Default::default()).unwrap_err().code(), ProviderAdmissionErrorCode::RevokedProvider);
+    assert_eq!(
+        revoked_registry
+            .admit(&package, &Default::default())
+            .unwrap_err()
+            .code(),
+        ProviderAdmissionErrorCode::RevokedProvider
+    );
 
     let mut incompatible_registry = ProviderRegistry::maintained();
     incompatible_registry
-        .set_state("github", "1.0.0", studio_package::ProviderDescriptorState::Incompatible)
+        .set_state(
+            "github",
+            "1.0.0",
+            studio_package::ProviderDescriptorState::Incompatible,
+        )
         .expect("fixture descriptor exists");
-    assert_eq!(incompatible_registry.admit(&package, &Default::default()).unwrap_err().code(), ProviderAdmissionErrorCode::IncompatibleProvider);
+    assert_eq!(
+        incompatible_registry
+            .admit(&package, &Default::default())
+            .unwrap_err()
+            .code(),
+        ProviderAdmissionErrorCode::IncompatibleProvider
+    );
 }
 
 #[test]

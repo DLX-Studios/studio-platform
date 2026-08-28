@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::env;
 
 use studio_language_server::{LanguageServer, Workspace};

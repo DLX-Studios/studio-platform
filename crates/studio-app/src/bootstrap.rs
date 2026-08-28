@@ -5,10 +5,17 @@
 //! first-launch, remembered-session, offline, and recovery behavior can be
 //! tested without starting a window.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use std::{path::PathBuf, sync::Arc};
 
-use gpui::{Context, Entity, IntoElement, ParentElement, Render, Window, div};
-use gpui_component::button::{Button, ButtonVariants};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
+    Window, div,
+};
+use gpui_component::button::Button;
 use serde::{Serialize, de::DeserializeOwned};
 use studio_host::{
     Durability, EmbeddedLocalStore, IdentityError, IdentityService, IdentitySession,
@@ -16,19 +23,21 @@ use studio_host::{
 };
 use studio_security::OsSessionCredentialStore;
 
-use crate::{
-    FoundationGallery, IdentityShellRoute, IdentityShellState, PluginSurface, SettingsController,
-    SettingsError, SettingsPersistence,
-};
 use crate::connection::{
     CachedProject, ConnectionIndicator, ConnectionState, SyncCoordinator, SyncReceipt, SyncWorker,
     SyncWorkerError, SyncWorkerErrorCode,
 };
+use crate::foundation::FoundationGallery;
+use crate::plugin_surface::PluginSurface;
 use crate::project_dashboard::{
-    DashboardPersistence as DashboardPersistenceTrait, DashboardPersistenceError,
-    DashboardPersistenceErrorCode, DashboardError, DashboardState, ProjectDashboard,
+    DashboardError, DashboardPersistence as DashboardPersistenceTrait, DashboardPersistenceError,
+    DashboardPersistenceErrorCode, DashboardState, ProjectDashboard,
 };
 use crate::settings::{GlobalSettings, ProjectSettings};
+use crate::{
+    IdentityShellRoute, IdentityShellState, SettingsController, SettingsError, SettingsErrorCode,
+    SettingsPersistence,
+};
 
 const DASHBOARD_BATCH_PREFIX: &str = "studio-dashboard-v1-";
 const SETTINGS_GLOBAL_BATCH: &str = "studio-settings-global-v1";
@@ -46,10 +55,12 @@ impl SyncWorker for OfflineSyncWorker {
     fn sync(
         &mut self,
         _project: &CachedProject,
+        _operations: &[crate::connection::SyncOutboxEnvelope],
     ) -> Result<SyncReceipt, SyncWorkerError> {
         Err(SyncWorkerError {
             code: SyncWorkerErrorCode::Offline,
-            message: "Cloud sync is unavailable; local and cached projects remain usable.".to_owned(),
+            message: "Cloud sync is unavailable; local and cached projects remain usable."
+                .to_owned(),
             retryable: true,
         })
     }
@@ -205,11 +216,15 @@ fn load_record<T: DeserializeOwned>(
         return Ok(None);
     }
     if entries.len() != 1 {
-        return Err(LocalStoreError::new_for_adapter(LocalStoreDiagnosticCode::BatchInvalid));
+        return Err(LocalStoreError::new_for_adapter(
+            LocalStoreDiagnosticCode::BatchInvalid,
+        ));
     }
     serde_json::from_value(entries[0].payload.clone())
         .map(Some)
-        .map_err(|_| LocalStoreError::new_for_adapter(LocalStoreDiagnosticCode::SchemaMetadataCorrupt))
+        .map_err(|_| {
+            LocalStoreError::new_for_adapter(LocalStoreDiagnosticCode::SchemaMetadataCorrupt)
+        })
 }
 
 fn save_record<T: Serialize>(
@@ -221,7 +236,10 @@ fn save_record<T: Serialize>(
         .map_err(|_| LocalStoreError::new_for_adapter(LocalStoreDiagnosticCode::BatchInvalid))?;
     let batch = studio_host::StoreBatch::new(
         batch_id,
-        [studio_host::StoreBatchEntry { ordinal: 0, payload }],
+        [studio_host::StoreBatchEntry {
+            ordinal: 0,
+            payload,
+        }],
     )?;
     store.write_batch_blocking(&batch)
 }
@@ -249,7 +267,8 @@ fn dashboard_error(error: LocalStoreError) -> DashboardPersistenceError {
             | LocalStoreDiagnosticCode::BatchInvalid => DashboardPersistenceErrorCode::Corrupt,
             _ => DashboardPersistenceErrorCode::Unavailable,
         },
-        message: "The local dashboard state is unavailable. Local projects remain protected.".to_owned(),
+        message: "The local dashboard state is unavailable. Local projects remain protected."
+            .to_owned(),
     }
 }
 
@@ -260,7 +279,8 @@ fn settings_error(error: LocalStoreError) -> SettingsError {
             | LocalStoreDiagnosticCode::BatchInvalid => SettingsErrorCode::Corrupt,
             _ => SettingsErrorCode::Unavailable,
         },
-        message: "The local settings state is unavailable. Try again after restarting Studio.".to_owned(),
+        message: "The local settings state is unavailable. Try again after restarting Studio."
+            .to_owned(),
     }
 }
 
@@ -285,11 +305,12 @@ impl NativeProductState {
         } else {
             ProductRoute::IdentityChooser
         };
+        let connected = session.is_some();
         Self {
             route,
             identity,
             session,
-            indicator: ConnectionIndicator::from_state(if session.is_some() {
+            indicator: ConnectionIndicator::from_state(if connected {
                 ConnectionState::Synced
             } else {
                 ConnectionState::Offline
@@ -391,16 +412,19 @@ pub struct NativeProductBootstrap {
 impl NativeProductBootstrap {
     /// Open production persistence, restore a remembered session, and compose route state.
     pub fn open(directory: impl Into<PathBuf>) -> Result<Self, BootstrapError> {
-        let store = Arc::new(EmbeddedLocalStore::open_blocking(directory, Durability::Every)?);
-        let identity_service = IdentityService::with_credentials(
-            Arc::clone(&store),
-            OsSessionCredentialStore,
-        );
+        let store = Arc::new(EmbeddedLocalStore::open_blocking(
+            directory,
+            Durability::Every,
+        )?);
+        let identity_service =
+            IdentityService::with_credentials(Arc::clone(&store), OsSessionCredentialStore);
         let snapshot = identity_service.snapshot_blocking()?;
         let session = snapshot
             .sessions
             .iter()
-            .filter(|session| session.remembered && matches!(session.state, studio_host::SessionState::Available))
+            .filter(|session| {
+                session.remembered && matches!(session.state, studio_host::SessionState::Available)
+            })
             .find_map(|session| identity_service.resume_blocking(&session.session_id).ok());
         let mut sync = SyncCoordinator::new(OfflineSyncWorker);
         sync.set_connected(false);
@@ -450,8 +474,13 @@ impl NativeProductBootstrap {
     }
 
     /// Open the durable dashboard for the active identity.
-    pub fn dashboard(&self) -> Result<ProjectDashboard<LocalStoreDashboardPersistence>, DashboardError> {
-        let identity = self.state.session().ok_or(DashboardError::Unauthenticated)?;
+    pub fn dashboard(
+        &self,
+    ) -> Result<ProjectDashboard<LocalStoreDashboardPersistence>, DashboardError> {
+        let identity = self
+            .state
+            .session()
+            .ok_or(DashboardError::Unauthenticated)?;
         ProjectDashboard::for_authenticated_identity(
             identity.identity_id(),
             LocalStoreDashboardPersistence::new(Arc::clone(&self.store)),
@@ -459,7 +488,9 @@ impl NativeProductBootstrap {
     }
 
     /// Open the durable settings controller.
-    pub fn settings(&self) -> Result<SettingsController<LocalStoreSettingsPersistence>, SettingsError> {
+    pub fn settings(
+        &self,
+    ) -> Result<SettingsController<LocalStoreSettingsPersistence>, SettingsError> {
         SettingsController::new(LocalStoreSettingsPersistence::new(Arc::clone(&self.store)))
     }
 
@@ -523,12 +554,9 @@ impl NativeProductShell {
         let mut pending_surface = plugin_surface;
         let plugin_gallery = if bootstrap.state().is_authenticated() {
             pending_surface.take().map(|surface| {
-                cx.new(|cx| FoundationGallery::with_plugin_surface(
-                    reduced_motion,
-                    surface,
-                    window,
-                    cx,
-                ))
+                cx.new(|cx| {
+                    FoundationGallery::with_plugin_surface(reduced_motion, surface, window, cx)
+                })
             })
         } else {
             None
@@ -554,10 +582,12 @@ impl NativeProductShell {
         route: ProductRoute,
         cx: &mut Context<Self>,
     ) -> Button {
-        Button::new(id).label(label).on_click(cx.listener(move |this, _, _, cx| {
-            this.bootstrap.state_mut().navigate(route.clone());
-            cx.notify();
-        }))
+        Button::new(id)
+            .label(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.bootstrap.state_mut().navigate(route.clone());
+                cx.notify();
+            }))
     }
 }
 
@@ -565,7 +595,6 @@ impl Render for NativeProductShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = self.bootstrap.state().route().clone();
         let indicator = self.bootstrap.state().indicator().clone();
-        let project = self.plugin_gallery.clone();
         let mut content = div()
             .id("native-product-content")
             .flex()
@@ -574,15 +603,23 @@ impl Render for NativeProductShell {
             .p_6()
             .child(div().text_2xl().child(route.title()))
             .child(div().text_sm().child(format!("Route: {}", route.path())))
-            .child(div().text_sm().child(format!("{} — {}", indicator.label, indicator.detail)));
+            .child(
+                div()
+                    .text_sm()
+                    .child(format!("{} — {}", indicator.label, indicator.detail)),
+            );
 
         match route {
             ProductRoute::Welcome => {
-                content = content.child("Your local Studio projects stay available offline.")
-                    .child(Button::new("dismiss-welcome").label("Continue").on_click(cx.listener(|this, _, _, cx| {
-                        let _ = this.bootstrap.dismiss_welcome();
-                        cx.notify();
-                    })));
+                content =
+                    content
+                        .child("Your local Studio projects stay available offline.")
+                        .child(Button::new("dismiss-welcome").label("Continue").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                let _ = this.bootstrap.dismiss_welcome();
+                                cx.notify();
+                            }),
+                        ));
             }
             ProductRoute::IdentityChooser => {
                 content = content.child("Choose a remembered identity or create a local identity.");
@@ -592,7 +629,12 @@ impl Render for NativeProductShell {
                         IdentityState::Available => ProductRoute::SignIn { identity_id },
                         IdentityState::Locked => ProductRoute::Unlock { identity_id },
                     };
-                    content = content.child(self.route_button("choose-identity", "Continue with this identity", route, cx));
+                    content = content.child(self.route_button(
+                        "choose-identity",
+                        "Continue with this identity",
+                        route,
+                        cx,
+                    ));
                 }
                 content = content.child(self.route_button(
                     "create-identity",
@@ -602,30 +644,44 @@ impl Render for NativeProductShell {
                 ));
             }
             ProductRoute::CreateIdentity => {
-                content = content.child("Identity creation is handled by the host-owned secure form.")
-                    .child(self.route_button("back-identity", "Back to identities", ProductRoute::IdentityChooser, cx));
+                content = content
+                    .child("Identity creation is handled by the host-owned secure form.")
+                    .child(self.route_button(
+                        "back-identity",
+                        "Back to identities",
+                        ProductRoute::IdentityChooser,
+                        cx,
+                    ));
             }
             ProductRoute::SignIn { .. } | ProductRoute::Unlock { .. } => {
                 content = content
                     .child("Credentials stay inside the host-owned secure input path.")
-                    .child(self.route_button("back-identity", "Back to identities", ProductRoute::IdentityChooser, cx));
+                    .child(self.route_button(
+                        "back-identity",
+                        "Back to identities",
+                        ProductRoute::IdentityChooser,
+                        cx,
+                    ));
             }
             ProductRoute::Project { .. } => {
                 if self.plugin_gallery.is_none() && self.bootstrap.state().is_authenticated() {
                     if let Some(surface) = self.plugin_surface.take() {
-                        self.plugin_gallery = Some(cx.new(|cx| FoundationGallery::with_plugin_surface(
-                            self.reduced_motion,
-                            surface,
-                            window,
-                            cx,
-                        )));
+                        self.plugin_gallery = Some(cx.new(|cx| {
+                            FoundationGallery::with_plugin_surface(
+                                self.reduced_motion,
+                                surface,
+                                window,
+                                cx,
+                            )
+                        }));
                     }
                 }
                 let project = self.plugin_gallery.clone();
                 if let Some(project) = project {
                     content = content.child(project);
                 } else {
-                    content = content.child("Project editor is ready for a local or cached project.");
+                    content =
+                        content.child("Project editor is ready for a local or cached project.");
                 }
                 content = content.child(self.route_button(
                     "back-dashboard",
@@ -637,19 +693,27 @@ impl Render for NativeProductShell {
             ProductRoute::Dashboard => {
                 content = content
                     .child("Local and cached projects remain available when Cloud is offline.")
-                    .child(Button::new("open-project").label("Open project").on_click(cx.listener(|this, _, _, cx| {
-                        let _ = this.bootstrap.state_mut().open_project("local-project");
-                        cx.notify();
-                    })))
+                    .child(
+                        Button::new("open-project")
+                            .label("Open project")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let _ = this.bootstrap.state_mut().open_project("local-project");
+                                cx.notify();
+                            })),
+                    )
                     .child(self.route_button("settings", "Settings", ProductRoute::Settings, cx))
                     .child(self.route_button("help", "Help", ProductRoute::Help, cx))
                     .child(self.route_button("sync", "Sync status", ProductRoute::SyncStatus, cx))
                     .child(self.route_button("conflicts", "Conflicts", ProductRoute::Conflicts, cx))
                     .child(self.route_button("recovery", "Recovery", ProductRoute::Recovery, cx))
-                    .child(Button::new("sign-out").label("Sign out").on_click(cx.listener(|this, _, _, cx| {
-                        let _ = this.bootstrap.sign_out();
-                        cx.notify();
-                    })));
+                    .child(
+                        Button::new("sign-out")
+                            .label("Sign out")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let _ = this.bootstrap.sign_out();
+                                cx.notify();
+                            })),
+                    );
             }
             _ => {
                 content = content
@@ -661,10 +725,12 @@ impl Render for NativeProductShell {
                     .child(self.route_button("conflicts", "Conflicts", ProductRoute::Conflicts, cx))
                     .child(self.route_button("recovery", "Recovery", ProductRoute::Recovery, cx))
                     .when(self.bootstrap.state().is_authenticated(), |element| {
-                        element.child(Button::new("sign-out").label("Sign out").on_click(cx.listener(|this, _, _, cx| {
-                            let _ = this.bootstrap.sign_out();
-                            cx.notify();
-                        })))
+                        element.child(Button::new("sign-out").label("Sign out").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                let _ = this.bootstrap.sign_out();
+                                cx.notify();
+                            }),
+                        ))
                     });
             }
         }

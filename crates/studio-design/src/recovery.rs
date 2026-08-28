@@ -7,6 +7,10 @@
 //! snapshot and an ordered operation journal are enough to rebuild a session
 //! without depending on an engine-specific backup format.
 
+#![allow(missing_docs)]
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+#![allow(clippy::match_same_arms)]
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -47,7 +51,10 @@ pub struct ConflictIntent {
 
 impl ConflictIntent {
     /// Construct an intent from its original command batch.
-    pub fn new(batch: CommandBatch, resulting_revision: Option<RevisionId>) -> Result<Self, ResilienceError> {
+    pub fn new(
+        batch: CommandBatch,
+        resulting_revision: Option<RevisionId>,
+    ) -> Result<Self, ResilienceError> {
         if batch.actor.display_name.trim().is_empty()
             || batch.actor.display_name.len() > 256
             || batch.actor.display_name.chars().any(char::is_control)
@@ -277,18 +284,26 @@ impl<P: ConflictPersistence> ConflictCenter<P> {
     /// Borrow only records requiring action.
     #[must_use]
     pub fn pending(&self) -> Vec<&ConflictRecord> {
-        self.records.iter().filter(|record| record.is_pending()).collect()
+        self.records
+            .iter()
+            .filter(|record| record.is_pending())
+            .collect()
     }
 
     /// Add a conflict while preserving both source intents.
     pub async fn record(&mut self, record: ConflictRecord) -> Result<(), ResilienceError> {
         validate_conflicts(&self.project_id, std::slice::from_ref(&record))?;
-        if self.records.iter().any(|current| current.conflict_id == record.conflict_id) {
+        if self
+            .records
+            .iter()
+            .any(|current| current.conflict_id == record.conflict_id)
+        {
             return Err(ResilienceError::DuplicateConflict);
         }
         let previous = self.records.clone();
         self.records.push(record);
-        self.records.sort_by(|left, right| left.conflict_id.cmp(&right.conflict_id));
+        self.records
+            .sort_by(|left, right| left.conflict_id.cmp(&right.conflict_id));
         if let Err(error) = self.persist().await {
             self.records = previous;
             return Err(error);
@@ -481,9 +496,15 @@ pub struct RecoveryRecord {
 
 impl RecoveryRecord {
     /// Construct a recoverable record from a validated bundle.
-    pub fn new(recovery_id: impl Into<String>, bundle: RecoveryBundle) -> Result<Self, ResilienceError> {
+    pub fn new(
+        recovery_id: impl Into<String>,
+        bundle: RecoveryBundle,
+    ) -> Result<Self, ResilienceError> {
         let recovery_id = recovery_id.into();
-        if recovery_id.is_empty() || recovery_id.len() > 128 || recovery_id.chars().any(char::is_control) {
+        if recovery_id.is_empty()
+            || recovery_id.len() > 128
+            || recovery_id.chars().any(char::is_control)
+        {
             return Err(ResilienceError::InvalidRecord("recovery identity"));
         }
         bundle.validate()?;
@@ -523,7 +544,10 @@ impl RecoveryRecord {
 
     /// Mark a successfully migrated/restored record safe to open.
     pub fn mark_restored(&mut self) -> Result<(), ResilienceError> {
-        if !matches!(self.state, RecoveryState::Recoverable | RecoveryState::Migrating) {
+        if !matches!(
+            self.state,
+            RecoveryState::Recoverable | RecoveryState::Migrating { .. }
+        ) {
             return Err(ResilienceError::InvalidRecoveryTransition);
         }
         self.state = RecoveryState::Restored;
@@ -642,12 +666,17 @@ impl<P: RecoveryPersistence> RecoveryCenter<P> {
     /// Add a recovery record and persist it atomically.
     pub async fn record(&mut self, record: RecoveryRecord) -> Result<(), ResilienceError> {
         validate_recovery(&self.project_id, std::slice::from_ref(&record))?;
-        if self.records.iter().any(|current| current.recovery_id == record.recovery_id) {
+        if self
+            .records
+            .iter()
+            .any(|current| current.recovery_id == record.recovery_id)
+        {
             return Err(ResilienceError::DuplicateRecovery);
         }
         let previous = self.records.clone();
         self.records.push(record);
-        self.records.sort_by(|left, right| left.recovery_id.cmp(&right.recovery_id));
+        self.records
+            .sort_by(|left, right| left.recovery_id.cmp(&right.recovery_id));
         if let Err(error) = self.persist().await {
             self.records = previous;
             return Err(error);
@@ -749,7 +778,10 @@ impl<P: RecoveryPersistence> RecoveryCenter<P> {
                 .iter()
                 .find(|record| record.recovery_id == recovery_id)
                 .ok_or_else(|| ResilienceError::RecoveryNotFound(recovery_id.to_owned()))?;
-            if !matches!(record.state, RecoveryState::Recoverable | RecoveryState::RestoreFailed) {
+            if !matches!(
+                record.state,
+                RecoveryState::Recoverable | RecoveryState::RestoreFailed
+            ) {
                 return Err(ResilienceError::NotRecoverable);
             }
             record.bundle.clone()
@@ -834,7 +866,10 @@ pub enum ResilienceError {
     Session(#[from] SessionError),
 }
 
-fn validate_conflicts(project_id: &ProjectId, records: &[ConflictRecord]) -> Result<(), ResilienceError> {
+fn validate_conflicts(
+    project_id: &ProjectId,
+    records: &[ConflictRecord],
+) -> Result<(), ResilienceError> {
     let mut previous = None;
     for record in records {
         if record.schema_version != RESILIENCE_SCHEMA_VERSION
@@ -845,7 +880,12 @@ fn validate_conflicts(project_id: &ProjectId, records: &[ConflictRecord]) -> Res
             || record.remote.operation_id != record.remote.batch.operation_id
             || record.local.base_revision != record.local.batch.base_revision
             || record.remote.base_revision != record.remote.batch.base_revision
-            || record.conflict_id != ConflictRecord::deterministic_id(&record.project_id, &record.local, &record.remote)
+            || record.conflict_id
+                != ConflictRecord::deterministic_id(
+                    &record.project_id,
+                    &record.local,
+                    &record.remote,
+                )
             || (record.status == ConflictStatus::Pending && record.resolution.is_some())
             || (record.status == ConflictStatus::Resolved && record.resolution.is_none())
             || previous.is_some_and(|id: &str| id >= record.conflict_id.as_str())
@@ -857,7 +897,10 @@ fn validate_conflicts(project_id: &ProjectId, records: &[ConflictRecord]) -> Res
     Ok(())
 }
 
-fn validate_recovery(project_id: &ProjectId, records: &[RecoveryRecord]) -> Result<(), ResilienceError> {
+fn validate_recovery(
+    project_id: &ProjectId,
+    records: &[RecoveryRecord],
+) -> Result<(), ResilienceError> {
     let mut previous = None;
     for record in records {
         if record.schema_version != RESILIENCE_SCHEMA_VERSION
@@ -874,7 +917,8 @@ fn validate_recovery(project_id: &ProjectId, records: &[RecoveryRecord]) -> Resu
 }
 
 fn validate_reason(reason: &str) -> Result<(), ResilienceError> {
-    if reason.is_empty() || reason.len() > MAX_REASON_LENGTH || reason.chars().any(char::is_control) {
+    if reason.is_empty() || reason.len() > MAX_REASON_LENGTH || reason.chars().any(char::is_control)
+    {
         Err(ResilienceError::InvalidRecord("recovery reason"))
     } else {
         Ok(())

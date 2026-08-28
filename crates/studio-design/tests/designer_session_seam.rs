@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![allow(clippy::too_many_lines, clippy::match_wildcard_for_single_variants)]
 
 use std::{
     collections::BTreeMap,

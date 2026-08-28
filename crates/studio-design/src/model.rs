@@ -92,7 +92,6 @@ define_id!(/// Stable command-operation identity.
 define_id!(/// Stable named undo-group identity.
     UndoGroupId);
 
-/// Stable plugin identity recorded in a project.
 define_id!(/// Stable admitted plugin identity.
     PluginId);
 
@@ -288,8 +287,13 @@ pub struct SettingKey {
 ///
 /// Secret values are intentionally represented only by a protected-store reference. The
 /// referenced secret never enters the design document, command history, or plugin guest.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SettingValue {
     Text(String),
     Number(String),
@@ -383,7 +387,7 @@ pub enum ValueKind {
 }
 
 /// One closed typed authored property value.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "type",
     content = "value",
@@ -411,7 +415,7 @@ pub struct BindingPath {
     pub segments: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Length {
     pub value: String,

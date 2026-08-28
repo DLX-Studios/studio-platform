@@ -21,7 +21,7 @@ fn archive(signature: Vec<u8>) -> Vec<u8> {
         "sdkVersion": "^0.1.0",
         "protocolVersion": 1,
         "capabilities": [],
-        "limits": {"memoryMiB": 16, "eventFuel": 10000000},
+        "limits": {"memoryMiB": 16, "eventFuel": 10_000_000},
         "assets": ["assets/migrations/v1-to-v2.json"],
         "migrations": [{
             "id": "v1-to-v2",
@@ -56,7 +56,7 @@ fn signed_archive(signing_key: &SigningKey) -> Vec<u8> {
         "sdkVersion": "^0.1.0",
         "protocolVersion": 1,
         "capabilities": [],
-        "limits": {"memoryMiB": 16, "eventFuel": 10000000},
+        "limits": {"memoryMiB": 16, "eventFuel": 10_000_000},
         "assets": ["assets/migrations/v1-to-v2.json"],
         "migrations": [{"id":"v1-to-v2","fromVersion":1,"toVersion":2,"entry":"assets/migrations/v1-to-v2.json"}]
     });
@@ -88,15 +88,17 @@ fn trust(signing_key: &SigningKey) -> TrustStore {
 #[test]
 fn migration_admission_requires_a_valid_publisher_signature() {
     let signing_key = SigningKey::from_bytes(&[11; 32]);
-    let inspected = inspect_archive(&signed_archive(&signing_key), ArchivePolicy::default()).unwrap();
-    let admitted = VerifiedMigrationBundle::admit(
-        &inspected,
-        ManifestPolicy::default(),
-        &trust(&signing_key),
-    )
-    .unwrap();
+    let inspected =
+        inspect_archive(&signed_archive(&signing_key), ArchivePolicy::default()).unwrap();
+    let admitted =
+        VerifiedMigrationBundle::admit(&inspected, ManifestPolicy::default(), &trust(&signing_key))
+            .unwrap();
     assert_eq!(admitted.manifest().migrations.len(), 1);
-    assert!(admitted.migration_asset("assets/migrations/v1-to-v2.json").is_some());
+    assert!(
+        admitted
+            .migration_asset("assets/migrations/v1-to-v2.json")
+            .is_some()
+    );
 
     let unsigned = inspect_archive(&archive(vec![0; 64]), ArchivePolicy::default()).unwrap();
     assert!(matches!(

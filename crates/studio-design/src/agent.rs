@@ -1111,6 +1111,7 @@ fn command_footprint(
         Command::RenameNode { node_id, .. } => {
             footprints.insert(Footprint::Property(node_id.clone(), "@name".to_owned()));
         }
+        _ => {}
     }
 }
 
@@ -1130,6 +1131,7 @@ fn precondition_footprint(condition: &CommandPrecondition, footprints: &mut BTre
         } => {
             footprints.insert(Footprint::Property(node_id.clone(), property.clone()));
         }
+        _ => {}
     }
 }
 

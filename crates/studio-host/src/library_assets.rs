@@ -5,12 +5,17 @@
 //! live in a SHA-256 content-addressed directory.  No storage handle, path, or
 //! catalog implementation type crosses into `studio-design`; design nodes
 //! retain only opaque [`studio_design::LibraryAssetId`] values.
-#![allow(missing_docs, reason = "closed Library records are documented at the module and type seams")]
+#![allow(
+    missing_docs,
+    reason = "closed Library records are documented at the module and type seams"
+)]
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
 
 use std::{
     collections::BTreeMap,
-    fs,
     fmt::Write as _,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -76,7 +81,12 @@ pub enum AssetFormat {
 
 impl AssetFormat {
     fn from_name(name: &str) -> Option<Self> {
-        match Path::new(name).extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        match Path::new(name)
+            .extension()?
+            .to_str()?
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "png" => Some(Self::Png),
             "jpg" | "jpeg" => Some(Self::Jpeg),
             "webp" => Some(Self::Webp),
@@ -301,9 +311,11 @@ impl RuntimeVariantSpec {
         format!(
             "v1;width={};height={};format={};quality={}",
             self.width.map_or_else(|| "-".to_owned(), |v| v.to_string()),
-            self.height.map_or_else(|| "-".to_owned(), |v| v.to_string()),
+            self.height
+                .map_or_else(|| "-".to_owned(), |v| v.to_string()),
             self.format.map_or("-", AssetFormat::as_str),
-            self.quality.map_or_else(|| "-".to_owned(), |v| v.to_string()),
+            self.quality
+                .map_or_else(|| "-".to_owned(), |v| v.to_string()),
         )
     }
 }
@@ -488,7 +500,10 @@ impl LibraryPanelState {
     /// Build a panel model in stable identity order.
     #[must_use]
     pub fn new(assets: &[AssetMetadata]) -> Self {
-        let mut asset_ids = assets.iter().map(|asset| asset.id.clone()).collect::<Vec<_>>();
+        let mut asset_ids = assets
+            .iter()
+            .map(|asset| asset.id.clone())
+            .collect::<Vec<_>>();
         asset_ids.sort();
         asset_ids.dedup();
         let focused = (!asset_ids.is_empty()).then_some(0);
@@ -631,15 +646,24 @@ impl LibraryAssetStore {
         let format = infer_format(&name, request.mime_type.as_deref(), &request.bytes)?;
         validate_bytes(format, &request.bytes)?;
         let hash = hash_bytes(&request.bytes);
-        let id = LibraryAssetId::new(format!("asset-sha256-{hash}"))
-            .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::InvalidAdmission, "asset hash identity is invalid"))?;
+        let id = LibraryAssetId::new(format!("asset-sha256-{hash}")).map_err(|_| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::InvalidAdmission,
+                "asset hash identity is invalid",
+            )
+        })?;
         let original = self.write_blob(&hash, &request.bytes)?;
         let mut catalog = self.read_catalog().await?;
         if let Some(existing) = catalog.assets.get_mut(&id) {
             if !existing.provenance.contains(&request.provenance) {
                 existing.provenance.push(request.provenance);
                 existing.provenance.sort_by_key(|value| {
-                    (value.source.clone(), value.actor.clone(), value.kind, value.detail.clone())
+                    (
+                        value.source.clone(),
+                        value.actor.clone(),
+                        value.kind,
+                        value.detail.clone(),
+                    )
                 });
             }
             existing.updated_revision = existing.updated_revision.max(request.revision);
@@ -679,7 +703,12 @@ impl LibraryAssetStore {
             .assets
             .get(id)
             .cloned()
-            .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::AssetNotFound, "the Library asset identity was not found"))
+            .ok_or_else(|| {
+                LibraryAssetError::new(
+                    LibraryDiagnosticCode::AssetNotFound,
+                    "the Library asset identity was not found",
+                )
+            })
     }
 
     /// Retrieve and hash-check the preserved source original.
@@ -700,10 +729,12 @@ impl LibraryAssetStore {
         let _catalog_guard = self.catalog_lock.lock().await;
         let mut catalog = self.read_catalog().await?;
         let generated = {
-            let metadata = catalog
-                .assets
-                .get_mut(id)
-                .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::AssetNotFound, "the Library asset identity was not found"))?;
+            let metadata = catalog.assets.get_mut(id).ok_or_else(|| {
+                LibraryAssetError::new(
+                    LibraryDiagnosticCode::AssetNotFound,
+                    "the Library asset identity was not found",
+                )
+            })?;
             let key = spec.key();
             if let Some(existing) = metadata.variants.get(&key) {
                 return Ok(existing.clone());
@@ -730,25 +761,37 @@ impl LibraryAssetStore {
         spec: &RuntimeVariantSpec,
     ) -> Result<AssetBlob, LibraryAssetError> {
         let metadata = self.metadata(id).await?;
-        let variant = metadata
-            .variants
-            .get(&spec.key())
-            .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::AssetNotFound, "the requested runtime variant was not generated"))?;
+        let variant = metadata.variants.get(&spec.key()).ok_or_else(|| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::AssetNotFound,
+                "the requested runtime variant was not generated",
+            )
+        })?;
         self.read_blob(&variant.blob)
     }
 
     /// Add one stable design/content usage reference.
-    pub async fn bind(&self, id: &LibraryAssetId, usage: AssetUsage) -> Result<(), LibraryAssetError> {
+    pub async fn bind(
+        &self,
+        id: &LibraryAssetId,
+        usage: AssetUsage,
+    ) -> Result<(), LibraryAssetError> {
         let _catalog_guard = self.catalog_lock.lock().await;
         let mut catalog = self.read_catalog().await?;
-        let metadata = catalog
-            .assets
-            .get_mut(id)
-            .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::AssetNotFound, "the Library asset identity was not found"))?;
+        let metadata = catalog.assets.get_mut(id).ok_or_else(|| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::AssetNotFound,
+                "the Library asset identity was not found",
+            )
+        })?;
         if !metadata.usages.contains(&usage) {
             metadata.usages.push(usage);
             metadata.usages.sort_by_key(|value| {
-                (value.reference_id.clone(), value.owner.clone(), value.field.clone())
+                (
+                    value.reference_id.clone(),
+                    value.owner.clone(),
+                    value.field.clone(),
+                )
             });
             self.write_catalog(&catalog).await?;
         }
@@ -756,16 +799,24 @@ impl LibraryAssetStore {
     }
 
     /// Remove one usage reference; missing references are idempotent.
-    pub async fn unbind(&self, id: &LibraryAssetId, reference_id: &str) -> Result<(), LibraryAssetError> {
+    pub async fn unbind(
+        &self,
+        id: &LibraryAssetId,
+        reference_id: &str,
+    ) -> Result<(), LibraryAssetError> {
         let _catalog_guard = self.catalog_lock.lock().await;
         validate_text(reference_id)?;
         let mut catalog = self.read_catalog().await?;
-        let metadata = catalog
-            .assets
-            .get_mut(id)
-            .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::AssetNotFound, "the Library asset identity was not found"))?;
+        let metadata = catalog.assets.get_mut(id).ok_or_else(|| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::AssetNotFound,
+                "the Library asset identity was not found",
+            )
+        })?;
         let old_len = metadata.usages.len();
-        metadata.usages.retain(|usage| usage.reference_id != reference_id);
+        metadata
+            .usages
+            .retain(|usage| usage.reference_id != reference_id);
         if metadata.usages.len() != old_len {
             self.write_catalog(&catalog).await?;
         }
@@ -779,7 +830,8 @@ impl LibraryAssetStore {
 
     /// Safely delete an asset only after all references are unbound.
     pub async fn delete(&self, id: &LibraryAssetId) -> Result<DeleteResult, LibraryAssetError> {
-        self.delete_with_policy(id, DeletePolicy::RequireUnbound).await
+        self.delete_with_policy(id, DeletePolicy::RequireUnbound)
+            .await
     }
 
     /// Delete under an explicit policy. Breaking deletion returns the exact
@@ -791,11 +843,12 @@ impl LibraryAssetStore {
     ) -> Result<DeleteResult, LibraryAssetError> {
         let _catalog_guard = self.catalog_lock.lock().await;
         let mut catalog = self.read_catalog().await?;
-        let metadata = catalog
-            .assets
-            .get(id)
-            .cloned()
-            .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::AssetNotFound, "the Library asset identity was not found"))?;
+        let metadata = catalog.assets.get(id).cloned().ok_or_else(|| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::AssetNotFound,
+                "the Library asset identity was not found",
+            )
+        })?;
         if policy == DeletePolicy::RequireUnbound && !metadata.usages.is_empty() {
             return Err(LibraryAssetError::in_use(metadata.usages));
         }
@@ -816,7 +869,11 @@ impl LibraryAssetStore {
     }
 
     async fn read_catalog(&self) -> Result<PersistedCatalog, LibraryAssetError> {
-        let entries = self.store.batch_entries(CATALOG_BATCH_ID).await.map_err(map_store_error)?;
+        let entries = self
+            .store
+            .batch_entries(CATALOG_BATCH_ID)
+            .await
+            .map_err(map_store_error)?;
         if entries.is_empty() {
             return Ok(PersistedCatalog {
                 schema_version: CATALOG_SCHEMA_VERSION,
@@ -824,25 +881,46 @@ impl LibraryAssetStore {
             });
         }
         let [entry] = entries.as_slice() else {
-            return Err(LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library catalog has an invalid record shape"));
+            return Err(LibraryAssetError::new(
+                LibraryDiagnosticCode::Storage,
+                "the Library catalog has an invalid record shape",
+            ));
         };
-        let catalog = serde_json::from_value::<PersistedCatalog>(entry.payload.clone())
-            .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library catalog is damaged"))?;
+        let catalog =
+            serde_json::from_value::<PersistedCatalog>(entry.payload.clone()).map_err(|_| {
+                LibraryAssetError::new(
+                    LibraryDiagnosticCode::Storage,
+                    "the Library catalog is damaged",
+                )
+            })?;
         if catalog.schema_version != CATALOG_SCHEMA_VERSION {
-            return Err(LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library catalog schema is unsupported"));
+            return Err(LibraryAssetError::new(
+                LibraryDiagnosticCode::Storage,
+                "the Library catalog schema is unsupported",
+            ));
         }
         Ok(catalog)
     }
 
     async fn write_catalog(&self, catalog: &PersistedCatalog) -> Result<(), LibraryAssetError> {
-        let payload = serde_json::to_value(catalog)
-            .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library catalog could not be encoded"))?;
+        let payload = serde_json::to_value(catalog).map_err(|_| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::Storage,
+                "the Library catalog could not be encoded",
+            )
+        })?;
         let batch = StoreBatch::new(
             CATALOG_BATCH_ID,
-            [StoreBatchEntry { ordinal: 0, payload }],
+            [StoreBatchEntry {
+                ordinal: 0,
+                payload,
+            }],
         )
         .map_err(map_store_error)?;
-        self.store.write_batch(&batch).await.map_err(map_store_error)
+        self.store
+            .write_batch(&batch)
+            .await
+            .map_err(map_store_error)
     }
 
     fn write_blob(&self, hash: &str, bytes: &[u8]) -> Result<BlobReference, LibraryAssetError> {
@@ -856,7 +934,11 @@ impl LibraryAssetStore {
         })
     }
 
-    fn write_variant_blob(&self, hash: &str, bytes: &[u8]) -> Result<BlobReference, LibraryAssetError> {
+    fn write_variant_blob(
+        &self,
+        hash: &str,
+        bytes: &[u8],
+    ) -> Result<BlobReference, LibraryAssetError> {
         let relative_path = format!("{BLOB_DIRECTORY}/variants/{}/{hash}", &hash[..2]);
         let path = self.root.join(&relative_path);
         write_if_absent(&path, bytes)?;
@@ -868,10 +950,19 @@ impl LibraryAssetStore {
     }
 
     fn read_blob(&self, reference: &BlobReference) -> Result<AssetBlob, LibraryAssetError> {
-        let bytes = fs::read(self.root.join(&reference.relative_path))
-            .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::BlobCorrupt, "the Library blob is missing or unreadable"))?;
-        if byte_length(&bytes) != reference.byte_length || hash_bytes(&bytes) != reference.content_hash {
-            return Err(LibraryAssetError::new(LibraryDiagnosticCode::BlobCorrupt, "the Library blob hash does not match its catalog metadata"));
+        let bytes = fs::read(self.root.join(&reference.relative_path)).map_err(|_| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::BlobCorrupt,
+                "the Library blob is missing or unreadable",
+            )
+        })?;
+        if byte_length(&bytes) != reference.byte_length
+            || hash_bytes(&bytes) != reference.content_hash
+        {
+            return Err(LibraryAssetError::new(
+                LibraryDiagnosticCode::BlobCorrupt,
+                "the Library blob hash does not match its catalog metadata",
+            ));
         }
         Ok(AssetBlob {
             reference: reference.clone(),
@@ -883,7 +974,10 @@ impl LibraryAssetStore {
         match fs::remove_file(self.root.join(&reference.relative_path)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library blob could not be removed")),
+            Err(_) => Err(LibraryAssetError::new(
+                LibraryDiagnosticCode::Storage,
+                "the Library blob could not be removed",
+            )),
         }
     }
 }
@@ -893,20 +987,34 @@ fn write_if_absent(path: &Path, bytes: &[u8]) -> Result<(), LibraryAssetError> {
         return Ok(());
     }
     let parent = path.parent().ok_or_else(|| {
-        LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library blob path is invalid")
+        LibraryAssetError::new(
+            LibraryDiagnosticCode::Storage,
+            "the Library blob path is invalid",
+        )
     })?;
-    fs::create_dir_all(parent)
-        .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library blob directory could not be created"))?;
+    fs::create_dir_all(parent).map_err(|_| {
+        LibraryAssetError::new(
+            LibraryDiagnosticCode::Storage,
+            "the Library blob directory could not be created",
+        )
+    })?;
     let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes)
-        .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library blob could not be written"))?;
+    fs::write(&temporary, bytes).map_err(|_| {
+        LibraryAssetError::new(
+            LibraryDiagnosticCode::Storage,
+            "the Library blob could not be written",
+        )
+    })?;
     match fs::rename(&temporary, path) {
         Ok(()) => Ok(()),
         Err(_) if path.exists() => {
             let _ = fs::remove_file(temporary);
             Ok(())
         }
-        Err(_) => Err(LibraryAssetError::new(LibraryDiagnosticCode::Storage, "the Library blob could not be committed")),
+        Err(_) => Err(LibraryAssetError::new(
+            LibraryDiagnosticCode::Storage,
+            "the Library blob could not be committed",
+        )),
     }
 }
 
@@ -916,18 +1024,30 @@ fn display_name(name: &str) -> Result<String, LibraryAssetError> {
         .file_name()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| LibraryAssetError::new(LibraryDiagnosticCode::InvalidAdmission, "asset name must contain a filename"))?;
+        .ok_or_else(|| {
+            LibraryAssetError::new(
+                LibraryDiagnosticCode::InvalidAdmission,
+                "asset name must contain a filename",
+            )
+        })?;
     Ok(name.to_owned())
 }
 
 fn validate_text(value: &str) -> Result<(), LibraryAssetError> {
     if value.trim().is_empty() || value.chars().any(char::is_control) {
-        return Err(LibraryAssetError::new(LibraryDiagnosticCode::InvalidAdmission, "asset metadata contains an empty or control-bearing value"));
+        return Err(LibraryAssetError::new(
+            LibraryDiagnosticCode::InvalidAdmission,
+            "asset metadata contains an empty or control-bearing value",
+        ));
     }
     Ok(())
 }
 
-fn infer_format(name: &str, mime: Option<&str>, bytes: &[u8]) -> Result<AssetFormat, LibraryAssetError> {
+fn infer_format(
+    name: &str,
+    mime: Option<&str>,
+    bytes: &[u8],
+) -> Result<AssetFormat, LibraryAssetError> {
     let format = AssetFormat::from_name(name).or_else(|| {
         mime.and_then(|mime| match mime.to_ascii_lowercase().as_str() {
             "image/png" => Some(AssetFormat::Png),
@@ -977,12 +1097,20 @@ fn validate_bytes(format: AssetFormat, bytes: &[u8]) -> Result<(), LibraryAssetE
     };
     if valid {
         Ok(())
-    } else if matches!(format, AssetFormat::Mp4 | AssetFormat::Mov | AssetFormat::Webm | AssetFormat::M4a)
-        && has(b"codec=")
+    } else if matches!(
+        format,
+        AssetFormat::Mp4 | AssetFormat::Mov | AssetFormat::Webm | AssetFormat::M4a
+    ) && has(b"codec=")
     {
-        Err(LibraryAssetError::new(LibraryDiagnosticCode::UnsupportedCodec, "the media container declares an unsupported codec"))
+        Err(LibraryAssetError::new(
+            LibraryDiagnosticCode::UnsupportedCodec,
+            "the media container declares an unsupported codec",
+        ))
     } else {
-        Err(LibraryAssetError::new(LibraryDiagnosticCode::UnsupportedFormat, "the asset bytes do not match the declared format"))
+        Err(LibraryAssetError::new(
+            LibraryDiagnosticCode::UnsupportedFormat,
+            "the asset bytes do not match the declared format",
+        ))
     }
 }
 
@@ -991,14 +1119,22 @@ fn approved_codec(bytes: &[u8]) -> bool {
         return true;
     };
     let value = &bytes[start + 6..];
-    let end = value.iter().position(|byte| *byte == b' ' || *byte == b'\n' || *byte == 0).unwrap_or(value.len());
+    let end = value
+        .iter()
+        .position(|byte| *byte == b' ' || *byte == b'\n' || *byte == 0)
+        .unwrap_or(value.len());
     let codec = std::str::from_utf8(&value[..end]).unwrap_or_default();
-    matches!(codec, "h264" | "avc1" | "hevc" | "hvc1" | "vp8" | "vp9" | "av1" | "aac" | "opus" | "vorbis")
+    matches!(
+        codec,
+        "h264" | "avc1" | "hevc" | "hvc1" | "vp8" | "vp9" | "av1" | "aac" | "opus" | "vorbis"
+    )
 }
 
 fn is_safe_svg(bytes: &[u8]) -> Result<bool, LibraryAssetError> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| LibraryAssetError::new(LibraryDiagnosticCode::UnsafeSvg, "SVG is not valid UTF-8"))?
+        .map_err(|_| {
+            LibraryAssetError::new(LibraryDiagnosticCode::UnsafeSvg, "SVG is not valid UTF-8")
+        })?
         .to_ascii_lowercase();
     if !text.contains("<svg") {
         return Ok(false);
@@ -1011,7 +1147,10 @@ fn is_safe_svg(bytes: &[u8]) -> Result<bool, LibraryAssetError> {
         ("onerror=", "SVG contains an executable event handler"),
         ("<foreignobject", "SVG contains foreign HTML content"),
         ("<!entity", "SVG contains an external entity declaration"),
-        ("<!doctype", "SVG contains a potentially external document type"),
+        (
+            "<!doctype",
+            "SVG contains a potentially external document type",
+        ),
         ("<iframe", "SVG contains an embedded frame"),
         ("<object", "SVG contains an embedded object"),
         ("<embed", "SVG contains an embedded resource"),
@@ -1020,8 +1159,14 @@ fn is_safe_svg(bytes: &[u8]) -> Result<bool, LibraryAssetError> {
         ("xlink:href=\"http", "SVG contains an external resource URL"),
         ("url(http", "SVG contains an external CSS URL"),
     ];
-    if let Some((_, reason)) = unsafe_markers.iter().find(|(marker, _)| text.contains(marker)) {
-        return Err(LibraryAssetError::new(LibraryDiagnosticCode::UnsafeSvg, *reason));
+    if let Some((_, reason)) = unsafe_markers
+        .iter()
+        .find(|(marker, _)| text.contains(marker))
+    {
+        return Err(LibraryAssetError::new(
+            LibraryDiagnosticCode::UnsafeSvg,
+            *reason,
+        ));
     }
     Ok(true)
 }
@@ -1051,7 +1196,8 @@ fn map_store_error(error: LocalStoreError) -> LibraryAssetError {
         | LocalStoreDiagnosticCode::SchemaMetadataCorrupt
         | LocalStoreDiagnosticCode::SchemaIncompatible
         | LocalStoreDiagnosticCode::OperationFailed
-        | LocalStoreDiagnosticCode::ExecutorUnavailable => LibraryDiagnosticCode::Storage,
+        | LocalStoreDiagnosticCode::ExecutorUnavailable
+        | LocalStoreDiagnosticCode::QueryTimedOut => LibraryDiagnosticCode::Storage,
     };
     LibraryAssetError::new(code, error.diagnostic().message())
 }

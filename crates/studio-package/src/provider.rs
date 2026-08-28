@@ -5,12 +5,16 @@
 //! declared route once. The resulting plan is safe to hand to the broker: it contains no raw
 //! manifest strings that need to be interpreted again at request time.
 
+#![allow(clippy::assigning_clones)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::too_many_lines)]
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 
 use semver::Version;
-use studio_net::broker::RestBroker;
 use studio_net::BrokerError;
+use studio_net::broker::RestBroker;
 use studio_net::declaration::{CredentialSource, HttpMethod, RouteGroupDeclaration};
 
 use crate::{Capability, IntegrationReference, ManifestV1};
@@ -60,6 +64,7 @@ pub struct ProviderRouteDescriptor {
 
 /// Provider-owned credential requirement for one route.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(missing_docs)]
 pub enum ProviderCredentialPolicy {
     /// Route uses the host session for this provider.
     OauthProviderSession { provider: String },
@@ -204,7 +209,10 @@ impl ProviderDescriptor {
                     || route.paths.is_empty()
             })
         {
-            return Err(ProviderAdmissionError::descriptor_invalid(&self.id, &self.version));
+            return Err(ProviderAdmissionError::descriptor_invalid(
+                &self.id,
+                &self.version,
+            ));
         }
         Ok(())
     }
@@ -378,7 +386,10 @@ impl ProviderRegistry {
     }
 
     /// Install one exact descriptor version.
-    pub fn register(&mut self, descriptor: ProviderDescriptor) -> Result<(), ProviderAdmissionError> {
+    pub fn register(
+        &mut self,
+        descriptor: ProviderDescriptor,
+    ) -> Result<(), ProviderAdmissionError> {
         descriptor.validate()?;
         let versions = self.descriptors.entry(descriptor.id.clone()).or_default();
         if versions.contains_key(&descriptor.version) {
@@ -541,24 +552,26 @@ impl ProviderRegistry {
                 })?;
             let expected = materialize_route(expected, integration, descriptor);
             validate_route(route, &expected, descriptor)?;
-            route_groups.push(
-                route
-                    .compile(ceilings)
-                    .map_err(|_| ProviderAdmissionError::new(
-                        ProviderAdmissionErrorCode::RouteNotAllowed,
-                        "route failed broker policy",
-                        Some(&descriptor.id),
-                        Some(&descriptor.version),
-                        Some(&route.id),
-                    ))?,
-            );
+            route_groups.push(route.compile(ceilings).map_err(|_| {
+                ProviderAdmissionError::new(
+                    ProviderAdmissionErrorCode::RouteNotAllowed,
+                    "route failed broker policy",
+                    Some(&descriptor.id),
+                    Some(&descriptor.version),
+                    Some(&route.id),
+                )
+            })?);
         }
 
         validate_secret_declarations(manifest, &resolved, &self.descriptors)?;
         Ok(ProviderAdmissionPlan {
             providers: resolved,
             route_groups,
-            secrets: manifest.secrets.iter().map(|secret| secret.name.clone()).collect(),
+            secrets: manifest
+                .secrets
+                .iter()
+                .map(|secret| secret.name.clone())
+                .collect(),
             capabilities: manifest.capabilities.clone(),
         })
     }
@@ -582,7 +595,12 @@ fn route_belongs_to_provider(
         .descriptors
         .get(&integration.id)
         .and_then(|versions| versions.get(&integration.version))
-        .is_some_and(|descriptor| descriptor.routes.iter().any(|candidate| candidate.id == route.id))
+        .is_some_and(|descriptor| {
+            descriptor
+                .routes
+                .iter()
+                .any(|candidate| candidate.id == route.id)
+        })
 }
 
 fn materialize_route(
@@ -592,8 +610,13 @@ fn materialize_route(
 ) -> ProviderRouteDescriptor {
     let mut materialized = route.clone();
     if let Some(key) = &descriptor.secret_config_key
-        && let Some(name) = integration.config.as_ref().and_then(|config| config.get(key)).and_then(|value| value.as_str())
-        && let ProviderCredentialPolicy::NamedSecret { name: expected, .. } = &mut materialized.credential
+        && let Some(name) = integration
+            .config
+            .as_ref()
+            .and_then(|config| config.get(key))
+            .and_then(|value| value.as_str())
+        && let ProviderCredentialPolicy::NamedSecret { name: expected, .. } =
+            &mut materialized.credential
     {
         *expected = name.to_owned();
     }
@@ -809,13 +832,21 @@ fn credential_matches(actual: &CredentialSource, expected: &ProviderCredentialPo
                 header: expected_header,
                 prefix: expected_prefix,
             },
-        ) => actual_name == expected_name && actual_header == expected_header && actual_prefix == expected_prefix,
+        ) => {
+            actual_name == expected_name
+                && actual_header == expected_header
+                && actual_prefix == expected_prefix
+        }
         (CredentialSource::Public, ProviderCredentialPolicy::Public) => true,
         _ => false,
     }
 }
 
-fn route_error(descriptor: &ProviderDescriptor, route: &str, detail: &'static str) -> ProviderAdmissionError {
+fn route_error(
+    descriptor: &ProviderDescriptor,
+    route: &str,
+    detail: &'static str,
+) -> ProviderAdmissionError {
     ProviderAdmissionError::new(
         ProviderAdmissionErrorCode::RouteNotAllowed,
         detail,
@@ -864,14 +895,10 @@ fn validate_secret_declarations(
             .and_then(|versions| versions.get(&provider.version))
         {
             for (name, purpose) in &descriptor.required_secret_purposes {
-                if !manifest
-                    .secrets
-                    .iter()
-                    .any(|secret| {
-                        secret.name.as_str() == name.as_str()
-                            && secret.purpose.as_str() == purpose.as_str()
-                    })
-                {
+                if !manifest.secrets.iter().any(|secret| {
+                    secret.name.as_str() == name.as_str()
+                        && secret.purpose.as_str() == purpose.as_str()
+                }) {
                     return Err(ProviderAdmissionError::new(
                         ProviderAdmissionErrorCode::SecretNotAllowed,
                         "provider secret purpose does not match descriptor policy",
@@ -968,10 +995,7 @@ impl ProviderAdmissionPlan {
     }
 
     /// Install compiled groups without reinterpreting manifest route strings.
-    pub fn install_into<'store>(
-        &self,
-        broker: &mut RestBroker<'store>,
-    ) -> Result<(), BrokerError> {
+    pub fn install_into(&self, broker: &mut RestBroker<'_>) -> Result<(), BrokerError> {
         for group in &self.route_groups {
             broker.install_compiled_group(group.clone())?;
         }

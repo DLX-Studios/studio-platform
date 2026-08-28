@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![allow(clippy::default_trait_access)]
 
 use std::{
     future::Future,
@@ -8,11 +9,12 @@ use std::{
 
 use studio_design::{
     Actor, ActorId, ActorKind, Command, CommandBatch, ConflictCenter, ConflictIntent,
-    ConflictRecord, DesignerQuery, DesignerQueryResult, DesignerSession, InMemoryConflictPersistence,
-    InMemoryDesignerPersistence, InMemoryRecoveryPersistence, JournalEntry, LogicalSnapshot,
-    NodeId, NodeParent, OperationId, ProjectId, PropertyValue, RecoveryBundle, RecoveryCenter,
-    RecoveryRecord, ResolutionChoice, RevisionId, RevisionMetadata, RevisionReason, Screen,
-    ScreenId, StudioDesign, StudioDesignSnapshot, STUDIO_DESIGN_SCHEMA_VERSION, UndoGroupId,
+    ConflictRecord, DesignerQuery, DesignerQueryResult, DesignerSession,
+    InMemoryConflictPersistence, InMemoryDesignerPersistence, InMemoryRecoveryPersistence,
+    JournalEntry, LogicalSnapshot, NodeId, NodeParent, OperationId, ProjectId, PropertyValue,
+    RecoveryBundle, RecoveryCenter, RecoveryRecord, ResolutionChoice, RevisionId, RevisionMetadata,
+    RevisionReason, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, StudioDesign,
+    StudioDesignSnapshot, UndoGroupId,
 };
 use studio_protocol::NodeKind;
 
@@ -76,7 +78,9 @@ fn design() -> StudioDesign {
     root.children.push(item_id.clone());
     let item = studio_design::DesignNode::primitive(item_id.clone(), "Item", NodeKind::Text);
     let mut design = StudioDesign::empty(project_id(), "Recovery fixture");
-    design.nodes.extend([(root_id.clone(), root), (item_id.clone(), item)]);
+    design
+        .nodes
+        .extend([(root_id.clone(), root), (item_id.clone(), item)]);
     design.parents.insert(
         root_id.clone(),
         NodeParent::Screen {
@@ -85,7 +89,9 @@ fn design() -> StudioDesign {
     );
     design.parents.insert(
         item_id,
-        NodeParent::Node { node_id: root_id.clone() },
+        NodeParent::Node {
+            node_id: root_id.clone(),
+        },
     );
     design.screens.insert(
         screen_id.clone(),
@@ -121,14 +127,22 @@ fn initial_snapshot() -> StudioDesignSnapshot {
 fn seeded_conflict_is_visible_before_open_and_keeps_both_intents() {
     block_on(async {
         let persistence = InMemoryConflictPersistence::default();
-        let mut center = ConflictCenter::open(persistence.clone(), project_id()).await.unwrap();
-        let local = ConflictIntent::new(batch("local", "local intent"), Some(RevisionId::new(2))).unwrap();
-        let remote = ConflictIntent::new(batch("remote", "remote intent"), Some(RevisionId::new(2))).unwrap();
-        let conflict = ConflictRecord::new(project_id(), 42, local.clone(), remote.clone()).unwrap();
+        let mut center = ConflictCenter::open(persistence.clone(), project_id())
+            .await
+            .unwrap();
+        let local =
+            ConflictIntent::new(batch("local", "local intent"), Some(RevisionId::new(2))).unwrap();
+        let remote =
+            ConflictIntent::new(batch("remote", "remote intent"), Some(RevisionId::new(2)))
+                .unwrap();
+        let conflict =
+            ConflictRecord::new(project_id(), 42, local.clone(), remote.clone()).unwrap();
         let conflict_id = conflict.conflict_id.clone();
         center.record(conflict).await.unwrap();
 
-        let reopened = ConflictCenter::open(persistence, project_id()).await.unwrap();
+        let reopened = ConflictCenter::open(persistence, project_id())
+            .await
+            .unwrap();
         assert_eq!(reopened.pending().len(), 1);
         let visible = &reopened.records()[0];
         assert_eq!(visible.local.batch.commands, local.batch.commands);
@@ -147,7 +161,8 @@ fn every_resolution_choice_retains_the_two_promised_intents() {
     ] {
         let local = ConflictIntent::new(batch("local", "local intent"), None).unwrap();
         let remote = ConflictIntent::new(batch("remote", "remote intent"), None).unwrap();
-        let mut conflict = ConflictRecord::new(project_id(), 42, local.clone(), remote.clone()).unwrap();
+        let mut conflict =
+            ConflictRecord::new(project_id(), 42, local.clone(), remote.clone()).unwrap();
         let plan = conflict.resolve(choice).unwrap();
         assert_eq!(plan.retained.len(), 2);
         assert!(plan.retained.contains(&local));
@@ -160,7 +175,13 @@ fn every_resolution_choice_retains_the_two_promised_intents() {
 fn logical_snapshot_plus_journal_rebuilds_a_working_session() {
     block_on(async {
         let snapshot = LogicalSnapshot::new(project_id(), initial_snapshot(), 0, 100).unwrap();
-        let entry = JournalEntry::new(1, project_id(), batch("journal-edit", "replayed"), RevisionId::new(1)).unwrap();
+        let entry = JournalEntry::new(
+            1,
+            project_id(),
+            batch("journal-edit", "replayed"),
+            RevisionId::new(1),
+        )
+        .unwrap();
         let bundle = RecoveryBundle {
             snapshot,
             journal: vec![entry],
@@ -189,11 +210,19 @@ fn recovery_center_quarantines_without_deleting_source_bundle() {
             journal: Vec::new(),
         };
         let record = RecoveryRecord::new("recovery-1", bundle.clone()).unwrap();
-        let mut center = RecoveryCenter::open(persistence.clone(), project_id()).await.unwrap();
+        let mut center = RecoveryCenter::open(persistence.clone(), project_id())
+            .await
+            .unwrap();
         center.record(record).await.unwrap();
-        center.quarantine("recovery-1", "migration interrupted").await.unwrap();
+        center
+            .quarantine("recovery-1", "migration interrupted")
+            .await
+            .unwrap();
         let saved = persistence.records(&project_id());
-        assert!(matches!(saved[0].state, studio_design::RecoveryState::Quarantined));
+        assert!(matches!(
+            saved[0].state,
+            studio_design::RecoveryState::Quarantined
+        ));
         assert_eq!(saved[0].bundle, bundle);
     });
 }

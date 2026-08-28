@@ -3,7 +3,7 @@
 //! This module owns the closed, versioned IR that both Designer-authored
 //! projects and hand-authored Studio Script compile through.  The IR mirrors
 //! the parser-of-record semantic model for screens and nodes, adds declarative
-//! navigation behaviors, and is the single input of the AssemblyScript
+//! navigation behaviors, and is the single input of the `AssemblyScript`
 //! lowering backend.
 //!
 //! The v1 skeleton subset covers static screen trees and typed navigation

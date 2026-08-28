@@ -522,21 +522,7 @@ fn paint_value(paint: &Paint) -> Option<PropertyValue> {
 }
 
 fn merge_layout(base: &LayoutProperties, override_value: &LayoutProperties) -> LayoutProperties {
-    LayoutProperties {
-        schema_version: base.schema_version,
-        width: override_value.width.clone().or_else(|| base.width.clone()),
-        height: override_value
-            .height
-            .clone()
-            .or_else(|| base.height.clone()),
-        gap: override_value.gap.clone().or_else(|| base.gap.clone()),
-        padding: override_value
-            .padding
-            .clone()
-            .or_else(|| base.padding.clone()),
-        placement: override_value.placement.or(base.placement),
-        alignment: override_value.alignment.or(base.alignment),
-    }
+    base.merged_with(override_value)
 }
 
 fn merge_style(base: &StyleProperties, override_value: &StyleProperties) -> StyleProperties {

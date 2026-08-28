@@ -5,6 +5,9 @@
 //! recover typed batches, but cannot obtain a Surreal handle or execute
 //! SurrealQL.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -115,7 +118,7 @@ pub struct LocalStoreDiagnostic {
 }
 
 impl LocalStoreDiagnostic {
-    const fn new(code: LocalStoreDiagnosticCode) -> Self {
+    pub(crate) const fn new(code: LocalStoreDiagnosticCode) -> Self {
         let message = match code {
             LocalStoreDiagnosticCode::DirectoryInvalid => {
                 "Choose an existing writable application-data directory."
@@ -177,7 +180,7 @@ pub struct LocalStoreError {
 }
 
 impl LocalStoreError {
-    const fn new(code: LocalStoreDiagnosticCode) -> Self {
+    pub(crate) const fn new(code: LocalStoreDiagnosticCode) -> Self {
         let diagnostic = LocalStoreDiagnostic::new(code);
         Self {
             diagnostic_message: diagnostic.message,
@@ -392,10 +395,12 @@ fn write_manifest(directory: &Path) -> Result<(), LocalStoreDiagnosticCode> {
 async fn read_schema_metadata(
     database: &Surreal<Db>,
 ) -> Result<Option<StoredMetadata>, LocalStoreDiagnosticCode> {
-    let stored: Option<StoredMetadata> = database
-        .select((TABLE_METADATA, METADATA_KEY))
-        .await
-        .map_err(|_| LocalStoreDiagnosticCode::SchemaMetadataCorrupt)?;
+    let stored: Option<StoredMetadata> = match database.select((TABLE_METADATA, METADATA_KEY)).await
+    {
+        Ok(stored) => stored,
+        Err(error) if error.is_not_found() => return Ok(None),
+        Err(_) => return Err(LocalStoreDiagnosticCode::SchemaMetadataCorrupt),
+    };
     Ok(stored)
 }
 
@@ -510,9 +515,13 @@ impl EmbeddedLocalStore {
             .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::DirectoryInvalid))?;
         // A missing manifest marks a fresh store; a present one is validated so
         // an incompatible store never gets silently reopened by `open`.
-        let fresh_store = read_manifest(&directory)
-            .map_err(LocalStoreError::new)?
-            .is_none();
+        let fresh_store = match read_manifest(&directory).map_err(LocalStoreError::new)? {
+            Some(manifest) => {
+                validate_manifest(&manifest).map_err(LocalStoreError::new)?;
+                false
+            }
+            None => true,
+        };
         let database = connect_rocksdb(&directory, durability)
             .await
             .map_err(LocalStoreError::new)?;
@@ -674,11 +683,16 @@ impl LocalStore for EmbeddedLocalStore {
             if !batch_id_is_valid(batch_id) {
                 return Err(LocalStoreError::new(LocalStoreDiagnosticCode::BatchInvalid));
             }
-            let stored: Option<PersistedBatch> = self
-                .database
-                .select((TABLE_BATCH, batch_id))
-                .await
-                .map_err(|_| LocalStoreError::new(LocalStoreDiagnosticCode::OperationFailed))?;
+            let stored: Option<PersistedBatch> =
+                match self.database.select((TABLE_BATCH, batch_id)).await {
+                    Ok(stored) => stored,
+                    Err(error) if error.is_not_found() => None,
+                    Err(_) => {
+                        return Err(LocalStoreError::new(
+                            LocalStoreDiagnosticCode::OperationFailed,
+                        ));
+                    }
+                };
             Ok(stored
                 .map(|record| {
                     record
@@ -699,6 +713,10 @@ impl LocalStore for EmbeddedLocalStore {
             // Durability::Every has already synced every accepted transaction;
             // releasing the handle lets the engine stop its background workers.
             drop(self.database);
+            // SurrealDB delivers the session-drop event to its local router asynchronously. Give
+            // that router enough time to finish its datastore shutdown so a caller that immediately
+            // reopens the same RocksDB directory does not race it while releasing the file lock.
+            tokio_time::sleep(Duration::from_millis(500)).await;
             Ok(())
         }
     }

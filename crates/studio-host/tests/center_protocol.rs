@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 use studio_host::{
-    CenterHttpRequest, CenterHttpResponse, CenterHttpTransport, CenterId,
-    CenterProtocolLimits, CenterProtocolServer, CenterServer, CenterStationClient, CenterTopology,
-    CenterTransportError, StationSettings, StationWriteResult,
+    CenterHttpRequest, CenterHttpResponse, CenterHttpTransport, CenterId, CenterProtocolLimits,
+    CenterProtocolServer, CenterServer, CenterStationClient, CenterTopology, CenterTransportError,
+    StationSettings, StationWriteResult,
 };
 
 struct Loopback {
@@ -16,7 +16,10 @@ struct Loopback {
 }
 
 impl CenterHttpTransport for Loopback {
-    fn request(&self, request: CenterHttpRequest) -> Result<CenterHttpResponse, CenterTransportError> {
+    fn request(
+        &self,
+        request: CenterHttpRequest,
+    ) -> Result<CenterHttpResponse, CenterTransportError> {
         Ok(self.server.handle_http(request))
     }
 }
@@ -80,7 +83,10 @@ fn authenticated_http_clients_converge_and_preserve_stale_conflicts() {
         .expect("second authoritative write");
 
     let replay = station_b.reconnect().expect("replay");
-    assert!(matches!(replay.as_slice(), [StationWriteResult::Conflict { .. }]));
+    assert!(matches!(
+        replay.as_slice(),
+        [StationWriteResult::Conflict { .. }]
+    ));
     assert_eq!(station_b.snapshot().expect("snapshot").revision(), 3);
 }
 

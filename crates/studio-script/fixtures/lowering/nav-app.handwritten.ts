@@ -23,7 +23,7 @@ export function studio_alloc(length: i32): i32 {
 export function studio_dealloc(_pointer: i32, _length: i32): void {}
 
 const MOUNT_PAYLOAD: string =
-  '{"type":"mount","payload":{"protocol_version":1,"route":"/home","root":{"id":"home","kind":"screen","props":{"title":"Home"},"children":[{"id":"home-title","kind":"text","props":{"text":"Home"},"children":[]},{"id":"open-detail","kind":"button","props":{"label":"Open detail"},"children":[]},{"id":"search","kind":"text_input","props":{"placeholder":"Search"},"children":[]}]}}}';
+  '{"type":"mount","payload":{"protocol_version":1,"route":"/home","root":{"id":"home","kind":"empty","props":{"title":"Home"},"children":[{"id":"home-text-1","kind":"text","props":{"text":"Home"},"children":[]},{"id":"open-detail","kind":"button","props":{"label":"Open detail"},"children":[]},{"id":"search","kind":"text_input","props":{"placeholder":"Search"},"children":[]}]}}}';
 
 const PUSH_DETAIL: string =
   '{"type":"navigate","payload":{"operation":"push","route":"/detail"}}';

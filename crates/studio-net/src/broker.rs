@@ -105,10 +105,7 @@ impl<'store> RestBroker<'store> {
     }
 
     /// Compile and install a complete declaration set atomically.
-    pub fn install_groups<'declarations, I>(
-        &mut self,
-        declarations: I,
-    ) -> Result<(), BrokerError>
+    pub fn install_groups<'declarations, I>(&mut self, declarations: I) -> Result<(), BrokerError>
     where
         I: IntoIterator<Item = &'declarations RouteGroupDeclaration>,
     {
@@ -283,7 +280,10 @@ impl<'store> RestBroker<'store> {
         let mut headers = guest_headers(&request);
         headers.push((String::from("accept"), String::from("text/event-stream")));
         if !body_bytes.is_empty() {
-            headers.push((String::from("content-type"), String::from("application/json")));
+            headers.push((
+                String::from("content-type"),
+                String::from("application/json"),
+            ));
         }
         credential::resolve(
             group,

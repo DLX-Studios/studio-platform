@@ -3,21 +3,26 @@
 use std::collections::BTreeMap;
 
 use studio_design::{
-    Actor, ActorId, ActorKind, BrandSlot, Command, GeneratedSettingsSurface, ImportDestination,
-    ImportProposal, ImportReview, ImportReviewError, ImportReviewStatus, ImportSource,
-    InferredEntity, InstalledPlugin, NodeId, NodeParent, OperationId, ParentPlacement,
-    PluginId, ProjectId, RevisionId, SettingKey, SettingValue, SourceProvenance,
-    TemplateDefinition, TemplateNode, TemplateScreen, TokenId, TokenKind,
-    TokenValue, DesignToken, STUDIO_DESIGN_SCHEMA_VERSION, UndoGroupId,
+    Actor, ActorId, ActorKind, BrandSlot, Command, DesignToken, GeneratedSettingsSurface,
+    ImportDestination, ImportProposal, ImportReview, ImportReviewError, ImportReviewStatus,
+    ImportSource, InferredEntity, InstalledPlugin, NodeId, NodeParent, OperationId,
+    ParentPlacement, PluginId, ProjectId, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, SettingKey,
+    SettingValue, SourceProvenance, TemplateDefinition, TemplateNode, TemplateScreen, TokenId,
+    TokenKind, TokenValue, UndoGroupId,
 };
-use studio_plugin_registry::{pos_pack_descriptor, SettingsField, SettingsFieldType, SettingsGroup};
 use studio_plugin_registry::{
     ApprovedKindCatalog, DescriptorPolicy, ExtensionRegistry, pos_pack_template_envelope,
     pos_pack_trust_store,
 };
+use studio_plugin_registry::{
+    SettingsField, SettingsFieldType, SettingsGroup, pos_pack_descriptor,
+};
 use studio_protocol::NodeKind;
 
-fn id<T>(value: &str, constructor: impl FnOnce(String) -> Result<T, studio_design::model::InvalidIdentity>) -> T {
+fn id<T>(
+    value: &str,
+    constructor: impl FnOnce(String) -> Result<T, studio_design::model::InvalidIdentity>,
+) -> T {
     constructor(value.to_owned()).expect("valid test identity")
 }
 
@@ -51,27 +56,67 @@ fn node(id_value: &str, kind: NodeKind) -> TemplateNode {
 #[test]
 fn settings_surface_renders_every_declared_control_kind() {
     let mut descriptor = pos_pack_descriptor();
-    descriptor.contributions.settings_groups.push(SettingsGroup {
-        id: "all-types".to_owned(),
-        title: "All types".to_owned(),
-        fields: vec![
-            SettingsField { id: "image".to_owned(), label: "Image".to_owned(), kind: SettingsFieldType::Image },
-        ],
-    });
+    descriptor
+        .contributions
+        .settings_groups
+        .push(SettingsGroup {
+            id: "all-types".to_owned(),
+            title: "All types".to_owned(),
+            fields: vec![SettingsField {
+                id: "image".to_owned(),
+                label: "Image".to_owned(),
+                kind: SettingsFieldType::Image,
+            }],
+        });
     let surface = GeneratedSettingsSurface::from_descriptor(
         id("com.studio.pack.pos", PluginId::new),
         &descriptor,
         &BTreeMap::new(),
     );
-    let controls = surface.tabs.iter().flat_map(|tab| &tab.fields).map(|field| &field.control).collect::<Vec<_>>();
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::Text { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::Number { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::Boolean { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::Color { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::Image { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::Select { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::SecretReference { .. })));
-    assert!(controls.iter().any(|control| matches!(control, studio_design::ux::SettingsControl::DevicePicker { .. })));
+    let controls = surface
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.fields)
+        .map(|field| &field.control)
+        .collect::<Vec<_>>();
+    assert!(
+        controls
+            .iter()
+            .any(|control| matches!(control, studio_design::ux::SettingsControl::Text { .. }))
+    );
+    assert!(
+        controls
+            .iter()
+            .any(|control| matches!(control, studio_design::ux::SettingsControl::Number { .. }))
+    );
+    assert!(
+        controls
+            .iter()
+            .any(|control| matches!(control, studio_design::ux::SettingsControl::Boolean { .. }))
+    );
+    assert!(
+        controls
+            .iter()
+            .any(|control| matches!(control, studio_design::ux::SettingsControl::Color { .. }))
+    );
+    assert!(
+        controls
+            .iter()
+            .any(|control| matches!(control, studio_design::ux::SettingsControl::Image { .. }))
+    );
+    assert!(
+        controls
+            .iter()
+            .any(|control| matches!(control, studio_design::ux::SettingsControl::Select { .. }))
+    );
+    assert!(controls.iter().any(|control| matches!(
+        control,
+        studio_design::ux::SettingsControl::SecretReference { .. }
+    )));
+    assert!(controls.iter().any(|control| matches!(
+        control,
+        studio_design::ux::SettingsControl::DevicePicker { .. }
+    )));
 }
 
 #[test]
@@ -145,10 +190,30 @@ fn template_install_and_rebrand_batches_have_narrow_command_scopes() {
         actor(),
         id("install-group", UndoGroupId::new),
     );
-    assert!(install.commands.iter().any(|command| matches!(command, Command::SetPlugin { .. })));
-    assert!(install.commands.iter().any(|command| matches!(command, Command::InsertScreen { .. })));
-    assert!(install.commands.iter().any(|command| matches!(command, Command::InsertNode { .. })));
-    assert!(install.commands.iter().all(|command| !matches!(command, Command::SetProperty { .. })));
+    assert!(
+        install
+            .commands
+            .iter()
+            .any(|command| matches!(command, Command::SetPlugin { .. }))
+    );
+    assert!(
+        install
+            .commands
+            .iter()
+            .any(|command| matches!(command, Command::InsertScreen { .. }))
+    );
+    assert!(
+        install
+            .commands
+            .iter()
+            .any(|command| matches!(command, Command::InsertNode { .. }))
+    );
+    assert!(
+        install
+            .commands
+            .iter()
+            .all(|command| !matches!(command, Command::SetProperty { .. }))
+    );
 }
 
 #[test]
@@ -156,7 +221,10 @@ fn import_review_requires_approval_and_keeps_source_provenance() {
     let source = provenance();
     let mut review = ImportReview {
         id: "review-1".to_owned(),
-        sources: vec![ImportSource { provenance: source.clone(), media_type: "text/html".to_owned() }],
+        sources: vec![ImportSource {
+            provenance: source.clone(),
+            media_type: "text/html".to_owned(),
+        }],
         entities: vec![InferredEntity {
             id: "entity-1".to_owned(),
             label: "Imported heading".to_owned(),
@@ -167,7 +235,9 @@ fn import_review_requires_approval_and_keeps_source_provenance() {
         destination: ImportDestination {
             project_id: id("project", ProjectId::new),
             parent: ParentPlacement {
-                parent: NodeParent::Node { node_id: id("root", NodeId::new) },
+                parent: NodeParent::Node {
+                    node_id: id("root", NodeId::new),
+                },
                 index: 0,
             },
         },
@@ -186,13 +256,20 @@ fn import_review_requires_approval_and_keeps_source_provenance() {
     );
     assert_eq!(blocked, Err(ImportReviewError::NotApproved));
     review.approve().expect("pending review approves");
-    let batch = review.command_batch(
-        RevisionId::INITIAL,
-        id("import", OperationId::new),
-        Actor { kind: ActorKind::Ingestion, ..actor() },
-        id("import-group", UndoGroupId::new),
-    ).expect("approved review emits commands");
-    assert!(matches!(batch.commands.first(), Some(Command::InsertNode { node, .. }) if node.provenance.as_ref() == Some(&source)));
+    let batch = review
+        .command_batch(
+            RevisionId::INITIAL,
+            id("import", OperationId::new),
+            Actor {
+                kind: ActorKind::Ingestion,
+                ..actor()
+            },
+            id("import-group", UndoGroupId::new),
+        )
+        .expect("approved review emits commands");
+    assert!(
+        matches!(batch.commands.first(), Some(Command::InsertNode { node, .. }) if node.provenance.as_ref() == Some(&source))
+    );
 }
 
 #[test]
@@ -202,10 +279,16 @@ fn admitted_registry_template_projects_to_browser_ready_definition() {
         pos_pack_trust_store(),
         ApprovedKindCatalog::with_defaults(),
     );
-    registry.admit(&pos_pack_template_envelope()).expect("fixture admits");
-    let template = TemplateDefinition::from_registry(&registry, "com.studio.pack.pos", "pos.register")
-        .expect("template projects");
+    registry
+        .admit(&pos_pack_template_envelope())
+        .expect("fixture admits");
+    let template =
+        TemplateDefinition::from_registry(&registry, "com.studio.pack.pos", "pos.register")
+            .expect("template projects");
     assert_eq!(template.screens.len(), 1);
     assert_eq!(template.brand_slots.len(), 1);
-    assert_eq!(template.provenance.source_id, "plugin:com.studio.pack.pos/template:pos.register");
+    assert_eq!(
+        template.provenance.source_id,
+        "plugin:com.studio.pack.pos/template:pos.register"
+    );
 }

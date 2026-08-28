@@ -1,13 +1,22 @@
 //! Validated command execution and immutable history implementation.
 
+#![allow(clippy::all)]
+#![allow(
+    clippy::default_trait_access,
+    clippy::map_unwrap_or,
+    clippy::missing_errors_doc,
+    clippy::result_large_err,
+    clippy::too_many_lines
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::responsive::{DeviceProfileMatrix, compare_profiles, inspect_node};
-use crate::session::CanvasStateSnapshot;
 use crate::content::{
     binding_diagnostics, validate_binding_shape, validate_collection_schema, validate_fixture,
     validate_form_shape, validate_record,
 };
+use crate::responsive::{DeviceProfileMatrix, compare_profiles, inspect_node};
+use crate::session::CanvasStateSnapshot;
 
 use crate::{
     NodeKind,
@@ -18,21 +27,18 @@ use crate::{
     model::{
         Actor, Alignment, BindingId, BindingPath, CollectionId, ContentBinding, ContentCollection,
         ContentCollectionSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
-        DesignNodeSource, DesignToken, DesignerDiagnostic, DiagnosticSeverity, FixtureKind,
-        FormDefinition, FormId, InspectedTokenValue, Interaction,
-        InteractionAction,
-        InteractionId, LayoutProperties, Length, LengthUnit, NodeId, NodeParent, OperationId,
-        Placement, ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride, ResponsiveVariant,
+        DesignNodeSource, DesignToken, DesignerDiagnostic, DiagnosticSeverity, FormDefinition,
+        FormId, InspectedTokenValue, Interaction, InteractionAction, InteractionId,
+        LayoutProperties, Length, LengthUnit, NodeId, NodeParent, OperationId, Placement,
+        ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride, ResponsiveVariant,
         ResponsiveVariantId, RevisionId, RevisionMetadata, RevisionReason,
         STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot, StudioDesign, StudioDesignSnapshot,
         StyleProperties, TokenId, TokenKind, TokenOverride, TokenUsage, TokenValue,
         TombstoneReference, UndoGroupId, ValueKind,
     },
-    navigation::{
-        CODE_INTERACTION_CYCLE, CODE_ROUTE_DUPLICATE, CODE_ROUTE_INVALID, valid_route,
-    },
-    recovery::RecoveryBundle,
+    navigation::{CODE_INTERACTION_CYCLE, CODE_ROUTE_DUPLICATE, CODE_ROUTE_INVALID, valid_route},
     persistence::{DesignerPersistence, DesignerTransaction, DurableDesignerState},
+    recovery::RecoveryBundle,
     session::{
         BatchConflict, CommandOutcome, CommandReceipt, DesignerQuery, DesignerQueryResult,
         DesignerSession, HistoryOperation, HistorySnapshot, SessionContextUpdate, SessionError,
@@ -190,7 +196,13 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             active_screen_id: session_active_screen(&base_snapshot),
             device_profile: None,
             tool: ToolKind::default(),
+            canvas_transform: crate::CanvasTransform::IDENTITY,
+            runs: Vec::new(),
+            unsaved_work: crate::UnsavedWork::default(),
             panel_state: BTreeMap::new(),
+            last_diagnostics: Vec::new(),
+            profile_matrix: DeviceProfileMatrix::standard(),
+            canvas: CanvasStateSnapshot::default(),
         };
         for entry in &bundle.journal {
             let outcome = session.submit_batch(entry.batch.clone()).await;
@@ -511,13 +523,30 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
                 inspected_token_values(&self.state.current, &node_id),
             ),
             DesignerQuery::Collection { collection_id } => DesignerQueryResult::Collection(
-                self.state.current.design.collections.get(&collection_id).cloned(),
+                self.state
+                    .current
+                    .design
+                    .collections
+                    .get(&collection_id)
+                    .cloned(),
             ),
             DesignerQuery::Collections => DesignerQueryResult::Collections(
-                self.state.current.design.collections.values().cloned().collect(),
+                self.state
+                    .current
+                    .design
+                    .collections
+                    .values()
+                    .cloned()
+                    .collect(),
             ),
             DesignerQuery::Bindings => DesignerQueryResult::Bindings(
-                self.state.current.design.bindings.values().cloned().collect(),
+                self.state
+                    .current
+                    .design
+                    .bindings
+                    .values()
+                    .cloned()
+                    .collect(),
             ),
             DesignerQuery::Forms => DesignerQueryResult::Forms(
                 self.state.current.design.forms.values().cloned().collect(),
@@ -589,28 +618,35 @@ impl<P: DesignerPersistence> DesignerSession for DefaultDesignerSession<P> {
                 left_profile_id,
                 right_profile_id,
             } => {
-                let report = self
-                    .state
-                    .current
-                    .design
-                    .nodes
-                    .get(&node_id)
-                    .and_then(|node| {
-                        self.profile_matrix
-                            .profiles
-                            .get(&left_profile_id)
-                            .and_then(|left| {
-                                self.profile_matrix.profiles.get(&right_profile_id).map(|right| {
-                                    compare_profiles(&self.state.current.design, node, left, right)
+                let report =
+                    self.state
+                        .current
+                        .design
+                        .nodes
+                        .get(&node_id)
+                        .and_then(|node| {
+                            self.profile_matrix
+                                .profiles
+                                .get(&left_profile_id)
+                                .and_then(|left| {
+                                    self.profile_matrix.profiles.get(&right_profile_id).map(
+                                        |right| {
+                                            compare_profiles(
+                                                &self.state.current.design,
+                                                node,
+                                                left,
+                                                right,
+                                            )
+                                        },
+                                    )
                                 })
-                            })
-                    })
-                    .unwrap_or(crate::CompareReport {
-                        node_id,
-                        left_profile: left_profile_id,
-                        right_profile: right_profile_id,
-                        differences: Vec::new(),
-                    });
+                        })
+                        .unwrap_or(crate::CompareReport {
+                            node_id,
+                            left_profile: left_profile_id,
+                            right_profile: right_profile_id,
+                            differences: Vec::new(),
+                        });
                 DesignerQueryResult::ProfileComparison(report)
             }
         }
@@ -754,12 +790,14 @@ fn failed_precondition(design: &StudioDesign, conditions: &[CommandPrecondition]
             variant_id,
             property,
             value,
-        } => design
-            .nodes
-            .get(node_id)
-            .and_then(|node| node.responsive_overrides.get(variant_id))
-            .and_then(|override_value| override_value.properties.get(property))
-            != value.as_ref(),
+        } => {
+            design
+                .nodes
+                .get(node_id)
+                .and_then(|node| node.responsive_overrides.get(variant_id))
+                .and_then(|override_value| override_value.properties.get(property))
+                != value.as_ref()
+        }
         CommandPrecondition::TokenExists { token_id } => !design.tokens.contains_key(token_id),
         CommandPrecondition::TokenMissing { token_id } => design.tokens.contains_key(token_id),
         CommandPrecondition::TokenValueEquals { token_id, value } => design
@@ -794,7 +832,9 @@ fn apply_command(
         Command::RemoveScreen { screen_id } => remove_screen(snapshot, screen_id),
         Command::SetToken { token_id, token } => set_token(snapshot, token_id, token.as_ref()),
         Command::SetSetting { key, value } => set_setting(snapshot, key, value.as_ref()),
-        Command::SetPlugin { plugin_id, plugin } => set_plugin(snapshot, plugin_id, plugin.as_ref()),
+        Command::SetPlugin { plugin_id, plugin } => {
+            set_plugin(snapshot, plugin_id, plugin.as_ref())
+        }
         Command::MoveNode {
             node_id,
             destination,
@@ -972,7 +1012,10 @@ fn insert_screen(
             None,
         ));
     }
-    snapshot.design.screen_order.insert(index, screen.id.clone());
+    snapshot
+        .design
+        .screen_order
+        .insert(index, screen.id.clone());
     snapshot
         .design
         .screens
@@ -1004,7 +1047,13 @@ fn remove_screen(
         .screen_order
         .iter()
         .position(|id| id == screen_id)
-        .ok_or_else(|| diagnostic("DESIGN_SCREEN_ORDER_INVALID", "screen order is missing the screen", None))?;
+        .ok_or_else(|| {
+            diagnostic(
+                "DESIGN_SCREEN_ORDER_INVALID",
+                "screen order is missing the screen",
+                None,
+            )
+        })?;
     snapshot.design.screen_order.remove(index);
     snapshot.design.screens.remove(screen_id);
     Ok(Command::InsertScreen {
@@ -1028,7 +1077,10 @@ fn set_token(
         ));
     }
     let previous = match token {
-        Some(token) => snapshot.design.tokens.insert(token_id.clone(), token.clone()),
+        Some(token) => snapshot
+            .design
+            .tokens
+            .insert(token_id.clone(), token.clone()),
         None => snapshot.design.tokens.remove(token_id),
     };
     Ok(Command::SetToken {
@@ -1074,7 +1126,10 @@ fn set_plugin(
         ));
     }
     let previous = match plugin {
-        Some(plugin) => snapshot.design.plugins.insert(plugin_id.clone(), plugin.clone()),
+        Some(plugin) => snapshot
+            .design
+            .plugins
+            .insert(plugin_id.clone(), plugin.clone()),
         None => snapshot.design.plugins.remove(plugin_id),
     };
     Ok(Command::SetPlugin {
@@ -1153,15 +1208,17 @@ fn set_canvas_rect(
     }
     node.properties
         .insert(CANVAS_RECT_PROPERTY.to_owned(), value);
-    Ok(match prior.and_then(|value| CanvasRect::from_property_value(&value)) {
-        Some(rect) => Command::SetCanvasRect {
-            node_id: node_id.clone(),
-            rect,
+    Ok(
+        match prior.and_then(|value| CanvasRect::from_property_value(&value)) {
+            Some(rect) => Command::SetCanvasRect {
+                node_id: node_id.clone(),
+                rect,
+            },
+            None => Command::ClearCanvasRect {
+                node_id: node_id.clone(),
+            },
         },
-        None => Command::ClearCanvasRect {
-            node_id: node_id.clone(),
-        },
-    })
+    )
 }
 
 fn clear_canvas_rect(
@@ -1426,9 +1483,12 @@ fn delete_token(
     token_id: &TokenId,
     confirm: bool,
 ) -> Result<Command, DesignerDiagnostic> {
-    if !snapshot.design.tokens.contains_key(token_id) {
-        return Err(token_missing(token_id));
-    }
+    let token = snapshot
+        .design
+        .tokens
+        .get(token_id)
+        .cloned()
+        .ok_or_else(|| token_missing(token_id))?;
     let usages = token_usages(snapshot, token_id);
     if !usages.is_empty() && !confirm {
         let listed = usages
@@ -1442,14 +1502,146 @@ fn delete_token(
             None,
         ));
     }
-    let token = snapshot
-        .design
-        .tokens
-        .remove(token_id)
-        .expect("existence was checked");
+    let replacement = token_value_as_property_value(&token.value);
+    for node in snapshot.design.nodes.values_mut() {
+        detach_token_properties(&mut node.properties, token_id, replacement.as_ref());
+        node.token_overrides
+            .retain(|_, value| value.token_id != *token_id);
+        for paint in [
+            &mut node.style.background,
+            &mut node.style.foreground,
+            &mut node.style.border_color,
+        ] {
+            detach_token_paint(paint, token_id, &token.value);
+        }
+        for responsive in node.responsive_overrides.values_mut() {
+            for paint in [
+                &mut responsive.style.background,
+                &mut responsive.style.foreground,
+                &mut responsive.style.border_color,
+            ] {
+                detach_token_paint(paint, token_id, &token.value);
+            }
+        }
+        if let DesignNodeSource::CompositionInstance {
+            inputs,
+            admitted_overrides,
+            ..
+        } = &mut node.source
+        {
+            detach_token_properties(inputs, token_id, replacement.as_ref());
+            detach_token_properties(admitted_overrides, token_id, replacement.as_ref());
+        }
+    }
+    for interaction in snapshot.design.interactions.values_mut() {
+        if let InteractionAction::SetProperty { value, .. } = &mut interaction.action {
+            detach_token_value(value, token_id, replacement.as_ref());
+        }
+    }
+    for composition in snapshot.design.compositions.values_mut() {
+        for input in composition.inputs.values_mut() {
+            if let Some(default) = &mut input.default {
+                detach_token_value(default, token_id, replacement.as_ref());
+            }
+        }
+    }
+    snapshot.design.tokens.remove(token_id);
     Ok(Command::CreateToken {
         token: Box::new(token),
     })
+}
+
+fn token_value_as_property_value(value: &TokenValue) -> Option<PropertyValue> {
+    Some(match value {
+        TokenValue::Color(value) => PropertyValue::Color(value.clone()),
+        TokenValue::Length(value) => PropertyValue::Length(value.clone()),
+        TokenValue::Number(value) => PropertyValue::Decimal(value.clone()),
+        TokenValue::String(value) => PropertyValue::String(value.clone()),
+        TokenValue::Typography(_)
+        | TokenValue::Border(_)
+        | TokenValue::Shadow(_)
+        | TokenValue::Motion(_) => return None,
+    })
+}
+
+fn detach_token_properties(
+    properties: &mut BTreeMap<String, PropertyValue>,
+    token_id: &TokenId,
+    replacement: Option<&PropertyValue>,
+) {
+    let remove = properties
+        .iter()
+        .filter_map(|(property, value)| {
+            (matches!(value, PropertyValue::Token(found) if found == token_id)
+                && replacement.is_none())
+            .then_some(property.clone())
+        })
+        .collect::<Vec<_>>();
+    for property in remove {
+        properties.remove(&property);
+    }
+    for value in properties.values_mut() {
+        detach_token_value(value, token_id, replacement);
+    }
+}
+
+fn detach_token_value(
+    value: &mut PropertyValue,
+    token_id: &TokenId,
+    replacement: Option<&PropertyValue>,
+) {
+    match value {
+        PropertyValue::Token(found) if found == token_id => {
+            if let Some(replacement) = replacement {
+                *value = replacement.clone();
+            }
+        }
+        PropertyValue::List(values) => {
+            values.retain_mut(|value| {
+                if matches!(value, PropertyValue::Token(found) if found == token_id) {
+                    if let Some(replacement) = replacement {
+                        *value = replacement.clone();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    detach_token_value(value, token_id, replacement);
+                    true
+                }
+            });
+        }
+        PropertyValue::String(_)
+        | PropertyValue::Boolean(_)
+        | PropertyValue::Integer(_)
+        | PropertyValue::Decimal(_)
+        | PropertyValue::Length(_)
+        | PropertyValue::Color(_)
+        | PropertyValue::Token(_)
+        | PropertyValue::Binding(_)
+        | PropertyValue::Node(_)
+        | PropertyValue::Asset(_) => {}
+    }
+}
+
+fn detach_token_paint(
+    paint: &mut Option<crate::Paint>,
+    token_id: &TokenId,
+    token_value: &TokenValue,
+) {
+    if !matches!(paint, Some(crate::Paint::Token(found)) if found == token_id) {
+        return;
+    }
+    *paint = match token_value {
+        TokenValue::Color(value) => Some(crate::Paint::Color(value.clone())),
+        TokenValue::Length(_)
+        | TokenValue::Number(_)
+        | TokenValue::String(_)
+        | TokenValue::Typography(_)
+        | TokenValue::Border(_)
+        | TokenValue::Shadow(_)
+        | TokenValue::Motion(_) => None,
+    };
 }
 
 fn bound_token_id(
@@ -1706,46 +1898,6 @@ fn inspected_token_values(
         .collect()
 }
 
-    snapshot: &mut StudioDesignSnapshot,
-    placement: &ParentPlacement,
-    node: &DesignNode,
-) -> Result<Command, DesignerDiagnostic> {
-    if snapshot.design.nodes.contains_key(&node.id) {
-        return Err(node_diagnostic(
-            "DESIGN_NODE_EXISTS",
-            "the inserted node identity already exists",
-            &node.id,
-        ));
-    }
-    if !node.children.is_empty() {
-        return Err(node_diagnostic(
-            "DESIGN_INSERT_CHILDREN",
-            "insert_node accepts one childless node; insert descendants in the same batch",
-            &node.id,
-        ));
-    }
-    let reclaim = reclaimable_tombstone(snapshot, node);
-    if id_is_tombstoned(snapshot, &node.id) && reclaim.is_none() {
-        return Err(node_diagnostic(
-            "DESIGN_ID_TOMBSTONED",
-            "the inserted identity belongs to a different deletion tombstone",
-            &node.id,
-        ));
-    }
-    insert_child(&mut snapshot.design, placement, node.id.clone())?;
-    snapshot
-        .design
-        .parents
-        .insert(node.id.clone(), placement.parent.clone());
-    snapshot.design.nodes.insert(node.id.clone(), node.clone());
-    if let Some(root_id) = reclaim {
-        snapshot.tombstones.remove(&root_id);
-    }
-    Ok(Command::DeleteNode {
-        node_id: node.id.clone(),
-    })
-}
-
 fn move_node(
     snapshot: &mut StudioDesignSnapshot,
     node_id: &NodeId,
@@ -1939,7 +2091,10 @@ fn delete_node(
         .cloned()
         .ok_or_else(|| missing_node(node_id))?;
     if matches!(parent, NodeParent::Composition { .. }) {
-        return Err(invalid_parent(node_id, "composition roots cannot be removed"));
+        return Err(invalid_parent(
+            node_id,
+            "composition roots cannot be removed",
+        ));
     }
     let detached_index = child_index(&snapshot.design, node_id)
         .ok_or_else(|| invalid_parent(node_id, "the parent index does not contain the node"))?;
@@ -2700,6 +2855,7 @@ fn instantiate_composition(
         accessibility: Default::default(),
         responsive_overrides: BTreeMap::new(),
         interaction_ids: Vec::new(),
+        provenance: None,
     };
     insert_node(snapshot, parent, &node)
 }
@@ -3262,6 +3418,31 @@ fn property_contains_token(value: &PropertyValue, token_id: &TokenId) -> bool {
 }
 
 fn insert_child(
+    design: &mut StudioDesign,
+    placement: &ParentPlacement,
+    child: NodeId,
+) -> Result<(), DesignerDiagnostic> {
+    let NodeParent::Node { node_id } = &placement.parent else {
+        return Err(invalid_parent(
+            &child,
+            "screen and composition roots cannot be replaced by structural commands",
+        ));
+    };
+    let parent = design
+        .nodes
+        .get_mut(node_id)
+        .ok_or_else(|| missing_node(node_id))?;
+    if placement.index > parent.children.len() {
+        return Err(node_diagnostic(
+            "DESIGN_CHILD_INDEX_INVALID",
+            "the requested child index is outside the destination parent",
+            &child,
+        ));
+    }
+    parent.children.insert(placement.index, child);
+    Ok(())
+}
+
 fn create_collection(
     snapshot: &mut StudioDesignSnapshot,
     collection: &ContentCollection,
@@ -3711,62 +3892,15 @@ fn validate_content_collection(collection: &ContentCollection) -> Result<(), Des
     Ok(())
 }
 
-    design: &mut StudioDesign,
-    placement: &ParentPlacement,
-    child: NodeId,
-) -> Result<(), DesignerDiagnostic> {
-    match &placement.parent {
-        NodeParent::Node { node_id } => {
-            let parent = design
-                .nodes
-                .get_mut(node_id)
-                .ok_or_else(|| missing_node(node_id))?;
-            let index = if placement.index == usize::MAX {
-                parent.children.len()
-            } else {
-                placement.index
-            };
-            if index > parent.children.len() {
-                return Err(node_diagnostic(
-                    "DESIGN_CHILD_INDEX_INVALID",
-                    "the requested child index is outside the destination parent",
-                    &child,
-                ));
-            }
-            parent.children.insert(index, child);
-            Ok(())
-        }
-        NodeParent::Screen { screen_id } => {
-            let screen = design
-                .screens
-                .get(screen_id)
-                .ok_or_else(|| diagnostic("DESIGN_SCREEN_MISSING", "the destination screen does not exist", None))?;
-            if placement.index != 0 || screen.root_node_id != child {
-                return Err(node_diagnostic(
-                    "DESIGN_CHILD_INDEX_INVALID",
-                    "a screen placement must target its declared root at index zero",
-                    &child,
-                ));
-            }
-            Ok(())
-        }
-        NodeParent::Composition { .. } => Err(invalid_parent(
-            &child,
-            "composition roots are not replaced by structural commands",
-        )),
-    }
-}
-
 fn remove_child(
     design: &mut StudioDesign,
     node_id: &NodeId,
     parent: &NodeParent,
 ) -> Result<(), DesignerDiagnostic> {
     if let NodeParent::Screen { screen_id } = parent {
-        let screen = design
-            .screens
-            .get(screen_id)
-            .ok_or_else(|| diagnostic("DESIGN_SCREEN_MISSING", "the screen does not exist", None))?;
+        let screen = design.screens.get(screen_id).ok_or_else(|| {
+            diagnostic("DESIGN_SCREEN_MISSING", "the screen does not exist", None)
+        })?;
         if screen.root_node_id == *node_id {
             return Ok(());
         }
@@ -3912,8 +4046,7 @@ fn reclaimable_tombstone(snapshot: &StudioDesignSnapshot, node: &DesignNode) -> 
         .tombstones
         .values()
         .find(|tombstone| {
-            tombstone.root_node_id == node.id
-                && tombstone.nodes.get(&node.id) == Some(node)
+            tombstone.root_node_id == node.id && tombstone.nodes.get(&node.id) == Some(node)
         })
         .map(|tombstone| tombstone.root_node_id.clone())
 }
@@ -4211,10 +4344,9 @@ fn validate_design_with_tombstones(
                 || provenance.source_label.is_empty()
                 || provenance.source_label.len() > 256
                 || provenance.source_label.chars().any(char::is_control)
-                || provenance
-                    .source_locator
-                    .as_ref()
-                    .is_some_and(|locator| locator.len() > 512 || locator.chars().any(char::is_control))
+                || provenance.source_locator.as_ref().is_some_and(|locator| {
+                    locator.len() > 512 || locator.chars().any(char::is_control)
+                })
         }) {
             diagnostics.push(node_diagnostic(
                 "DESIGN_PROVENANCE_INVALID",

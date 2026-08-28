@@ -57,7 +57,9 @@ impl WebSocketBrokerLimits {
             || self.max_session_duration.is_zero()
             || self.reconnect_base_delay.is_zero()
         {
-            return Err(BrokerError::new(BrokerErrorCode::WebSocketDeclarationInvalid));
+            return Err(BrokerError::new(
+                BrokerErrorCode::WebSocketDeclarationInvalid,
+            ));
         }
         Ok(())
     }
@@ -132,7 +134,9 @@ impl WebSocketEffectiveLimits {
             || limits.max_session_duration.is_zero()
             || limits.reconnect_base_delay.is_zero()
         {
-            return Err(BrokerError::new(BrokerErrorCode::WebSocketDeclarationInvalid));
+            return Err(BrokerError::new(
+                BrokerErrorCode::WebSocketDeclarationInvalid,
+            ));
         }
         Ok(limits)
     }
@@ -173,7 +177,9 @@ impl Endpoint {
             return Err(invalid());
         }
         if remainder.is_empty()
-            || remainder.bytes().any(|byte| byte.is_ascii_whitespace() || byte < 0x20)
+            || remainder
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte < 0x20)
             || remainder.contains('#')
             || remainder.contains('@')
         {
@@ -185,13 +191,15 @@ impl Endpoint {
         if authority.is_empty() || authority.len() > 253 {
             return Err(invalid());
         }
-        let host = authority.rsplit_once(':').map_or(authority, |(host, port)| {
-            if port.parse::<u16>().map_or(true, |port| port == 0) {
-                ""
-            } else {
-                host
-            }
-        });
+        let host = authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, port)| {
+                if port.parse::<u16>().map_or(true, |port| port == 0) {
+                    ""
+                } else {
+                    host
+                }
+            });
         if host.is_empty()
             || !host
                 .bytes()
@@ -199,16 +207,14 @@ impl Endpoint {
         {
             return Err(invalid());
         }
-        let (path, query) = suffix.split_once('?').map_or((suffix, None), |(path, query)| {
-            (path, Some(query))
-        });
+        let (path, query) = suffix
+            .split_once('?')
+            .map_or((suffix, None), |(path, query)| (path, Some(query)));
         if !path.is_empty() && !path.starts_with('/') || query.is_some_and(str::is_empty) {
             return Err(invalid());
         }
         let normalized_authority = authority.to_ascii_lowercase();
-        Ok(Self(format!(
-            "{scheme}://{normalized_authority}{suffix}"
-        )))
+        Ok(Self(format!("{scheme}://{normalized_authority}{suffix}")))
     }
 }
 
@@ -257,13 +263,17 @@ impl WebSocketDeclaration {
     ) -> Result<CompiledWebSocketDeclaration, BrokerError> {
         ceilings.validate()?;
         if !valid_identifier(&self.id) {
-            return Err(BrokerError::new(BrokerErrorCode::WebSocketDeclarationInvalid));
+            return Err(BrokerError::new(
+                BrokerErrorCode::WebSocketDeclarationInvalid,
+            ));
         }
         let endpoint = Endpoint::parse(&self.endpoint)?;
         let mut subprotocols = BTreeSet::new();
         for protocol in &self.subprotocols {
             if !valid_subprotocol(protocol) || !subprotocols.insert(protocol.clone()) {
-                return Err(BrokerError::new(BrokerErrorCode::WebSocketDeclarationInvalid));
+                return Err(BrokerError::new(
+                    BrokerErrorCode::WebSocketDeclarationInvalid,
+                ));
             }
         }
         let inbound_schema = BoundedJsonSchema::new(self.inbound_schema.clone())
@@ -297,7 +307,25 @@ fn valid_subprotocol(protocol: &str) -> bool {
         && protocol.len() <= 128
         && protocol.bytes().all(|byte| {
             byte.is_ascii_graphic()
-                && !matches!(byte, b'"' | b'(' | b')' | b',' | b'/' | b':' | b';' | b'<' | b'=' | b'>' | b'?' | b'@' | b'[' | b'\\' | b']' | b'{' | b'}')
+                && !matches!(
+                    byte,
+                    b'"' | b'('
+                        | b')'
+                        | b','
+                        | b'/'
+                        | b':'
+                        | b';'
+                        | b'<'
+                        | b'='
+                        | b'>'
+                        | b'?'
+                        | b'@'
+                        | b'['
+                        | b'\\'
+                        | b']'
+                        | b'{'
+                        | b'}'
+                )
         })
 }
 
@@ -408,7 +436,12 @@ pub enum WebSocketEvent {
     /// One inbound JSON message that passed size and schema validation.
     Message(Value),
     /// The host scheduled a reconnect after a transport failure.
-    Reconnecting { attempt: u32, delay_ms: u64 },
+    Reconnecting {
+        /// One-based reconnect attempt count.
+        attempt: u32,
+        /// Host-selected delay before the next attempt.
+        delay_ms: u64,
+    },
     /// A stable host-side error; no endpoint or provider detail is included.
     Error(BrokerError),
     /// The session reached its terminal closed state.
@@ -437,21 +470,30 @@ impl EventChannel {
     }
 
     fn push(&self, event: WebSocketEvent) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.events.push_back(event);
         drop(state);
         self.signal.notify_all();
     }
 
     fn close(&self) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.closed = true;
         drop(state);
         self.signal.notify_all();
     }
 
     fn next(&self) -> Option<WebSocketEvent> {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(event) = state.events.pop_front() {
                 return Some(event);
@@ -459,10 +501,10 @@ impl EventChannel {
             if state.closed {
                 return None;
             }
-            state = self
-                .signal
-                .wait_timeout(state, Duration::from_millis(250))
-                .map_or_else(std::sync::PoisonError::into_inner, |(guard, _)| guard);
+            state = match self.signal.wait_timeout(state, Duration::from_millis(250)) {
+                Ok((guard, _)) => guard,
+                Err(error) => error.into_inner().0,
+            };
         }
     }
 }
@@ -484,7 +526,10 @@ impl SessionState {
 
     fn check_rate(&self, limits: &WebSocketEffectiveLimits) -> Result<(), BrokerError> {
         let now = Instant::now();
-        let mut rate = self.rate.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut rate = self
+            .rate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while rate
             .front()
             .is_some_and(|stamp| now.duration_since(*stamp) > limits.message_rate_window)
@@ -654,10 +699,7 @@ impl fmt::Debug for WebSocketBroker {
 
 impl WebSocketBroker {
     /// Create a broker over one host transport and explicit ceilings.
-    pub fn new(
-        transport: Arc<dyn WebSocketTransport>,
-        limits: WebSocketBrokerLimits,
-    ) -> Self {
+    pub fn new(transport: Arc<dyn WebSocketTransport>, limits: WebSocketBrokerLimits) -> Self {
         Self {
             declarations: Vec::new(),
             transport,
@@ -678,14 +720,12 @@ impl WebSocketBroker {
     /// Validate and install one signed WebSocket declaration.
     pub fn declare(&mut self, declaration: &WebSocketDeclaration) -> Result<(), BrokerError> {
         let compiled = declaration.compile(&self.limits)?;
-        if self
-            .declarations
-            .iter()
-            .any(|existing| {
-                existing.id() == compiled.id() || existing.endpoint == compiled.endpoint
-            })
-        {
-            return Err(BrokerError::new(BrokerErrorCode::WebSocketDeclarationInvalid));
+        if self.declarations.iter().any(|existing| {
+            existing.id() == compiled.id() || existing.endpoint == compiled.endpoint
+        }) {
+            return Err(BrokerError::new(
+                BrokerErrorCode::WebSocketDeclarationInvalid,
+            ));
         }
         self.declarations.push(compiled);
         Ok(())
@@ -709,9 +749,8 @@ impl WebSocketBroker {
 
     /// Open a host-managed session after endpoint and subprotocol admission.
     pub fn open(&self, request: WebSocketOpenRequest) -> Result<WebSocketSession, BrokerError> {
-        let endpoint = Endpoint::parse(&request.endpoint).map_err(|_| {
-            BrokerError::new(BrokerErrorCode::WebSocketEndpointNotDeclared)
-        })?;
+        let endpoint = Endpoint::parse(&request.endpoint)
+            .map_err(|_| BrokerError::new(BrokerErrorCode::WebSocketEndpointNotDeclared))?;
         let declaration = self
             .declarations
             .iter()
@@ -854,7 +893,11 @@ fn run_session(
     };
     loop {
         if started.elapsed() >= declaration.limits.max_session_duration {
-            terminate(&channel, &state, Some(BrokerError::new(BrokerErrorCode::Timeout)));
+            terminate(
+                &channel,
+                &state,
+                Some(BrokerError::new(BrokerErrorCode::Timeout)),
+            );
             connection.close();
             return;
         }
@@ -871,9 +914,7 @@ fn run_session(
                         terminate(
                             &channel,
                             &state,
-                            Some(BrokerError::new(
-                                BrokerErrorCode::WebSocketMessageTooLarge,
-                            )),
+                            Some(BrokerError::new(BrokerErrorCode::WebSocketMessageTooLarge)),
                         );
                         return;
                     }
@@ -923,7 +964,9 @@ fn run_session(
                     terminate(
                         &channel,
                         &state,
-                        Some(BrokerError::new(BrokerErrorCode::WebSocketMessageSchemaInvalid)),
+                        Some(BrokerError::new(
+                            BrokerErrorCode::WebSocketMessageSchemaInvalid,
+                        )),
                     );
                     connection.close();
                     return;
@@ -932,7 +975,9 @@ fn run_session(
                     terminate(
                         &channel,
                         &state,
-                        Some(BrokerError::new(BrokerErrorCode::WebSocketMessageSchemaInvalid)),
+                        Some(BrokerError::new(
+                            BrokerErrorCode::WebSocketMessageSchemaInvalid,
+                        )),
                     );
                     connection.close();
                     return;
@@ -1009,7 +1054,12 @@ fn connect_with_retries(
                     .limits
                     .reconnect_base_delay
                     .saturating_mul(multiplier)
-                    .min(declaration.limits.max_session_duration.saturating_sub(started.elapsed()));
+                    .min(
+                        declaration
+                            .limits
+                            .max_session_duration
+                            .saturating_sub(started.elapsed()),
+                    );
                 channel.push(WebSocketEvent::Reconnecting {
                     attempt: *attempt,
                     delay_ms: delay.as_millis().try_into().unwrap_or(u64::MAX),
@@ -1021,9 +1071,7 @@ fn connect_with_retries(
                 let code = match error {
                     WebSocketTransportError::TimedOut => BrokerErrorCode::Timeout,
                     WebSocketTransportError::ConnectionFailure
-                    | WebSocketTransportError::MessageTooLarge => {
-                        BrokerErrorCode::TransportFailure
-                    }
+                    | WebSocketTransportError::MessageTooLarge => BrokerErrorCode::TransportFailure,
                 };
                 terminate(channel, state, Some(BrokerError::new(code)));
                 return None;

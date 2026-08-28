@@ -6,6 +6,9 @@
 //! session and an [`AuthorizedApplicationDataHandle`]; they never receive this state or a storage
 //! engine handle.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -20,9 +23,9 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::{
-    ApplicationDataError, ApplicationDataErrorCode, ApplicationDataGuestApi,
-    ApplicationDataHandle, ApplicationDataHost, CollectionRequest, CollectionResponse,
-    LocalStore, PatchOperation, RecordId, StoredRecord, StoreBatchEntry, GuestDataRequest,
+    ApplicationDataError, ApplicationDataErrorCode, ApplicationDataGuestApi, ApplicationDataHandle,
+    ApplicationDataHost, CollectionRequest, CollectionResponse, GuestDataRequest, LocalStore,
+    PatchOperation, RecordId, StoreBatchEntry, StoredRecord,
 };
 
 const RBAC_BATCH: &str = "__rbac";
@@ -215,7 +218,7 @@ impl CollectionGrant {
     ) -> Result<Self, RbacError> {
         let collection = collection.into();
         validate_name(&collection, 64)?;
-        let operations = operations.into_iter().collect();
+        let operations: BTreeSet<DataOperation> = operations.into_iter().collect();
         if operations.is_empty() {
             return Err(RbacError::new(RbacErrorCode::RequestInvalid));
         }
@@ -637,7 +640,10 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         let mut state = self.loaded_state().await?;
         let state = state.as_mut().expect("loaded state is initialized");
         if state.users.len() >= MAX_USERS
-            || state.users.values().any(|user| user.user_id == user_id || user.login == login)
+            || state
+                .users
+                .values()
+                .any(|user| user.user_id == user_id || user.login == login)
         {
             return Err(RbacError::new(RbacErrorCode::UserAlreadyExists));
         }
@@ -703,16 +709,17 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         display_name: impl Into<String>,
         badge: &[u8],
     ) -> Result<(), RbacError> {
-        self.create_user(user_id, login, display_name, [CredentialInput::Badge(badge)])
-            .await
+        self.create_user(
+            user_id,
+            login,
+            display_name,
+            [CredentialInput::Badge(badge)],
+        )
+        .await
     }
 
     /// Assign a role to a user and invalidate that user's existing sessions.
-    pub async fn assign_role(
-        &self,
-        user_id: &str,
-        role_name: &str,
-    ) -> Result<(), RbacError> {
+    pub async fn assign_role(&self, user_id: &str, role_name: &str) -> Result<(), RbacError> {
         let mut state = self.loaded_state().await?;
         let state = state.as_mut().expect("loaded state is initialized");
         if !state.roles.contains_key(role_name) {
@@ -738,11 +745,7 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
     }
 
     /// Revoke a role from a user and invalidate that user's existing sessions.
-    pub async fn revoke_role(
-        &self,
-        user_id: &str,
-        role_name: &str,
-    ) -> Result<(), RbacError> {
+    pub async fn revoke_role(&self, user_id: &str, role_name: &str) -> Result<(), RbacError> {
         let mut state = self.loaded_state().await?;
         let state = state.as_mut().expect("loaded state is initialized");
         let user = state
@@ -794,7 +797,8 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         login: &str,
         credential: CredentialInput<'_>,
     ) -> Result<ApplicationSession, RbacError> {
-        self.authenticate_at(login, credential, SystemTime::now()).await
+        self.authenticate_at(login, credential, SystemTime::now())
+            .await
     }
 
     /// Verify a PIN login using the host-owned offline user store.
@@ -812,7 +816,8 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         login: &str,
         badge: &[u8],
     ) -> Result<ApplicationSession, RbacError> {
-        self.authenticate(login, CredentialInput::Badge(badge)).await
+        self.authenticate(login, CredentialInput::Badge(badge))
+            .await
     }
 
     /// Verify an email/password login using the host-owned offline user store.
@@ -821,7 +826,8 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         email: &str,
         password: &[u8],
     ) -> Result<ApplicationSession, RbacError> {
-        self.authenticate(email, CredentialInput::Password(password)).await
+        self.authenticate(email, CredentialInput::Password(password))
+            .await
     }
 
     /// Deterministic-time authentication hook for host tests and replay harnesses.
@@ -831,7 +837,8 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         credential: CredentialInput<'_>,
         now: SystemTime,
     ) -> Result<ApplicationSession, RbacError> {
-        if login.is_empty() || login.len() > MAX_LOGIN_LENGTH || login.chars().any(char::is_control) {
+        if login.is_empty() || login.len() > MAX_LOGIN_LENGTH || login.chars().any(char::is_control)
+        {
             return Err(RbacError::new(RbacErrorCode::AuthenticationInvalid));
         }
         let mut state = self.loaded_state().await?;
@@ -877,18 +884,23 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         let valid = user
             .credentials
             .iter()
-            .find(|stored| stored.kind == kind)
+            .find(|stored| stored.kind == kind.into())
             .is_some_and(|stored| stored.verify(credential.secret()));
         if !valid {
             user.failures = user.failures.saturating_add(1);
             let throttled = user.failures >= self.settings.throttle.maximum_failures;
             if throttled {
-                user.locked_until_ms = Some(now_ms.saturating_add(duration_millis(self.settings.throttle.lockout)));
+                user.locked_until_ms =
+                    Some(now_ms.saturating_add(duration_millis(self.settings.throttle.lockout)));
             }
             self.persist(&state).await?;
             self.emit(
                 ApplicationAuditEventKind::Authentication,
-                if throttled { ApplicationAuditOutcome::Throttled } else { ApplicationAuditOutcome::Denied },
+                if throttled {
+                    ApplicationAuditOutcome::Throttled
+                } else {
+                    ApplicationAuditOutcome::Denied
+                },
                 None,
                 Some(user_id),
                 None,
@@ -904,7 +916,8 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         let generation = user.generation;
         self.persist(&state).await?;
         let mut nonce = [0_u8; 16];
-        getrandom::fill(&mut nonce).map_err(|_| RbacError::new(RbacErrorCode::StorageUnavailable))?;
+        getrandom::fill(&mut nonce)
+            .map_err(|_| RbacError::new(RbacErrorCode::StorageUnavailable))?;
         self.emit(
             ApplicationAuditEventKind::Authentication,
             ApplicationAuditOutcome::Success,
@@ -926,7 +939,10 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         session: &ApplicationSession,
     ) -> Result<AuthorizedApplicationDataHandle<'call, 'host, S>, RbacError> {
         self.validate_session(session).await?;
-        Ok(AuthorizedApplicationDataHandle { rbac: self, session: session.clone() })
+        Ok(AuthorizedApplicationDataHandle {
+            rbac: self,
+            session: session.clone(),
+        })
     }
 
     /// Alias for [`Self::data_for`] for host adapters that call the result an authorized handle.
@@ -947,29 +963,50 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         let state = state.as_ref().expect("loaded state is initialized");
         let user = self.validated_user(&state, session)?;
         let allowed = user.roles.iter().any(|role_name| {
-            let Some(role) = state.roles.get(role_name) else { return false };
+            let Some(role) = state.roles.get(role_name) else {
+                return false;
+            };
             match &target {
                 AuthorizationTarget::Route(value) => role.routes.contains(value),
                 AuthorizationTarget::Screen(value) => role.screens.contains(value),
                 AuthorizationTarget::Action(value) => role.actions.contains(value),
             }
         });
-        if allowed { Ok(()) } else { Err(RbacError::new(RbacErrorCode::AuthorizationDenied)) }
+        if allowed {
+            Ok(())
+        } else {
+            Err(RbacError::new(RbacErrorCode::AuthorizationDenied))
+        }
     }
 
     /// Authorize a route without requiring callers to construct a target enum.
-    pub async fn authorize_route(&self, session: &ApplicationSession, route: &str) -> Result<(), RbacError> {
-        self.authorize(session, AuthorizationTarget::Route(route.to_owned())).await
+    pub async fn authorize_route(
+        &self,
+        session: &ApplicationSession,
+        route: &str,
+    ) -> Result<(), RbacError> {
+        self.authorize(session, AuthorizationTarget::Route(route.to_owned()))
+            .await
     }
 
     /// Authorize a screen without requiring callers to construct a target enum.
-    pub async fn authorize_screen(&self, session: &ApplicationSession, screen: &str) -> Result<(), RbacError> {
-        self.authorize(session, AuthorizationTarget::Screen(screen.to_owned())).await
+    pub async fn authorize_screen(
+        &self,
+        session: &ApplicationSession,
+        screen: &str,
+    ) -> Result<(), RbacError> {
+        self.authorize(session, AuthorizationTarget::Screen(screen.to_owned()))
+            .await
     }
 
     /// Authorize an action without requiring callers to construct a target enum.
-    pub async fn authorize_action(&self, session: &ApplicationSession, action: &str) -> Result<(), RbacError> {
-        self.authorize(session, AuthorizationTarget::Action(action.to_owned())).await
+    pub async fn authorize_action(
+        &self,
+        session: &ApplicationSession,
+        action: &str,
+    ) -> Result<(), RbacError> {
+        self.authorize(session, AuthorizationTarget::Action(action.to_owned()))
+            .await
     }
 
     async fn validate_session(&self, session: &ApplicationSession) -> Result<(), RbacError> {
@@ -996,7 +1033,9 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         Ok(user)
     }
 
-    async fn loaded_state(&self) -> Result<tokio::sync::MutexGuard<'_, Option<RbacState>>, RbacError> {
+    async fn loaded_state(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, Option<RbacState>>, RbacError> {
         let mut state = self.state.lock().await;
         let needs_load = state.is_none();
         if needs_load {
@@ -1053,7 +1092,14 @@ impl<'host, S: LocalStore> ApplicationRbacHandle<'host, S> {
         target: Option<String>,
     ) {
         if let Some(sink) = &self.settings.audit_sink {
-            sink.record(ApplicationAuditEvent { kind, outcome, actor, subject, target, occurred_at: SystemTime::now() });
+            sink.record(ApplicationAuditEvent {
+                kind,
+                outcome,
+                actor,
+                subject,
+                target,
+                occurred_at: SystemTime::now(),
+            });
         }
     }
 }
@@ -1066,11 +1112,24 @@ pub struct AuthorizedApplicationDataHandle<'a, 'b, S> {
 
 impl<S: LocalStore> AuthorizedApplicationDataHandle<'_, '_, S> {
     /// Select one row after host-side role and row-scope checks.
-    pub async fn select(&self, collection: impl Into<String>, id: RecordId) -> Result<Option<StoredRecord>, RbacError> {
+    pub async fn select(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+    ) -> Result<Option<StoredRecord>, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Select, &collection).await?;
-        let result = self.rbac.data.select(collection, id).await.map_err(map_data_error)?;
-        if result.as_ref().is_some_and(|record| scopes.iter().any(|scope| row_allowed(scope, &self.session, record))) {
+        let result = self
+            .rbac
+            .data
+            .select(collection, id)
+            .await
+            .map_err(map_data_error)?;
+        if result.as_ref().is_some_and(|record| {
+            scopes
+                .iter()
+                .any(|scope| row_allowed(scope, &self.session, record))
+        }) {
             Ok(result)
         } else if result.is_none() {
             Ok(None)
@@ -1080,88 +1139,223 @@ impl<S: LocalStore> AuthorizedApplicationDataHandle<'_, '_, S> {
     }
 
     /// List only rows admitted by the host-side role and row scopes.
-    pub async fn list(&self, collection: impl Into<String>) -> Result<Vec<StoredRecord>, RbacError> {
+    pub async fn list(
+        &self,
+        collection: impl Into<String>,
+    ) -> Result<Vec<StoredRecord>, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::List, &collection).await?;
-        Ok(self.rbac.data.list(collection).await.map_err(map_data_error)?.into_iter().filter(|record| scopes.iter().any(|scope| row_allowed(scope, &self.session, record))).collect())
+        Ok(self
+            .rbac
+            .data
+            .list(collection)
+            .await
+            .map_err(map_data_error)?
+            .into_iter()
+            .filter(|record| {
+                scopes
+                    .iter()
+                    .any(|scope| row_allowed(scope, &self.session, record))
+            })
+            .collect())
     }
 
     /// Create a row only if its submitted values satisfy the row scope.
-    pub async fn create(&self, collection: impl Into<String>, id: RecordId, record: Value) -> Result<StoredRecord, RbacError> {
+    pub async fn create(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+        record: Value,
+    ) -> Result<StoredRecord, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Create, &collection).await?;
-        if !scopes.iter().any(|scope| row_allowed_value(scope, &self.session, &id, &record)) {
+        if !scopes
+            .iter()
+            .any(|scope| row_allowed_value(scope, &self.session, &id, &record))
+        {
             return Err(RbacError::new(RbacErrorCode::AuthorizationDenied));
         }
-        self.rbac.data.create(collection, id, record).await.map_err(map_data_error)
+        self.rbac
+            .data
+            .create(collection, id, record)
+            .await
+            .map_err(map_data_error)
     }
 
     /// Merge fields after checking both current and resulting row scope.
-    pub async fn update_merge(&self, collection: impl Into<String>, id: RecordId, fields: Value) -> Result<StoredRecord, RbacError> {
+    pub async fn update_merge(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+        fields: Value,
+    ) -> Result<StoredRecord, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Update, &collection).await?;
-        let current = self.rbac.data.select(collection.clone(), id.clone()).await.map_err(map_data_error)?.ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        let projected = merge_value(&current.value, &fields).ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        if !scopes.iter().any(|scope| row_allowed(scope, &self.session, &current) && row_allowed_value(scope, &self.session, &id, &projected)) {
+        let current = self
+            .rbac
+            .data
+            .select(collection.clone(), id.clone())
+            .await
+            .map_err(map_data_error)?
+            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
+        let projected = merge_value(&current.value, &fields)
+            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
+        if !scopes.iter().any(|scope| {
+            row_allowed(scope, &self.session, &current)
+                && row_allowed_value(scope, &self.session, &id, &projected)
+        }) {
             return Err(RbacError::new(RbacErrorCode::AuthorizationDenied));
         }
-        self.rbac.data.update_merge(collection, id, fields).await.map_err(map_data_error)
+        self.rbac
+            .data
+            .update_merge(collection, id, fields)
+            .await
+            .map_err(map_data_error)
     }
 
     /// Apply a patch only when the resulting row remains in scope.
-    pub async fn update_patch(&self, collection: impl Into<String>, id: RecordId, operations: Vec<PatchOperation>) -> Result<StoredRecord, RbacError> {
+    pub async fn update_patch(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+        operations: Vec<PatchOperation>,
+    ) -> Result<StoredRecord, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Update, &collection).await?;
-        let current = self.rbac.data.select(collection.clone(), id.clone()).await.map_err(map_data_error)?.ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        let projected = patch_value(&current.value, &operations).ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        if !scopes.iter().any(|scope| row_allowed(scope, &self.session, &current) && row_allowed_value(scope, &self.session, &id, &projected)) {
+        let current = self
+            .rbac
+            .data
+            .select(collection.clone(), id.clone())
+            .await
+            .map_err(map_data_error)?
+            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
+        let projected = patch_value(&current.value, &operations)
+            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
+        if !scopes.iter().any(|scope| {
+            row_allowed(scope, &self.session, &current)
+                && row_allowed_value(scope, &self.session, &id, &projected)
+        }) {
             return Err(RbacError::new(RbacErrorCode::AuthorizationDenied));
         }
-        self.rbac.data.update_patch(collection, id, operations).await.map_err(map_data_error)
+        self.rbac
+            .data
+            .update_patch(collection, id, operations)
+            .await
+            .map_err(map_data_error)
     }
 
     /// Delete only a row already admitted by the role and scope.
-    pub async fn delete(&self, collection: impl Into<String>, id: RecordId) -> Result<bool, RbacError> {
+    pub async fn delete(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+    ) -> Result<bool, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Delete, &collection).await?;
-        let current = self.rbac.data.select(collection.clone(), id.clone()).await.map_err(map_data_error)?;
+        let current = self
+            .rbac
+            .data
+            .select(collection.clone(), id.clone())
+            .await
+            .map_err(map_data_error)?;
         if let Some(record) = current {
-            if !scopes.iter().any(|scope| row_allowed(scope, &self.session, &record)) {
+            if !scopes
+                .iter()
+                .any(|scope| row_allowed(scope, &self.session, &record))
+            {
                 return Err(RbacError::new(RbacErrorCode::AuthorizationDenied));
             }
         }
-        self.rbac.data.delete(collection, id).await.map_err(map_data_error)
+        self.rbac
+            .data
+            .delete(collection, id)
+            .await
+            .map_err(map_data_error)
     }
 
-    async fn scopes(&self, operation: DataOperation, collection: &str) -> Result<Vec<RowScope>, RbacError> {
+    async fn scopes(
+        &self,
+        operation: DataOperation,
+        collection: &str,
+    ) -> Result<Vec<RowScope>, RbacError> {
         let state = self.rbac.loaded_state().await?;
         let state = state.as_ref().expect("loaded state is initialized");
         let user = self.rbac.validated_user(&state, &self.session)?;
-        let scopes = user.roles.iter().flat_map(|role_name| state.roles.get(role_name)).flat_map(|role| role.collections.iter()).filter(|grant| grant.collection == collection && grant.operations.contains(&operation)).map(|grant| grant.row_scope.clone()).collect::<Vec<_>>();
-        if scopes.is_empty() { Err(RbacError::new(RbacErrorCode::AuthorizationDenied)) } else { Ok(scopes) }
+        let scopes = user
+            .roles
+            .iter()
+            .flat_map(|role_name| state.roles.get(role_name))
+            .flat_map(|role| role.collections.iter())
+            .filter(|grant| grant.collection == collection && grant.operations.contains(&operation))
+            .map(|grant| grant.row_scope.clone())
+            .collect::<Vec<_>>();
+        if scopes.is_empty() {
+            Err(RbacError::new(RbacErrorCode::AuthorizationDenied))
+        } else {
+            Ok(scopes)
+        }
     }
 }
 
 impl<S: LocalStore> ApplicationDataGuestApi for AuthorizedApplicationDataHandle<'_, '_, S> {
-    fn execute(&self, request: GuestDataRequest) -> impl std::future::Future<Output = Result<CollectionResponse, ApplicationDataError>> + Send {
+    fn execute(
+        &self,
+        request: GuestDataRequest,
+    ) -> impl std::future::Future<Output = Result<CollectionResponse, ApplicationDataError>> + Send
+    {
         async move {
             match request {
-                GuestDataRequest::Collection(request) => self.execute_collection(request).await.map_err(to_data_error),
-                GuestDataRequest::Forbidden(operation) => self.rbac.data.execute(GuestDataRequest::Forbidden(operation)).await,
+                GuestDataRequest::Collection(request) => self
+                    .execute_collection(request)
+                    .await
+                    .map_err(to_data_error),
+                GuestDataRequest::Forbidden(operation) => {
+                    self.rbac
+                        .data
+                        .execute(GuestDataRequest::Forbidden(operation))
+                        .await
+                }
             }
         }
     }
 }
 
 impl<S: LocalStore> AuthorizedApplicationDataHandle<'_, '_, S> {
-    async fn execute_collection(&self, request: CollectionRequest) -> Result<CollectionResponse, RbacError> {
+    async fn execute_collection(
+        &self,
+        request: CollectionRequest,
+    ) -> Result<CollectionResponse, RbacError> {
         match request {
-            CollectionRequest::Select { collection, id } => Ok(CollectionResponse::Selected(self.select(collection, id).await?)),
-            CollectionRequest::List { collection } => Ok(CollectionResponse::Listed(self.list(collection).await?)),
-            CollectionRequest::Create { collection, id, record } => Ok(CollectionResponse::Written(self.create(collection, id, record).await?)),
-            CollectionRequest::UpdateMerge { collection, id, fields } => Ok(CollectionResponse::Written(self.update_merge(collection, id, fields).await?)),
-            CollectionRequest::UpdatePatch { collection, id, operations } => Ok(CollectionResponse::Written(self.update_patch(collection, id, operations).await?)),
-            CollectionRequest::Delete { collection, id } => Ok(CollectionResponse::Deleted(self.delete(collection, id).await?)),
+            CollectionRequest::Select { collection, id } => Ok(CollectionResponse::Selected(
+                self.select(collection, id).await?,
+            )),
+            CollectionRequest::List { collection } => {
+                Ok(CollectionResponse::Listed(self.list(collection).await?))
+            }
+            CollectionRequest::Create {
+                collection,
+                id,
+                record,
+            } => Ok(CollectionResponse::Written(
+                self.create(collection, id, record).await?,
+            )),
+            CollectionRequest::UpdateMerge {
+                collection,
+                id,
+                fields,
+            } => Ok(CollectionResponse::Written(
+                self.update_merge(collection, id, fields).await?,
+            )),
+            CollectionRequest::UpdatePatch {
+                collection,
+                id,
+                operations,
+            } => Ok(CollectionResponse::Written(
+                self.update_patch(collection, id, operations).await?,
+            )),
+            CollectionRequest::Delete { collection, id } => Ok(CollectionResponse::Deleted(
+                self.delete(collection, id).await?,
+            )),
         }
     }
 }
@@ -1202,10 +1396,21 @@ struct PersistedGrant {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-enum DataOperationPersisted { Select, List, Create, Update, Delete }
+enum DataOperationPersisted {
+    Select,
+    List,
+    Create,
+    Update,
+    Delete,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-enum PersistedRowScope { Any, Own { field: String }, RecordIds { ids: Vec<String> }, FieldEquals { field: String, value: Value } }
+enum PersistedRowScope {
+    Any,
+    Own { field: String },
+    RecordIds { ids: Vec<String> },
+    FieldEquals { field: String, value: Value },
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct PersistedUser {
@@ -1227,62 +1432,127 @@ struct PersistedCredential {
     digest: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-enum CredentialKindPersisted { Pin, Badge, Password }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+enum CredentialKindPersisted {
+    Pin,
+    Badge,
+    Password,
+}
 
 impl PersistedCredential {
     fn derive(kind: CredentialKind, secret: &[u8]) -> Result<Self, RbacError> {
         let mut salt = [0_u8; 16];
-        getrandom::fill(&mut salt).map_err(|_| RbacError::new(RbacErrorCode::StorageUnavailable))?;
-        Ok(Self { kind: kind.into(), salt, digest: derive_digest(kind, &salt, secret) })
+        getrandom::fill(&mut salt)
+            .map_err(|_| RbacError::new(RbacErrorCode::StorageUnavailable))?;
+        Ok(Self {
+            kind: kind.into(),
+            salt,
+            digest: derive_digest(kind, &salt, secret),
+        })
     }
 
     fn verify(&self, secret: &[u8]) -> bool {
-        constant_time_eq(&self.digest, &derive_digest(self.kind.into(), &self.salt, secret))
+        constant_time_eq(
+            &self.digest,
+            &derive_digest(self.kind.into(), &self.salt, secret),
+        )
     }
 }
 
 impl From<CredentialKind> for CredentialKindPersisted {
     fn from(value: CredentialKind) -> Self {
-        match value { CredentialKind::Pin => Self::Pin, CredentialKind::Badge => Self::Badge, CredentialKind::Password => Self::Password }
+        match value {
+            CredentialKind::Pin => Self::Pin,
+            CredentialKind::Badge => Self::Badge,
+            CredentialKind::Password => Self::Password,
+        }
     }
 }
 
 impl From<CredentialKindPersisted> for CredentialKind {
     fn from(value: CredentialKindPersisted) -> Self {
-        match value { CredentialKindPersisted::Pin => Self::Pin, CredentialKindPersisted::Badge => Self::Badge, CredentialKindPersisted::Password => Self::Password }
+        match value {
+            CredentialKindPersisted::Pin => Self::Pin,
+            CredentialKindPersisted::Badge => Self::Badge,
+            CredentialKindPersisted::Password => Self::Password,
+        }
     }
 }
 
 impl From<DataOperation> for DataOperationPersisted {
     fn from(value: DataOperation) -> Self {
-        match value { DataOperation::Select => Self::Select, DataOperation::List => Self::List, DataOperation::Create => Self::Create, DataOperation::Update => Self::Update, DataOperation::Delete => Self::Delete }
+        match value {
+            DataOperation::Select => Self::Select,
+            DataOperation::List => Self::List,
+            DataOperation::Create => Self::Create,
+            DataOperation::Update => Self::Update,
+            DataOperation::Delete => Self::Delete,
+        }
     }
 }
 
 impl From<DataOperationPersisted> for DataOperation {
     fn from(value: DataOperationPersisted) -> Self {
-        match value { DataOperationPersisted::Select => Self::Select, DataOperationPersisted::List => Self::List, DataOperationPersisted::Create => Self::Create, DataOperationPersisted::Update => Self::Update, DataOperationPersisted::Delete => Self::Delete }
+        match value {
+            DataOperationPersisted::Select => Self::Select,
+            DataOperationPersisted::List => Self::List,
+            DataOperationPersisted::Create => Self::Create,
+            DataOperationPersisted::Update => Self::Update,
+            DataOperationPersisted::Delete => Self::Delete,
+        }
     }
 }
 
 impl From<&RowScope> for PersistedRowScope {
     fn from(value: &RowScope) -> Self {
-        match value { RowScope::Any => Self::Any, RowScope::Own { field } => Self::Own { field: field.clone() }, RowScope::RecordIds(ids) => Self::RecordIds { ids: ids.clone() }, RowScope::FieldEquals { field, value } => Self::FieldEquals { field: field.clone(), value: value.clone() } }
+        match value {
+            RowScope::Any => Self::Any,
+            RowScope::Own { field } => Self::Own {
+                field: field.clone(),
+            },
+            RowScope::RecordIds(ids) => Self::RecordIds { ids: ids.clone() },
+            RowScope::FieldEquals { field, value } => Self::FieldEquals {
+                field: field.clone(),
+                value: value.clone(),
+            },
+        }
     }
 }
 
 impl TryFrom<PersistedRowScope> for RowScope {
     type Error = RbacError;
     fn try_from(value: PersistedRowScope) -> Result<Self, Self::Error> {
-        match value { PersistedRowScope::Any => Ok(Self::Any), PersistedRowScope::Own { field } => Self::own(field), PersistedRowScope::RecordIds { ids } => Self::record_ids(ids), PersistedRowScope::FieldEquals { field, value } => Self::field_equals(field, value) }
+        match value {
+            PersistedRowScope::Any => Ok(Self::Any),
+            PersistedRowScope::Own { field } => Self::own(field),
+            PersistedRowScope::RecordIds { ids } => Self::record_ids(ids),
+            PersistedRowScope::FieldEquals { field, value } => Self::field_equals(field, value),
+        }
     }
 }
 
 impl From<&RbacState> for PersistedRbacState {
     fn from(value: &RbacState) -> Self {
         Self {
-            roles: value.roles.values().map(|role| PersistedRole { name: role.name.clone(), routes: role.routes.iter().cloned().collect(), screens: role.screens.iter().cloned().collect(), actions: role.actions.iter().cloned().collect(), collections: role.collections.iter().map(|grant| PersistedGrant { collection: grant.collection.clone(), operations: grant.operations.iter().copied().map(Into::into).collect(), row_scope: (&grant.row_scope).into() }).collect() }).collect(),
+            roles: value
+                .roles
+                .values()
+                .map(|role| PersistedRole {
+                    name: role.name.clone(),
+                    routes: role.routes.iter().cloned().collect(),
+                    screens: role.screens.iter().cloned().collect(),
+                    actions: role.actions.iter().cloned().collect(),
+                    collections: role
+                        .collections
+                        .iter()
+                        .map(|grant| PersistedGrant {
+                            collection: grant.collection.clone(),
+                            operations: grant.operations.iter().copied().map(Into::into).collect(),
+                            row_scope: (&grant.row_scope).into(),
+                        })
+                        .collect(),
+                })
+                .collect(),
             users: value.users.values().cloned().collect(),
         }
     }
@@ -1293,29 +1563,51 @@ impl PersistedRbacState {
         let mut roles = BTreeMap::new();
         for role in self.roles {
             let mut definition = RoleDefinition::new(role.name.clone())?;
-            for route in role.routes { definition.grant_route(route)?; }
-            for screen in role.screens { definition.grant_screen(screen)?; }
-            for action in role.actions { definition.grant_action(action)?; }
+            for route in role.routes {
+                definition.grant_route(route)?;
+            }
+            for screen in role.screens {
+                definition.grant_screen(screen)?;
+            }
+            for action in role.actions {
+                definition.grant_action(action)?;
+            }
             for grant in role.collections {
                 let operations = grant.operations.into_iter().map(Into::into);
-                definition.grant_collection(CollectionGrant::new(grant.collection, operations, grant.row_scope.try_into()?)?);
+                definition.grant_collection(CollectionGrant::new(
+                    grant.collection,
+                    operations,
+                    grant.row_scope.try_into()?,
+                )?);
             }
-            if roles.insert(role.name, definition).is_some() { return Err(RbacError::new(RbacErrorCode::StorageUnavailable)); }
+            if roles.insert(role.name, definition).is_some() {
+                return Err(RbacError::new(RbacErrorCode::StorageUnavailable));
+            }
         }
-        let users = self.users.into_iter().map(|user| (user.user_id.clone(), user)).collect();
+        let users = self
+            .users
+            .into_iter()
+            .map(|user| (user.user_id.clone(), user))
+            .collect();
         Ok(RbacState { roles, users })
     }
 }
 
 fn decode(entry: &StoreBatchEntry) -> Result<PersistedEntry, RbacError> {
-    serde_json::from_value(entry.payload.clone()).map_err(|_| RbacError::new(RbacErrorCode::StorageUnavailable))
+    serde_json::from_value(entry.payload.clone())
+        .map_err(|_| RbacError::new(RbacErrorCode::StorageUnavailable))
 }
 
 fn row_allowed(scope: &RowScope, session: &ApplicationSession, record: &StoredRecord) -> bool {
     row_allowed_value(scope, session, &record.id, &record.value)
 }
 
-fn row_allowed_value(scope: &RowScope, session: &ApplicationSession, id: &RecordId, value: &Value) -> bool {
+fn row_allowed_value(
+    scope: &RowScope,
+    session: &ApplicationSession,
+    id: &RecordId,
+    value: &Value,
+) -> bool {
     match scope {
         RowScope::Any => true,
         RowScope::Own { field } => value
@@ -1323,27 +1615,41 @@ fn row_allowed_value(scope: &RowScope, session: &ApplicationSession, id: &Record
             .and_then(Value::as_str)
             .is_some_and(|value| value == session.user_id()),
         RowScope::RecordIds(ids) => ids.iter().any(|allowed| allowed == id.as_str()),
-        RowScope::FieldEquals { field, value: expected } => value.get(field).is_some_and(|value| value == expected),
+        RowScope::FieldEquals {
+            field,
+            value: expected,
+        } => value.get(field).is_some_and(|value| value == expected),
     }
 }
 
 fn merge_value(current: &Value, fields: &Value) -> Option<Value> {
     let mut current = current.as_object()?.clone();
-    for (field, value) in fields.as_object()? { current.insert(field.clone(), value.clone()); }
+    for (field, value) in fields.as_object()? {
+        current.insert(field.clone(), value.clone());
+    }
     Some(Value::Object(current))
 }
 
 fn patch_value(current: &Value, operations: &[PatchOperation]) -> Option<Value> {
     let mut current = current.as_object()?.clone();
     for operation in operations {
-        match operation { PatchOperation::Set { field, value } => { current.insert(field.clone(), value.clone()); }, PatchOperation::Remove { field } => { current.remove(field); } }
+        match operation {
+            PatchOperation::Set { field, value } => {
+                current.insert(field.clone(), value.clone());
+            }
+            PatchOperation::Remove { field } => {
+                current.remove(field);
+            }
+        }
     }
     Some(Value::Object(current))
 }
 
 fn valid_secret(kind: CredentialKind, secret: &[u8]) -> bool {
     match kind {
-        CredentialKind::Pin => (4..=16).contains(&secret.len()) && secret.iter().all(u8::is_ascii_digit),
+        CredentialKind::Pin => {
+            (4..=16).contains(&secret.len()) && secret.iter().all(u8::is_ascii_digit)
+        }
         CredentialKind::Badge => !secret.is_empty() && secret.len() <= 256,
         CredentialKind::Password => (8..=256).contains(&secret.len()),
     }
@@ -1369,15 +1675,27 @@ fn derive_digest(kind: CredentialKind, salt: &[u8; 16], secret: &[u8]) -> [u8; 3
 }
 
 fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    left.iter().zip(right).fold(0_u8, |difference, (left, right)| difference | (left ^ right)) == 0
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn validate_name(value: &str, max: usize) -> Result<(), RbacError> {
-    if value.is_empty() || value.len() > max || value.chars().any(char::is_control) { Err(RbacError::new(RbacErrorCode::RequestInvalid)) } else { Ok(()) }
+    if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
+        Err(RbacError::new(RbacErrorCode::RequestInvalid))
+    } else {
+        Ok(())
+    }
 }
 
 fn epoch_millis(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().min(u128::from(u64::MAX)) as u64
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 fn duration_millis(duration: Duration) -> u64 {
@@ -1386,7 +1704,9 @@ fn duration_millis(duration: Duration) -> u64 {
 
 fn map_data_error(error: ApplicationDataError) -> RbacError {
     match error.code() {
-        ApplicationDataErrorCode::RecordNotFound => RbacError::new(RbacErrorCode::AuthorizationDenied),
+        ApplicationDataErrorCode::RecordNotFound => {
+            RbacError::new(RbacErrorCode::AuthorizationDenied)
+        }
         _ => RbacError::new(RbacErrorCode::StorageUnavailable),
     }
 }

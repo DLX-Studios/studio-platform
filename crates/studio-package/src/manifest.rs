@@ -136,7 +136,7 @@ pub enum Capability {
     /// Host-owned receipt preview simulator.
     #[serde(rename = "printer.simulate")]
     PrinterSimulate,
-    /// Bounded, host-mediated SurrealQL over application data.
+    /// Bounded, host-mediated `SurrealQL` over application data.
     #[serde(rename = "data.surreal.query")]
     DataSurrealQuery,
 }
@@ -184,8 +184,7 @@ fn preflight_capabilities(value: &Value) -> Result<(), ManifestError> {
         if !matches!(
             capability,
             "payment.simulate" | "printer.simulate" | "data.surreal.query"
-        )
-            || !seen.insert(capability)
+        ) || !seen.insert(capability)
         {
             return Err(ManifestError::CapabilityInvalid);
         }
@@ -257,7 +256,9 @@ fn validate_integrations(integrations: &[IntegrationReference]) -> Result<(), Ma
     Ok(())
 }
 
-fn validate_routes(routes: &[studio_net::declaration::RouteGroupDeclaration]) -> Result<(), ManifestError> {
+fn validate_routes(
+    routes: &[studio_net::declaration::RouteGroupDeclaration],
+) -> Result<(), ManifestError> {
     let mut ids = HashSet::new();
     let ceilings = studio_net::limits::BrokerLimits::default();
     for route in routes {
@@ -289,13 +290,9 @@ fn validate_migrations(
             return Err(ManifestError::ManifestInvalid("migrations"));
         }
     }
-    if migrations
-        .windows(2)
-        .any(|pair| {
-            pair[0].from_version >= pair[1].from_version
-                || pair[0].to_version != pair[1].from_version
-        })
-    {
+    if migrations.windows(2).any(|pair| {
+        pair[0].from_version >= pair[1].from_version || pair[0].to_version != pair[1].from_version
+    }) {
         return Err(ManifestError::ManifestInvalid("migrations"));
     }
     Ok(())

@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
 use studio_flagship::{
-    run_demo_day, BillingAllocation, BillingEdit, BillingEngine, BillingOutcome, BillingVariant,
-    CenterTopology, KitchenPrinterAdapter, KitchenTicket, PublishDisposition, RestRoute,
-    StripeSandboxAdapter, FakeRestBroker,
+    BillingAllocation, BillingEdit, BillingEngine, BillingOutcome, BillingVariant, CenterTopology,
+    FakeRestBroker, KitchenPrinterAdapter, KitchenTicket, PublishDisposition, RestRoute,
+    StripeSandboxAdapter, run_demo_day,
 };
 
 #[test]
@@ -22,15 +22,26 @@ fn demo_day_report_passes_deterministic_gates_but_keeps_external_blockers_visibl
     assert!(report.audit.complete);
     assert!(report.audit.secrets_absent);
     assert!(report.security.secret_free_report);
-    assert!(report.verification_gaps.iter().any(|gap| gap.gate == "stripe_sandbox" && gap.blocking));
-    assert!(report.prerequisites.iter().any(|item| item.ticket == 25 && item.status == "not_integrated"));
+    assert!(
+        report
+            .verification_gaps
+            .iter()
+            .any(|gap| gap.gate == "stripe_sandbox" && gap.blocking)
+    );
+    assert!(
+        report
+            .prerequisites
+            .iter()
+            .any(|item| item.ticket == 25 && item.status == "not_integrated")
+    );
 }
 
 #[test]
 fn report_round_trips_as_machine_readable_json() {
     let report = run_demo_day();
     let json = report.to_json().expect("report serializes");
-    let decoded: studio_flagship::ReleaseEvidenceReport = serde_json::from_str(&json).expect("report round-trips");
+    let decoded: studio_flagship::ReleaseEvidenceReport =
+        serde_json::from_str(&json).expect("report round-trips");
     assert_eq!(decoded, report);
 }
 
@@ -43,7 +54,11 @@ fn disconnected_station_replays_duplicate_event_once() {
         station_id: "terminal-table".to_owned(),
         check_id: "check-1".to_owned(),
         table_id: "table-1".to_owned(),
-        line: Some(studio_flagship::OrderLine { item: "tea".to_owned(), seat: "seat-1".to_owned(), quantity: 1 }),
+        line: Some(studio_flagship::OrderLine {
+            item: "tea".to_owned(),
+            seat: "seat-1".to_owned(),
+            quantity: 1,
+        }),
     };
     assert_eq!(center.publish(event.clone()), PublishDisposition::Queued);
     assert_eq!(center.publish(event), PublishDisposition::Queued);
@@ -54,19 +69,50 @@ fn disconnected_station_replays_duplicate_event_once() {
 #[test]
 fn stale_billing_edit_is_reported_without_last_writer_wins() {
     let mut billing = BillingEngine::new(1_000);
-    assert!(matches!(billing.apply(BillingEdit { base_revision: 0, variant: BillingVariant::Single, allocations: vec![BillingAllocation { label: "whole".to_owned(), amount_minor: 1_000 }] }), BillingOutcome::Applied { revision: 1 }));
-    assert_eq!(billing.apply(BillingEdit { base_revision: 0, variant: BillingVariant::Split, allocations: vec![BillingAllocation { label: "stale".to_owned(), amount_minor: 1_000 }] }), BillingOutcome::Conflict { expected: 0, actual: 1 });
+    assert!(matches!(
+        billing.apply(BillingEdit {
+            base_revision: 0,
+            variant: BillingVariant::Single,
+            allocations: vec![BillingAllocation {
+                label: "whole".to_owned(),
+                amount_minor: 1_000
+            }]
+        }),
+        BillingOutcome::Applied { revision: 1 }
+    ));
+    assert_eq!(
+        billing.apply(BillingEdit {
+            base_revision: 0,
+            variant: BillingVariant::Split,
+            allocations: vec![BillingAllocation {
+                label: "stale".to_owned(),
+                amount_minor: 1_000
+            }]
+        }),
+        BillingOutcome::Conflict {
+            expected: 0,
+            actual: 1
+        }
+    );
 }
 
 #[test]
 fn stripe_adapter_rejects_undeclared_routes_and_fake_peripheral_is_structured() {
     let mut broker = FakeRestBroker::default();
-    assert!(StripeSandboxAdapter::new(&mut broker).charge(1_000).is_err());
+    assert!(
+        StripeSandboxAdapter::new(&mut broker)
+            .charge(1_000)
+            .is_err()
+    );
     broker.declare(RestRoute::post("/v1/payment_intents"));
     assert!(StripeSandboxAdapter::new(&mut broker).charge(1_000).is_ok());
     assert_eq!(broker.credential_reads(), 0);
 
     let mut peripheral = studio_flagship::FakePeripheralAdapters::default();
-    let job = peripheral.print_kitchen_ticket(&KitchenTicket { ticket_id: "ticket-1".to_owned(), check_id: "check-1".to_owned(), item_count: 1 });
+    let job = peripheral.print_kitchen_ticket(&KitchenTicket {
+        ticket_id: "ticket-1".to_owned(),
+        check_id: "check-1".to_owned(),
+        item_count: 1,
+    });
     assert!(job.structured);
 }

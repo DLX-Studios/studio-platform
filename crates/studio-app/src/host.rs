@@ -6,12 +6,12 @@ use serde_json::Value;
 use studio_actions::Checkout;
 use studio_components::{HostEventDispatcher, NativeStateStore};
 use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
-use studio_package::{
-    ArchivePolicy, CanonicalBundleInput, ManifestPolicy, TrustStore, canonical_bundle_document,
-    ProviderRegistry, TrustStoreError, VerifiedMigrationBundle, inspect_archive, parse_manifest,
-    verify_bundle_signature,
-};
 use studio_net::{BrokerError, RestBroker, RestBrokerConfig};
+use studio_package::{
+    ArchivePolicy, CanonicalBundleInput, ManifestPolicy, ProviderRegistry, TrustStore,
+    TrustStoreError, VerifiedMigrationBundle, canonical_bundle_document, inspect_archive,
+    parse_manifest, verify_bundle_signature,
+};
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
 use studio_security::PluginPrincipal;
 use studio_ui::{InstanceId, UiRegistry};
@@ -252,8 +252,11 @@ impl StudioHost {
     ) -> Result<PluginSurface, LaunchError>
     where
         S: LocalStore,
-        F: FnMut(&studio_package::MigrationDeclaration, &[u8], &mut Value)
-                -> Result<(), MigrationStepError>
+        F: FnMut(
+                &studio_package::MigrationDeclaration,
+                &[u8],
+                &mut Value,
+            ) -> Result<(), MigrationStepError>
             + Send,
     {
         if self.wayland == WaylandAvailability::Unavailable {

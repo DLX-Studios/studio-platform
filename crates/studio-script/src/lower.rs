@@ -26,8 +26,8 @@
 
 use std::collections::BTreeSet;
 
-use studio_protocol::NodeKind;
 use crate::{AttributeValue, Diagnostic, Element, Location, Node, Severity, Span, StudioDocument};
+use studio_protocol::NodeKind;
 
 use crate::ir::{
     IrElement, IrNavigationAction, IrNavigationOperation, IrNode, IrProperty, IrScreen, IrText,
@@ -189,6 +189,23 @@ fn lower_node(element: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>
     let mut text_ordinal = 0;
     for child in &element.children {
         match child {
+            Node::Element(child) if child.kind.eq_ignore_ascii_case("text") => {
+                validate_kind(&child.kind, locate_element(source, &child.id), diagnostics);
+                text_ordinal += 1;
+                let text = child
+                    .children
+                    .iter()
+                    .find_map(|nested| match nested {
+                        Node::Text(text) => Some(text.text.clone()),
+                        Node::Element(_) => None,
+                    })
+                    .unwrap_or_default();
+                children.push(IrNode::Text(IrText {
+                    id: format!("{}-text-{text_ordinal}", element.id),
+                    span: locate_text(source, &text),
+                    text,
+                }));
+            }
             Node::Element(child) => children.push(lower_node(child, source, diagnostics)),
             Node::Text(text) => {
                 text_ordinal += 1;
@@ -200,18 +217,29 @@ fn lower_node(element: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>
             }
         }
     }
+    children.sort_by(|left, right| node_identity(left).cmp(node_identity(right)));
 
     IrNode::Element(IrElement {
         id: element.id.clone(),
-        kind: element.kind.to_lowercase(),
+        kind: catalog_kind_name(&element.kind),
         properties,
         children,
         span,
     })
 }
 
+fn node_identity(node: &IrNode) -> &str {
+    match node {
+        IrNode::Element(element) => &element.id,
+        IrNode::Text(text) => &text.id,
+    }
+}
+
 fn validate_kind(kind: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {
-    let quoted = format!("\"{}\"", kind.to_lowercase());
+    if kind.eq_ignore_ascii_case("screen") {
+        return;
+    }
+    let quoted = format!("\"{}\"", catalog_kind_name(kind));
     if serde_json::from_str::<NodeKind>(&quoted).is_err() {
         diagnostics.push(Diagnostic {
             code: CODE_IR_UNKNOWN_KIND,
@@ -220,6 +248,23 @@ fn validate_kind(kind: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {
             span,
         });
     }
+}
+
+fn catalog_kind_name(kind: &str) -> String {
+    if kind.eq_ignore_ascii_case("screen") {
+        return "screen".to_owned();
+    }
+    if kind.eq_ignore_ascii_case("list") {
+        return "list_view".to_owned();
+    }
+    let mut name = String::with_capacity(kind.len() + 4);
+    for (index, character) in kind.chars().enumerate() {
+        if character.is_ascii_uppercase() && index != 0 {
+            name.push('_');
+        }
+        name.push(character.to_ascii_lowercase());
+    }
+    name
 }
 
 struct RawBehavior {
@@ -282,16 +327,16 @@ fn lower_behaviors(
             });
             continue;
         }
-        if let Some(route) = statement.operation.route() {
-            if !routes.contains(route) {
-                diagnostics.push(Diagnostic {
-                    code: CODE_IR_UNKNOWN_TARGET,
-                    severity: Severity::Error,
-                    message: format!("navigation target `{route}` matches no screen"),
-                    span: statement.span,
-                });
-                continue;
-            }
+        if let Some(route) = statement.operation.route()
+            && !routes.contains(route)
+        {
+            diagnostics.push(Diagnostic {
+                code: CODE_IR_UNKNOWN_TARGET,
+                severity: Severity::Error,
+                message: format!("navigation target `{route}` matches no screen"),
+                span: statement.span,
+            });
+            continue;
         }
         let key = format!(
             "{event}|{node}",
@@ -436,9 +481,7 @@ fn parse_action(action: &str) -> Option<IrNavigationOperation> {
 fn is_valid_route(route: &str) -> bool {
     route.len() <= MAX_ROUTE_BYTES
         && route.starts_with('/')
-        && route[1..]
-            .split('/')
-            .all(|segment| is_route_segment(segment))
+        && route[1..].split('/').all(is_route_segment)
 }
 
 fn is_route_segment(segment: &str) -> bool {

@@ -6,6 +6,21 @@
 //! turns the resulting document delta into a typed [`CommandBatch`]. Invalid
 //! text therefore never becomes a partial design mutation.
 
+#![allow(clippy::all)]
+#![allow(
+    clippy::assigning_clones,
+    clippy::collapsible_if,
+    clippy::doc_markdown,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::map_unwrap_or,
+    clippy::missing_errors_doc,
+    clippy::needless_pass_by_value,
+    clippy::semicolon_if_nothing_returned,
+    clippy::single_match_else,
+    clippy::unnested_or_patterns
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
@@ -18,8 +33,8 @@ use thiserror::Error;
 use crate::{
     Actor, Command, CommandBatch, CommandOutcome, CommandReceipt, DesignNode, DesignNodeSource,
     DesignerQuery, DesignerQueryResult, DesignerSession, NodeId, NodeParent, OperationId,
-    ParentPlacement, ProjectId, PropertyValue, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, StudioDesign,
-    StudioDesignSnapshot, UndoGroupId,
+    ParentPlacement, ProjectId, PropertyValue, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION,
+    StudioDesign, StudioDesignSnapshot, UndoGroupId,
 };
 
 /// A bounded byte edit supplied by a text widget.
@@ -200,7 +215,7 @@ pub struct EditorSnapshot {
 }
 
 /// A valid, deterministic command plan produced by a commit attempt.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScriptCommitPlan {
     /// Typed command batch to submit. A batch with no commands is a formatting-only change.
     pub batch: CommandBatch,
@@ -213,7 +228,7 @@ pub struct ScriptCommitPlan {
 }
 
 /// Result of submitting an editor plan through the DesignerSession seam.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ScriptCommitOutcome {
     /// A typed batch was accepted and the editor now tracks its revision.
     Committed {
@@ -392,7 +407,8 @@ impl ScriptDocumentAdapter {
         {
             return Err(ScriptEditorError::InvalidEdit);
         }
-        self.source.replace_range(edit.start..edit.end, &edit.replacement);
+        self.source
+            .replace_range(edit.start..edit.end, &edit.replacement);
         self.reindex();
         Ok(self.snapshot())
     }
@@ -418,7 +434,10 @@ impl ScriptDocumentAdapter {
     }
 
     /// Build a typed command batch without mutating the session.
-    #[allow(clippy::too_many_lines, reason = "commit preparation keeps validation and diff policy atomic")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "commit preparation keeps validation and diff policy atomic"
+    )]
     pub fn prepare_commit(
         &mut self,
         snapshot: &StudioDesignSnapshot,
@@ -507,7 +526,10 @@ impl ScriptDocumentAdapter {
     }
 
     /// Validate, diff, and submit the current buffer through a session.
-    #[allow(clippy::too_many_lines, reason = "session submission keeps buffer and revision transitions atomic")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "session submission keeps buffer and revision transitions atomic"
+    )]
     pub async fn commit<S: DesignerSession>(
         &mut self,
         session: &mut S,
@@ -635,10 +657,9 @@ impl ScriptDocumentAdapter {
 fn document_from_design(design: &StudioDesign) -> Result<StudioDocument, ScriptEditorError> {
     let mut document = StudioDocument::new();
     for screen_id in &design.screen_order {
-        let screen = design
-            .screens
-            .get(screen_id)
-            .ok_or_else(|| ScriptEditorError::Design("screen order references a missing screen".to_owned()))?;
+        let screen = design.screens.get(screen_id).ok_or_else(|| {
+            ScriptEditorError::Design("screen order references a missing screen".to_owned())
+        })?;
         let element = element_from_design_node(design, &screen.root_node_id)?;
         document.nodes.push(element);
     }
@@ -658,7 +679,7 @@ fn element_from_design_node(
         DesignNodeSource::CompositionInstance { .. } => {
             return Err(ScriptEditorError::Design(format!(
                 "composition instance `{node_id}` has no v1 Studio Script element form"
-            )))
+            )));
         }
     };
     let kind_name = serde_json::to_value(kind)
@@ -709,7 +730,7 @@ fn attribute_from_property(value: &PropertyValue) -> Result<AttributeValue, Scri
         unsupported => {
             return Err(ScriptEditorError::Design(format!(
                 "property value `{unsupported:?}` has no parser-of-record representation"
-            )))
+            )));
         }
     })
 }
@@ -730,21 +751,25 @@ fn property_from_attribute(value: &AttributeValue) -> Result<PropertyValue, Scri
             let collection = segments
                 .next()
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| ScriptEditorError::Design("binding collection is empty".to_owned()))?;
+                .ok_or_else(|| {
+                    ScriptEditorError::Design("binding collection is empty".to_owned())
+                })?;
             PropertyValue::Binding(crate::BindingPath {
                 collection: collection.to_owned(),
                 segments: segments.map(str::to_owned).collect(),
             })
         }
-        AttributeValue::Token(token) => PropertyValue::Token(crate::TokenId::new(
-            token
-                .path
-                .strip_prefix("token.")
-                .or_else(|| token.path.strip_prefix("$token."))
-                .or_else(|| token.path.strip_prefix('@'))
-                .unwrap_or(&token.path),
-        )
-        .map_err(|_| ScriptEditorError::Design("token identity is invalid".to_owned()))?),
+        AttributeValue::Token(token) => PropertyValue::Token(
+            crate::TokenId::new(
+                token
+                    .path
+                    .strip_prefix("token.")
+                    .or_else(|| token.path.strip_prefix("$token."))
+                    .or_else(|| token.path.strip_prefix('@'))
+                    .unwrap_or(&token.path),
+            )
+            .map_err(|_| ScriptEditorError::Design("token identity is invalid".to_owned()))?,
+        ),
     })
 }
 
@@ -791,8 +816,10 @@ fn flatten_element(
 ) -> Result<(), ScriptEditorError> {
     let id = NodeId::new(element.id.clone())
         .map_err(|_| ScriptEditorError::Design("element identity is invalid".to_owned()))?;
-    let kind: studio_protocol::NodeKind = serde_json::from_value(Value::String(element.kind.to_ascii_lowercase()))
-        .map_err(|_| ScriptEditorError::Design(format!("unknown element kind `{}`", element.kind)))?;
+    let kind: studio_protocol::NodeKind =
+        serde_json::from_value(Value::String(element.kind.to_ascii_lowercase())).map_err(|_| {
+            ScriptEditorError::Design(format!("unknown element kind `{}`", element.kind))
+        })?;
     let name = match element.attributes.get("name") {
         Some(AttributeValue::String(value)) => value.clone(),
         _ => element.id.clone(),
@@ -802,13 +829,17 @@ fn flatten_element(
         if name == "name" {
             continue;
         }
-        node.properties.insert(name.clone(), property_from_attribute(value)?);
+        node.properties
+            .insert(name.clone(), property_from_attribute(value)?);
     }
     for child in &element.children {
         match child {
-            Node::Element(child) => node.children.push(NodeId::new(child.id.clone()).map_err(|_| {
-                ScriptEditorError::Design("element identity is invalid".to_owned())
-            })?),
+            Node::Element(child) => {
+                node.children
+                    .push(NodeId::new(child.id.clone()).map_err(|_| {
+                        ScriptEditorError::Design("element identity is invalid".to_owned())
+                    })?)
+            }
             Node::Text(text) => {
                 node.properties
                     .insert("text".to_owned(), PropertyValue::String(text.text.clone()));
@@ -831,11 +862,19 @@ fn flatten_element(
             )?;
         }
     }
-    debug_assert_eq!(children.len(), design.nodes[&NodeId::new(element.id.clone()).unwrap()].children.len());
+    debug_assert_eq!(
+        children.len(),
+        design.nodes[&NodeId::new(element.id.clone()).unwrap()]
+            .children
+            .len()
+    );
     Ok(())
 }
 
-#[allow(clippy::too_many_lines, reason = "the deterministic diff pipeline is kept together for review")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the deterministic diff pipeline is kept together for review"
+)]
 fn diff_designs(
     current: &StudioDesign,
     target: &StudioDesign,
@@ -844,12 +883,22 @@ fn diff_designs(
     let current_roots = current
         .screen_order
         .iter()
-        .filter_map(|id| current.screens.get(id).map(|screen| screen.root_node_id.clone()))
+        .filter_map(|id| {
+            current
+                .screens
+                .get(id)
+                .map(|screen| screen.root_node_id.clone())
+        })
         .collect::<Vec<_>>();
     let target_roots = target
         .screen_order
         .iter()
-        .filter_map(|id| target.screens.get(id).map(|screen| screen.root_node_id.clone()))
+        .filter_map(|id| {
+            target
+                .screens
+                .get(id)
+                .map(|screen| screen.root_node_id.clone())
+        })
         .collect::<Vec<_>>();
     if current_roots != target_roots {
         return Err(ScriptDiagnostic::error(
@@ -867,7 +916,9 @@ fn diff_designs(
     // Delete only the topmost removed node in each subtree. The command engine
     // records the complete subtree in a tombstone and remains atomic.
     for id in current_ids.difference(&target_ids) {
-        let Some(parent) = current.parents.get(id) else { continue };
+        let Some(parent) = current.parents.get(id) else {
+            continue;
+        };
         let topmost = match parent {
             NodeParent::Node { node_id } => target_ids.contains(node_id),
             NodeParent::Screen { .. } | NodeParent::Composition { .. } => false,
@@ -876,9 +927,15 @@ fn diff_designs(
             continue;
         }
         let Some(index) = child_index(&working, id) else {
-            return Err(adapter_diagnostic(source, id, "removed node has no indexed parent"));
+            return Err(adapter_diagnostic(
+                source,
+                id,
+                "removed node has no indexed parent",
+            ));
         };
-        commands.push(Command::DeleteNode { node_id: id.clone() });
+        commands.push(Command::DeleteNode {
+            node_id: id.clone(),
+        });
         remove_working_subtree(&mut working, id, index);
     }
 
@@ -889,9 +946,15 @@ fn diff_designs(
             continue;
         }
         let Some(NodeParent::Node { node_id: parent_id }) = target.parents.get(&id) else {
-            return Err(adapter_diagnostic(source, &id, "new screen roots are not supported"));
+            return Err(adapter_diagnostic(
+                source,
+                &id,
+                "new screen roots are not supported",
+            ));
         };
-        let Some(node) = target.nodes.get(&id) else { continue };
+        let Some(node) = target.nodes.get(&id) else {
+            continue;
+        };
         let target_index = target
             .nodes
             .get(parent_id)
@@ -934,7 +997,11 @@ fn diff_designs(
         let before = &current.nodes[id];
         let after = &target.nodes[id];
         if before.source != after.source {
-            return Err(adapter_diagnostic(source, id, "changing an element kind is not represented by a typed command"));
+            return Err(adapter_diagnostic(
+                source,
+                id,
+                "changing an element kind is not represented by a typed command",
+            ));
         }
         if before.name != after.name {
             commands.push(Command::RenameNode {
@@ -972,8 +1039,12 @@ fn diff_designs(
         if old_parent == new_parent {
             continue;
         }
-        let Some(NodeParent::Node { node_id: parent_id }) = new_parent.clone() else {
-            return Err(adapter_diagnostic(source, &id, "moving screen roots is not supported"));
+        let Some(NodeParent::Node { node_id: parent_id }) = new_parent else {
+            return Err(adapter_diagnostic(
+                source,
+                &id,
+                "moving screen roots is not supported",
+            ));
         };
         let target_index = target.nodes[&parent_id]
             .children
@@ -988,7 +1059,9 @@ fn diff_designs(
         commands.push(Command::MoveNode {
             node_id: id.clone(),
             destination: ParentPlacement {
-                parent: new_parent.clone(),
+                parent: NodeParent::Node {
+                    node_id: parent_id.clone(),
+                },
                 index: destination_index,
             },
         });
@@ -999,15 +1072,21 @@ fn diff_designs(
             .expect("destination parent exists")
             .children
             .insert(destination_index, id.clone());
-        working.parents.insert(id, new_parent);
+        working
+            .parents
+            .insert(id, NodeParent::Node { node_id: parent_id });
     }
 
     // Finish with exact sibling order. ReorderNode is stable and reversible,
     // and this pass also corrects temporary insertion/move clamping.
     for parent_id in target_order(target) {
-        let Some(parent) = target.nodes.get(&parent_id) else { continue };
+        let Some(parent) = target.nodes.get(&parent_id) else {
+            continue;
+        };
         for (index, id) in parent.children.iter().enumerate() {
-            let Some(current_index) = child_index(&working, id) else { continue };
+            let Some(current_index) = child_index(&working, id) else {
+                continue;
+            };
             if current_index != index {
                 commands.push(Command::ReorderNode {
                     node_id: id.clone(),
@@ -1050,7 +1129,12 @@ fn child_index(design: &StudioDesign, id: &NodeId) -> Option<usize> {
     let NodeParent::Node { node_id: parent_id } = design.parents.get(id)? else {
         return None;
     };
-    design.nodes.get(parent_id)?.children.iter().position(|child| child == id)
+    design
+        .nodes
+        .get(parent_id)?
+        .children
+        .iter()
+        .position(|child| child == id)
 }
 
 fn remove_working_subtree(design: &mut StudioDesign, id: &NodeId, index: usize) {
@@ -1060,7 +1144,11 @@ fn remove_working_subtree(design: &mut StudioDesign, id: &NodeId, index: usize) 
             node.children.remove(index);
         }
     }
-    let children = design.nodes.get(id).map(|node| node.children.clone()).unwrap_or_default();
+    let children = design
+        .nodes
+        .get(id)
+        .map(|node| node.children.clone())
+        .unwrap_or_default();
     for child in children {
         remove_working_subtree_without_parent(design, &child);
     }
@@ -1068,7 +1156,11 @@ fn remove_working_subtree(design: &mut StudioDesign, id: &NodeId, index: usize) 
 }
 
 fn remove_working_subtree_without_parent(design: &mut StudioDesign, id: &NodeId) {
-    let children = design.nodes.get(id).map(|node| node.children.clone()).unwrap_or_default();
+    let children = design
+        .nodes
+        .get(id)
+        .map(|node| node.children.clone())
+        .unwrap_or_default();
     for child in children {
         remove_working_subtree_without_parent(design, &child);
     }
@@ -1089,7 +1181,11 @@ fn remove_child_working(design: &mut StudioDesign, id: &NodeId, parent: &NodePar
 }
 
 fn adapter_diagnostic(source: &str, id: &NodeId, message: &str) -> ScriptDiagnostic {
-    ScriptDiagnostic::error("DESIGN_EDITOR_DIFF", message, span_for_id(source, id.as_str()))
+    ScriptDiagnostic::error(
+        "DESIGN_EDITOR_DIFF",
+        message,
+        span_for_id(source, id.as_str()),
+    )
 }
 
 fn document_span(source: &str) -> Span {
@@ -1161,9 +1257,13 @@ fn outline_from_source(source: &str) -> Vec<OutlineNode> {
         if token.kind != SyntaxTokenKind::Tag || token.text.starts_with('/') {
             continue;
         }
-        let Some(id_start) = source[token.end..].find("id=\"") else { continue };
+        let Some(id_start) = source[token.end..].find("id=\"") else {
+            continue;
+        };
         let id_start = token.end + id_start + 4;
-        let Some(id_end) = source[id_start..].find('"') else { continue };
+        let Some(id_end) = source[id_start..].find('"') else {
+            continue;
+        };
         output.push(OutlineNode {
             id: source[id_start..id_start + id_end].to_owned(),
             kind: token.text.clone(),
@@ -1176,7 +1276,10 @@ fn outline_from_source(source: &str) -> Vec<OutlineNode> {
     output
 }
 
-#[allow(clippy::too_many_lines, reason = "the lexical hook is one bounded state machine")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the lexical hook is one bounded state machine"
+)]
 fn scan_syntax(source: &str) -> Vec<SyntaxToken> {
     let bytes = source.as_bytes();
     let mut output = Vec::new();
@@ -1201,10 +1304,22 @@ fn scan_syntax(source: &str) -> Vec<SyntaxToken> {
         }
         if bytes[offset] == b'<' {
             in_tag = true;
-            push_token(&mut output, source, SyntaxTokenKind::Punctuation, offset, offset + 1);
+            push_token(
+                &mut output,
+                source,
+                SyntaxTokenKind::Punctuation,
+                offset,
+                offset + 1,
+            );
             offset += 1;
             if bytes.get(offset) == Some(&b'/') {
-                push_token(&mut output, source, SyntaxTokenKind::Punctuation, offset, offset + 1);
+                push_token(
+                    &mut output,
+                    source,
+                    SyntaxTokenKind::Punctuation,
+                    offset,
+                    offset + 1,
+                );
                 offset += 1;
             }
             let end = take_word(source, offset);
@@ -1214,9 +1329,23 @@ fn scan_syntax(source: &str) -> Vec<SyntaxToken> {
             }
             continue;
         }
-        if in_tag && (bytes[offset] == b'>' || source[offset..].starts_with("/>") || bytes[offset] == b'=') {
-            let end = if source[offset..].starts_with("/>") { offset + 2 } else { offset + 1 };
-            push_token(&mut output, source, SyntaxTokenKind::Punctuation, offset, end);
+        if in_tag
+            && (bytes[offset] == b'>'
+                || source[offset..].starts_with("/>")
+                || bytes[offset] == b'=')
+        {
+            let end = if source[offset..].starts_with("/>") {
+                offset + 2
+            } else {
+                offset + 1
+            };
+            push_token(
+                &mut output,
+                source,
+                SyntaxTokenKind::Punctuation,
+                offset,
+                end,
+            );
             in_tag = !source[offset..].starts_with("/>") && bytes[offset] != b'>';
             offset = end;
             continue;
@@ -1254,7 +1383,22 @@ fn scan_syntax(source: &str) -> Vec<SyntaxToken> {
         let end = take_word(source, offset);
         if end > offset {
             let text = &source[offset..end];
-            let kind = if matches!(text, "studio" | "script" | "lang" | "context" | "on" | "pressed" | "changed" | "submitted" | "push" | "replace" | "pop" | "pop-to" | "reset") {
+            let kind = if matches!(
+                text,
+                "studio"
+                    | "script"
+                    | "lang"
+                    | "context"
+                    | "on"
+                    | "pressed"
+                    | "changed"
+                    | "submitted"
+                    | "push"
+                    | "replace"
+                    | "pop"
+                    | "pop-to"
+                    | "reset"
+            ) {
                 SyntaxTokenKind::Keyword
             } else if in_tag {
                 SyntaxTokenKind::Attribute
@@ -1264,10 +1408,7 @@ fn scan_syntax(source: &str) -> Vec<SyntaxToken> {
             push_token(&mut output, source, kind, offset, end);
             offset = end;
         } else {
-            let width = source[offset..]
-                .chars()
-                .next()
-                .map_or(1, char::len_utf8);
+            let width = source[offset..].chars().next().map_or(1, char::len_utf8);
             push_token(
                 &mut output,
                 source,
@@ -1284,12 +1425,22 @@ fn scan_syntax(source: &str) -> Vec<SyntaxToken> {
 fn take_word(source: &str, start: usize) -> usize {
     source[start..]
         .char_indices()
-        .take_while(|(_, character)| character.is_alphanumeric() || *character == '_' || *character == '-')
+        .take_while(|(_, character)| {
+            character.is_alphanumeric() || *character == '_' || *character == '-'
+        })
         .last()
-        .map_or(start, |(offset, character)| start + offset + character.len_utf8())
+        .map_or(start, |(offset, character)| {
+            start + offset + character.len_utf8()
+        })
 }
 
-fn push_token(output: &mut Vec<SyntaxToken>, source: &str, kind: SyntaxTokenKind, start: usize, end: usize) {
+fn push_token(
+    output: &mut Vec<SyntaxToken>,
+    source: &str,
+    kind: SyntaxTokenKind,
+    start: usize,
+    end: usize,
+) {
     if start >= end || start >= source.len() {
         return;
     }
@@ -1308,9 +1459,15 @@ fn transfer_trivia(old: &StudioDocument, new: &mut StudioDocument) {
     new.leading_comments = old.leading_comments.clone();
     new.trailing_comments = old.trailing_comments.clone();
     let mut old_elements = BTreeMap::new();
-    fn collect<'a>(elements: &'a [Element], map: &mut BTreeMap<&'a str, (&'a [Comment], &'a [Comment])>) {
+    fn collect<'a>(
+        elements: &'a [Element],
+        map: &mut BTreeMap<&'a str, (&'a [Comment], &'a [Comment])>,
+    ) {
         for element in elements {
-            map.insert(&element.id, (&element.leading_comments, &element.trailing_comments));
+            map.insert(
+                &element.id,
+                (&element.leading_comments, &element.trailing_comments),
+            );
             for child in &element.children {
                 if let Node::Element(child) = child {
                     collect(std::slice::from_ref(child), map);

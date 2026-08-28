@@ -2385,9 +2385,6 @@ impl FoundationGallery {
                     .label(label)
                     .disabled(!enabled)
                     .opacity(opacity)
-                    .when_some(accessibility_label.clone(), |element, label| {
-                        element.aria_label(label)
-                    })
                     .when(full_width, gpui::Styled::w_full);
                 let button = match variant {
                     "secondary" => button.secondary(),
@@ -2916,9 +2913,7 @@ impl Render for FoundationGallery {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ImageFormat, PluginRenderNode, image_format, parse_number_input, prop_strings, prop_u64,
-    };
+    use super::{ImageFormat, PluginRenderNode, image_format, parse_number_input};
     use studio_protocol::NodeKind;
 
     #[test]

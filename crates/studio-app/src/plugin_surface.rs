@@ -5,12 +5,12 @@ use studio_components::{
     ComponentCatalog, DispatchError, HostEventDispatcher, InputAction, NativeStateStore,
     RuntimeControl, UpdateError, UpdateReport,
 };
+use studio_package::ProviderAdmissionPlan;
 use studio_protocol::{
     GuestMessage, HostEvent, NodeKind, ProtocolError, ProtocolLimits, UiNode, decode_guest_message,
 };
 use studio_ui::{PatchError, PatchMetrics, UiRegistry};
 use studio_wasm::{PluginInstance, RuntimeError};
-use studio_package::ProviderAdmissionPlan;
 use thiserror::Error;
 
 use crate::cli::LaunchMode;

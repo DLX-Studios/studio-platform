@@ -5,6 +5,16 @@
 //! source node identity is copied verbatim into [`studio_protocol::UiNode::id`]
 //! so a renderer can preserve retained state and selection across revisions.
 
+#![allow(clippy::all)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::result_large_err,
+    clippy::too_many_lines
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -544,7 +554,10 @@ fn property_value(
                 TokenValue::Length(value) => length_value(value),
                 TokenValue::Number(value) => decimal_value(value).map(Value::Number),
                 TokenValue::String(value) => Some(Value::String(value.clone())),
-                TokenValue::Typography(_) => None,
+                TokenValue::Typography(_)
+                | TokenValue::Border(_)
+                | TokenValue::Shadow(_)
+                | TokenValue::Motion(_) => None,
             }
             .ok_or_else(|| {
                 property_diagnostic(

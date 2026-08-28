@@ -1,4 +1,4 @@
-//! Child process used only by the LocalStore forced-termination integration test.
+//! Child process used only by the `LocalStore` forced-termination integration test.
 //!
 //! Sequence: open the store with `Durability::Every`, commit a durable batch,
 //! then enter an uncommitted transaction with a second batch, signal the pause

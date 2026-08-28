@@ -112,6 +112,8 @@ fn design() -> StudioDesign {
         collections: BTreeMap::new(),
         bindings: BTreeMap::new(),
         forms: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        settings: BTreeMap::new(),
     }
 }
 

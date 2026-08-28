@@ -34,6 +34,6 @@ pub use provider::{
 };
 pub use sign::{sign_bundle, sign_document};
 pub use trust::{
-    ProvisionedPublisherKey, PublisherKeyIdentity, TrustSnapshot, TrustSnapshotEvidence,
-    TrustStore, TrustStoreError, TrustStoreErrorCode, TrustedPublisherKey, TRUST_STORE_PATH_ENV,
+    ProvisionedPublisherKey, PublisherKeyIdentity, TRUST_STORE_PATH_ENV, TrustSnapshot,
+    TrustSnapshotEvidence, TrustStore, TrustStoreError, TrustStoreErrorCode, TrustedPublisherKey,
 };

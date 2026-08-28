@@ -63,7 +63,7 @@
 //!
 //! Behind the same boundary live the typed Studio IR ([`ir`]), the lowering
 //! from the parser semantic model into that IR ([`lower`]), and the
-//! deterministic AssemblyScript generation backend ([`assemblyscript`]).
+//! deterministic `AssemblyScript` generation backend ([`assemblyscript`]).
 //! Compiler internals stay here and never leak into caller-facing types:
 //! [`compile`] is the one-call projection from source to lowered module.
 

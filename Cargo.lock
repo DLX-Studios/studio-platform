@@ -986,7 +986,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
 ]
 
 [[package]]
@@ -1071,9 +1071,9 @@ checksum = "f781dba93de3a5ef6dc5b17c9958b208f6f3f021623b360fb605ea51ce443f10"
 
 [[package]]
 name = "borsh"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a88b7ea17d208c4193f2c1e6de3c35fe71f98c96982d5ced308bdcc749ff6e1f"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
 dependencies = [
  "borsh-derive",
  "bytes",
@@ -1082,15 +1082,15 @@ dependencies = [
 
 [[package]]
 name = "borsh-derive"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8f347189c62a579b8cd5f80714efa178f52e461dc2e6d701d264f5ff22e566c"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
 dependencies = [
  "once_cell",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -1689,9 +1689,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -1982,7 +1982,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "curve25519-dalek-derive",
  "digest 0.11.3",
  "fiat-crypto 0.3.0",
@@ -4275,9 +4275,9 @@ checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
 name = "imgref"
-version = "1.12.2"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89194689a993ab15268672e99e7b0e19da2da3268ac682e8f02d29d4d1434cd7"
+checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 
 [[package]]
 name = "indexmap"
@@ -4658,9 +4658,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d0a00925a9f930d679b6789b721e3a7f9ed110f41b86d2497caa780c3a070a"
+checksum = "d7955dfc218a8afb29dfeffd540e3a6e96baeb94fe7138228dd7cc6937fbbf96"
 dependencies = [
  "libc",
 ]
@@ -7623,7 +7623,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
 
@@ -8027,6 +8027,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio-actions"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-security",
+]
+
+[[package]]
 name = "studio-ai"
 version = "0.1.0"
 dependencies = [
@@ -8034,15 +8043,6 @@ dependencies = [
  "serde_json",
  "studio-net",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "studio-actions"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "studio-security",
 ]
 
 [[package]]
@@ -8057,6 +8057,7 @@ dependencies = [
  "gpui_platform",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "studio-actions",
  "studio-components",
  "studio-design",
@@ -8122,6 +8123,7 @@ dependencies = [
  "studio-actions",
  "studio-design",
  "studio-security",
+ "zeroize",
 ]
 
 [[package]]
@@ -8139,6 +8141,7 @@ dependencies = [
 name = "studio-host"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek 3.0.0",
  "getrandom 0.3.4",
  "serde",
  "serde_json",
@@ -8174,7 +8177,23 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "studio-security",
+ "zeroize",
+]
+
+[[package]]
+name = "studio-oauth"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "studio-net",
+ "studio-security",
+ "thiserror 2.0.20",
  "zeroize",
 ]
 
@@ -8195,27 +8214,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "studio-update-channel"
-version = "0.1.0"
-dependencies = [
- "ed25519-dalek 3.0.0",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "studio-package",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "studio-plugin-registry"
 version = "0.1.0"
 dependencies = [
- "ed25519-dalek",
+ "ed25519-dalek 3.0.0",
  "semver",
  "serde",
  "serde_json",
  "studio-package",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -8265,6 +8272,18 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "studio-protocol",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "studio-update-channel"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek 3.0.0",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "studio-package",
  "thiserror 2.0.20",
 ]
 
@@ -9533,9 +9552,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.25.0"
+version = "1.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
+checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",

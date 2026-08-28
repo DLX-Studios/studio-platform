@@ -5,7 +5,17 @@
 //! hidden in this persistence layer, which keeps tests deterministic and makes attribution the
 //! responsibility of the host service that received the operation.
 
-use std::fmt;
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::missing_fields_in_debug,
+    clippy::format_push_string
+)]
+
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -544,7 +554,12 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::authentication_attempt(actor, occurred_at, accepted)?).await
+        self.append(AuditEvent::authentication_attempt(
+            actor,
+            occurred_at,
+            accepted,
+        )?)
+        .await
     }
 
     /// Record a role definition or assignment change.
@@ -557,7 +572,8 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::role_change(actor, occurred_at, details)?).await
+        self.append(AuditEvent::role_change(actor, occurred_at, details)?)
+            .await
     }
 
     /// Record an application membership change.
@@ -570,7 +586,8 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::membership_change(actor, occurred_at, details)?).await
+        self.append(AuditEvent::membership_change(actor, occurred_at, details)?)
+            .await
     }
 
     /// Record a destructive application action.
@@ -583,7 +600,8 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::destructive_action(actor, occurred_at, details)?).await
+        self.append(AuditEvent::destructive_action(actor, occurred_at, details)?)
+            .await
     }
 
     /// Record a data export operation.
@@ -596,7 +614,8 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::data_export(actor, occurred_at, details)?).await
+        self.append(AuditEvent::data_export(actor, occurred_at, details)?)
+            .await
     }
 
     /// Record admission or rejection of an inbound webhook.
@@ -609,7 +628,8 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::webhook_admission(actor, occurred_at, details)?).await
+        self.append(AuditEvent::webhook_admission(actor, occurred_at, details)?)
+            .await
     }
 
     /// Record a declared workflow run.
@@ -622,7 +642,8 @@ impl<S> AuditLog<S> {
     where
         S: LocalStore,
     {
-        self.append(AuditEvent::workflow_run(actor, occurred_at, details)?).await
+        self.append(AuditEvent::workflow_run(actor, occurred_at, details)?)
+            .await
     }
 
     /// Query complete redacted records in append sequence order.
@@ -829,7 +850,7 @@ fn decode_entries(
         return Err(AuditLogError::new(AuditLogErrorCode::CapacityExceeded));
     }
     let mut decoded = entries.iter();
-    let header = decode_entry(decoded.next().ok_or_else(corrupt)?)?;
+    let header = decode_entry(decoded.next().ok_or_else(corrupt)?.payload.clone())?;
     match header {
         PersistedAuditEntry::Header {
             format_version,
@@ -868,16 +889,15 @@ fn decode_entries(
         }
         let persisted_previous_hash = decode_hash(&previous_hash_text)?;
         let hash = decode_hash(&hash_text)?;
-        if persisted_previous_hash != previous_hash
-            || hash_record(
-                sequence,
-                event_type,
-                &actor,
-                occurred_at,
-                &details,
-                &persisted_previous_hash,
-            )? != hash
-        {
+        let computed_hash = hash_record(
+            sequence,
+            event_type,
+            &actor,
+            occurred_at,
+            &details,
+            &persisted_previous_hash,
+        )?;
+        if persisted_previous_hash != previous_hash || computed_hash != hash {
             return Err(AuditLogError::new(AuditLogErrorCode::Tampered));
         }
         let event = AuditEvent {
@@ -913,8 +933,8 @@ fn hash_record(
     details: &Value,
     previous_hash: &[u8; 32],
 ) -> Result<[u8; 32], AuditLogError> {
-    let details =
-        serde_json::to_vec(details).map_err(|_| AuditLogError::new(AuditLogErrorCode::Corrupt))?;
+    let details = serde_json::to_vec(&canonical_json(details))
+        .map_err(|_| AuditLogError::new(AuditLogErrorCode::Corrupt))?;
     let mut hasher = Sha256::new();
     hasher.update(AUDIT_HASH_DOMAIN);
     hasher.update(sequence.to_be_bytes());
@@ -924,6 +944,20 @@ fn hash_record(
     update_bytes(&mut hasher, &details);
     hasher.update(previous_hash);
     Ok(hasher.finalize().into())
+}
+
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let sorted = object
+                .iter()
+                .map(|(key, value)| (key.clone(), canonical_json(value)))
+                .collect::<BTreeMap<_, _>>();
+            Value::Object(sorted.into_iter().collect())
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value.clone(),
+    }
 }
 
 fn update_bytes(hasher: &mut Sha256, bytes: &[u8]) {

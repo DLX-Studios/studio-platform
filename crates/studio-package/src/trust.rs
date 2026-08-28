@@ -258,9 +258,7 @@ impl TrustStore {
         let mut records = Vec::with_capacity(snapshot.keys.len());
         let mut identities = BTreeSet::new();
         for key in snapshot.keys {
-            if !valid_identity(&key.publisher_id, &key.key_id)
-                || key.expires_at <= key.valid_from
-            {
+            if !valid_identity(&key.publisher_id, &key.key_id) || key.expires_at <= key.valid_from {
                 return Err(TrustStoreError::Malformed);
             }
             if !identities.insert((key.publisher_id.clone(), key.key_id.clone())) {
@@ -294,12 +292,8 @@ impl TrustStore {
             return Err(TrustStoreError::NoActiveKeys);
         }
 
-        Self::from_keys_with_metadata(
-            active,
-            Some(snapshot.snapshot_id),
-            Some(snapshot.version),
-        )
-        .map_err(|_| TrustStoreError::Malformed)
+        Self::from_keys_with_metadata(active, Some(snapshot.snapshot_id), Some(snapshot.version))
+            .map_err(|_| TrustStoreError::Malformed)
     }
 
     /// Opaque release-evidence identity, when this store came from a provisioned snapshot.
@@ -397,9 +391,9 @@ fn valid_identity(publisher_id: &str, key_id: &str) -> bool {
 }
 
 fn valid_snapshot_id(snapshot_id: &str) -> bool {
-    snapshot_id.chars().all(|character| {
-        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-    })
+    snapshot_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
 }
 
 fn decode_public_key(value: &str) -> Option<[u8; 32]> {

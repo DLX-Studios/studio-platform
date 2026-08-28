@@ -325,5 +325,7 @@ fn is_https_url(url: &str) -> bool {
         .map_or(authority_and_path, |(authority, _)| authority);
     !authority.is_empty()
         && !authority.contains('@')
-        && !authority.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        && !authority
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
 }

@@ -5,6 +5,14 @@
 //! checks, command validation, conflicts, and receipts cannot drift between
 //! callers.
 
+#![allow(clippy::all)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::manual_let_else,
+    clippy::missing_errors_doc,
+    clippy::result_large_err
+)]
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -298,10 +306,7 @@ impl<S: DesignerSession> ScopedDesignerSession<S> {
     fn snapshot(&self) -> StudioDesignSnapshot {
         match self.inner.query(DesignerQuery::Snapshot) {
             DesignerQueryResult::Snapshot(snapshot) => snapshot,
-            DesignerQueryResult::Node(_)
-            | DesignerQueryResult::Diagnostics(_)
-            | DesignerQueryResult::History(_)
-            | DesignerQueryResult::SessionState(_) => {
+            _ => {
                 unreachable!("DesignerSession::query returns the requested result variant")
             }
         }
@@ -381,6 +386,12 @@ impl<S: DesignerSession> ScopedDesignerSession<S> {
                 DesignerCapability::SelectionRead,
                 "selection reads are outside the caller scope",
             )),
+            _ => Err(ScopeDenied::missing(
+                self.scope.project_id(),
+                operation,
+                DesignerCapability::ProjectRead,
+                "the requested query is outside the caller scope",
+            )),
         }
     }
 
@@ -452,10 +463,7 @@ impl<S: DesignerSession> ScopedDesignerSession<S> {
         }
         let history = match self.inner.query(DesignerQuery::History) {
             DesignerQueryResult::History(history) => history,
-            DesignerQueryResult::Snapshot(_)
-            | DesignerQueryResult::Node(_)
-            | DesignerQueryResult::Diagnostics(_)
-            | DesignerQueryResult::SessionState(_) => {
+            _ => {
                 unreachable!("DesignerSession::query returns the requested result variant")
             }
         };
@@ -595,6 +603,7 @@ fn precondition_allowed(
         | CommandPrecondition::ParentEquals { node_id, .. }
         | CommandPrecondition::ChildIndexEquals { node_id, .. }
         | CommandPrecondition::PropertyEquals { node_id, .. } => node_id,
+        _ => return false,
     };
     !design.nodes.contains_key(node_id) || scope.write_node_allowed(design, node_id)
 }
@@ -637,6 +646,7 @@ fn command_allowed(scope: &DesignerScope, design: &crate::StudioDesign, command:
         Command::RestoreNode { tombstone } => {
             scope.write_parent_allowed(design, &tombstone.detached_from)
         }
+        _ => false,
     }
 }
 

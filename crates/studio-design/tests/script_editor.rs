@@ -7,11 +7,10 @@ use std::{
 };
 
 use studio_design::{
-    Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode,
-    DesignerQuery, DesignerQueryResult, InMemoryDesignerPersistence, NodeId, NodeParent,
-    OperationId, ProjectId, RevisionId, Screen, ScreenId, ScriptCommitMetadata,
-    ScriptCommitOutcome, ScriptDocumentAdapter, ScriptEdit, StudioDesign,
-    STUDIO_DESIGN_SCHEMA_VERSION, UndoGroupId,
+    Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, DesignerQuery,
+    DesignerQueryResult, InMemoryDesignerPersistence, NodeId, NodeParent, OperationId, ProjectId,
+    RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, ScriptCommitMetadata,
+    ScriptCommitOutcome, ScriptDocumentAdapter, ScriptEdit, StudioDesign, UndoGroupId,
 };
 use studio_protocol::NodeKind;
 
@@ -61,9 +60,10 @@ fn seed() -> StudioDesign {
     let mut root = DesignNode::primitive(home.clone(), "Home", NodeKind::Box);
     root.children = vec![title.clone()];
     let mut title_node = DesignNode::primitive(title.clone(), "title", NodeKind::Text);
-    title_node
-        .properties
-        .insert("text".to_owned(), studio_design::PropertyValue::String("Hello".to_owned()));
+    title_node.properties.insert(
+        "text".to_owned(),
+        studio_design::PropertyValue::String("Hello".to_owned()),
+    );
     let mut design = StudioDesign::empty(project_id(), "Editor project");
     design.nodes.insert(home.clone(), root);
     design.nodes.insert(title.clone(), title_node);
@@ -73,10 +73,9 @@ fn seed() -> StudioDesign {
             screen_id: screen.clone(),
         },
     );
-    design.parents.insert(
-        title,
-        NodeParent::Node { node_id: home },
-    );
+    design
+        .parents
+        .insert(title, NodeParent::Node { node_id: home });
     design.screens.insert(
         screen.clone(),
         Screen {
@@ -130,10 +129,12 @@ fn valid_hand_edit_becomes_an_insert_command() {
             panic!("expected committed editor change")
         };
         assert_eq!(receipt.base_revision, RevisionId::INITIAL);
-        assert!(snapshot(&session)
-            .design
-            .nodes
-            .contains_key(&NodeId::new("save").unwrap()));
+        assert!(
+            snapshot(&session)
+                .design
+                .nodes
+                .contains_key(&NodeId::new("save").unwrap())
+        );
     });
 }
 
@@ -145,7 +146,11 @@ fn invalid_hand_edit_only_updates_line_linked_problems() {
         let mut editor = ScriptDocumentAdapter::from_snapshot(&initial).unwrap();
         let view = editor.replace_source("studio 1\n<Box id=\"home\">\n");
         assert!(!view.diagnostics.is_empty());
-        assert!(view.diagnostics.iter().all(|diagnostic| diagnostic.line() >= 2));
+        assert!(
+            view.diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.line() >= 2)
+        );
 
         let outcome = editor.commit(&mut session, metadata("invalid-edit")).await;
         let ScriptCommitOutcome::Invalid { diagnostics } = outcome else {

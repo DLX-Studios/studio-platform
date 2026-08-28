@@ -12,10 +12,10 @@ use crate::manipulation::CanvasRect;
 use crate::model::{
     Actor, BindingId, BindingPath, CollectionId, ContentBinding, ContentCollection,
     ContentCollectionSchema, ContentFixture, ContentRecord, DeletionTombstone, DesignNode,
-    DesignToken, FormDefinition, FormId, Interaction, LayoutProperties,
-    NodeId, NodeParent, OperationId, ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride,
-    ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, TokenId, TokenOverride,
-    TokenValue, UndoGroupId, InstalledPlugin, SettingKey, SettingValue,
+    DesignToken, FormDefinition, FormId, InstalledPlugin, Interaction, LayoutProperties, NodeId,
+    NodeParent, OperationId, ProjectId, PropertyValue, RecordId, ResponsiveNodeOverride,
+    ResponsiveVariant, ResponsiveVariantId, ReusableComposition, RevisionId, SettingKey,
+    SettingValue, TokenId, TokenOverride, TokenValue, UndoGroupId,
 };
 
 /// One atomic, actor-attributed mutation request.
@@ -75,6 +75,7 @@ pub enum CommandPrecondition {
 }
 
 /// Closed command families for structural editing and semantic design data.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -359,6 +360,8 @@ impl Command {
             layout,
         }
     }
+}
+
 /// A target parent and ordered child position.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

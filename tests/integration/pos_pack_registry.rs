@@ -10,8 +10,8 @@ use studio_plugin_registry::{
     CompositionContribution, CompositionNode, ConsentDecision, DeclaredCapability,
     DescriptorErrorCode, DescriptorPolicy, HookBudget, HookCallback, HookDeclaration,
     LifecycleHook, OwnedArtifact, PluginDescriptorV1, PluginState, RegistryErrorCode,
-    SettingsField, SettingsFieldType, SignedDescriptorEnvelope, ViolationReason,
-    pos_pack_descriptor, pos_pack_envelope, pos_pack_seed, pos_pack_trust_keys,
+    SignedDescriptorEnvelope, ViolationReason, pos_pack_descriptor, pos_pack_envelope,
+    pos_pack_seed, pos_pack_trust_keys,
 };
 
 const PROJECT: &str = "project-1";

@@ -276,6 +276,10 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
                 message: "select a canvas node before editing its properties".to_owned(),
                 node_id: None,
                 interaction_id: None,
+                collection_id: None,
+                binding_id: None,
+                form_id: None,
+                record_id: None,
             }]);
             self.last_outcome = Some(outcome.clone());
             self.state = match &outcome {

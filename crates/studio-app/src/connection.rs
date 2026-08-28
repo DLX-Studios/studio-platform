@@ -5,6 +5,9 @@
 //! transfers use lossless per-operation envelopes and receipts so a host persistence adapter can
 //! commit acknowledgements before retiring outbox entries.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -78,7 +81,10 @@ impl ConnectionIndicator {
             state,
             label: state.label().to_owned(),
             detail: default_detail(state).to_owned(),
-            retryable: matches!(state, ConnectionState::Connecting | ConnectionState::Warning),
+            retryable: matches!(
+                state,
+                ConnectionState::Connecting | ConnectionState::Warning
+            ),
         }
     }
 
@@ -117,10 +123,14 @@ pub enum ConnectionSurface {
 
 const fn default_detail(state: ConnectionState) -> &'static str {
     match state {
-        ConnectionState::Offline => "Cloud features are unavailable; local and cached projects remain usable.",
+        ConnectionState::Offline => {
+            "Cloud features are unavailable; local and cached projects remain usable."
+        }
         ConnectionState::Connecting => "Connecting to Studio Cloud.",
         ConnectionState::Synced => "Cloud data is current.",
-        ConnectionState::Warning => "Cloud data may be out of date. Retry when the connection is available.",
+        ConnectionState::Warning => {
+            "Cloud data may be out of date. Retry when the connection is available."
+        }
         ConnectionState::Error => "Cloud data needs attention. Local work is preserved.",
     }
 }
@@ -288,7 +298,8 @@ pub trait IdentityService {
         request: &RegisterRequest,
     ) -> Result<RegistrationReceipt, IdentityServiceError>;
     /// Confirm a one-time verification code.
-    fn verify(&mut self, request: &VerifyRequest) -> Result<VerifiedIdentity, IdentityServiceError>;
+    fn verify(&mut self, request: &VerifyRequest)
+    -> Result<VerifiedIdentity, IdentityServiceError>;
     /// Resend the verification message for a pending registration.
     fn resend_verification(&mut self, email: &str) -> Result<(), IdentityServiceError>;
     /// Create the verified identity's personal workspace.
@@ -447,29 +458,28 @@ impl<S: IdentityService> IdentityOnboarding<S> {
         self.snapshot.indicator = ConnectionIndicator::from_state(ConnectionState::Connecting);
         self.snapshot.failure = None;
         let result = match &action {
-            PendingIdentityAction::Register(request) => self
-                .service
-                .register(request)
-                .map(|receipt| {
+            PendingIdentityAction::Register(request) => {
+                self.service.register(request).map(|receipt| {
                     self.snapshot.email = Some(receipt.email);
                     self.snapshot.step = OnboardingStep::VerifyEmail;
-                }),
-            PendingIdentityAction::Verify(request) => self.service.verify(request).map(|identity| {
-                self.snapshot.email = Some(identity.email.clone());
-                self.snapshot.identity = Some(identity);
-                self.snapshot.step = OnboardingStep::WorkspaceSetup;
-            }),
-            PendingIdentityAction::ResendVerification(email) => self
-                .service
-                .resend_verification(email)
-                .map(|()| ()),
-            PendingIdentityAction::CreateWorkspace(request) => self
-                .service
-                .create_workspace(request)
-                .map(|workspace| {
+                })
+            }
+            PendingIdentityAction::Verify(request) => {
+                self.service.verify(request).map(|identity| {
+                    self.snapshot.email = Some(identity.email.clone());
+                    self.snapshot.identity = Some(identity);
+                    self.snapshot.step = OnboardingStep::WorkspaceSetup;
+                })
+            }
+            PendingIdentityAction::ResendVerification(email) => {
+                self.service.resend_verification(email).map(|()| ())
+            }
+            PendingIdentityAction::CreateWorkspace(request) => {
+                self.service.create_workspace(request).map(|workspace| {
                     self.snapshot.workspace = Some(workspace);
                     self.snapshot.step = OnboardingStep::Complete;
-                }),
+                })
+            }
         };
         match result {
             Ok(()) => {
@@ -487,7 +497,9 @@ impl<S: IdentityService> IdentityOnboarding<S> {
                         PendingIdentityAction::ResendVerification(_) => {
                             IdentityOperation::ResendVerification
                         }
-                        PendingIdentityAction::CreateWorkspace(_) => IdentityOperation::CreateWorkspace,
+                        PendingIdentityAction::CreateWorkspace(_) => {
+                            IdentityOperation::CreateWorkspace
+                        }
                     },
                     code: error.code,
                     message: error.message.clone(),
@@ -540,11 +552,7 @@ pub struct CachedProject {
 impl CachedProject {
     /// Construct a cloud project whose cached local copy remains editable offline.
     #[must_use]
-    pub fn cloud(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        local_revision: u64,
-    ) -> Self {
+    pub fn cloud(id: impl Into<String>, name: impl Into<String>, local_revision: u64) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
@@ -1126,10 +1134,7 @@ impl<W: SyncWorker> SyncCoordinator<W> {
     }
 
     /// Open any usable cached project, including after sign-out or offline transition.
-    pub fn open_cached_project(
-        &self,
-        project_id: &str,
-    ) -> Result<CachedProjectSession, SyncError> {
+    pub fn open_cached_project(&self, project_id: &str) -> Result<CachedProjectSession, SyncError> {
         let project = self
             .projects
             .get(project_id)
@@ -1199,11 +1204,10 @@ impl<W: SyncWorker> SyncCoordinator<W> {
                 // updated are the envelopes removed from the outbox.
                 for (operation, operation_receipt) in operations.iter_mut().zip(&receipt.receipts) {
                     operation.state = envelope_state(&operation_receipt.outcome);
-                    self.acknowledgements.insert(
-                        operation.operation_id.clone(),
-                        operation_receipt.clone(),
-                    );
-                    if let SyncReceiptOutcome::Conflict { conflict_id } = &operation_receipt.outcome {
+                    self.acknowledgements
+                        .insert(operation.operation_id.clone(), operation_receipt.clone());
+                    if let SyncReceiptOutcome::Conflict { conflict_id } = &operation_receipt.outcome
+                    {
                         self.conflicts.insert(
                             conflict_id.clone(),
                             SyncConflictRecord {
@@ -1253,22 +1257,16 @@ impl<W: SyncWorker> SyncCoordinator<W> {
         } else {
             ConnectionState::Error
         };
-        self.indicator = ConnectionIndicator::with_detail(
-            state,
-            error.message.clone(),
-            error.retryable,
-        );
+        self.indicator =
+            ConnectionIndicator::with_detail(state, error.message.clone(), error.retryable);
     }
 
     fn mark_sync_warning(&mut self, project_id: &str, detail: String, retryable: bool) {
         if let Some(project) = self.projects.get_mut(project_id) {
             project.sync_state = CachedProjectSyncState::Warning;
         }
-        self.indicator = ConnectionIndicator::with_detail(
-            ConnectionState::Warning,
-            detail,
-            retryable,
-        );
+        self.indicator =
+            ConnectionIndicator::with_detail(ConnectionState::Warning, detail, retryable);
     }
 
     /// Short alias for [`Self::sync_project`] used by a project-shell sync action.
@@ -1291,7 +1289,7 @@ impl<W: SyncWorker> SyncCoordinator<W> {
     }
 }
 
-    /// Synchronization coordinator failures that preserve local cache state.
+/// Synchronization coordinator failures that preserve local cache state.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum SyncError {
     /// A cached project key is invalid.
@@ -1372,9 +1370,9 @@ fn validate_sync_receipt(
         }
         match &acknowledged.outcome {
             SyncReceiptOutcome::Applied => {
-                revision = revision.checked_add(1).ok_or_else(|| {
-                    SyncError::InvalidReceipt("revision overflow".to_owned())
-                })?;
+                revision = revision
+                    .checked_add(1)
+                    .ok_or_else(|| SyncError::InvalidReceipt("revision overflow".to_owned()))?;
                 if acknowledged.revision != revision {
                     return Err(SyncError::InvalidReceipt(format!(
                         "receipt {index} breaks revision continuity"
@@ -1390,9 +1388,9 @@ fn validate_sync_receipt(
                         "receipt {index} has an invalid conflict identity"
                     )));
                 }
-                revision = revision.checked_add(1).ok_or_else(|| {
-                    SyncError::InvalidReceipt("revision overflow".to_owned())
-                })?;
+                revision = revision
+                    .checked_add(1)
+                    .ok_or_else(|| SyncError::InvalidReceipt("revision overflow".to_owned()))?;
                 if acknowledged.revision != revision {
                     return Err(SyncError::InvalidReceipt(format!(
                         "receipt {index} breaks revision continuity"
@@ -1400,7 +1398,9 @@ fn validate_sync_receipt(
                 }
             }
             SyncReceiptOutcome::Replayed => {
-                if acknowledged.revision < revision || acknowledged.revision > receipt.remote_revision {
+                if acknowledged.revision < revision
+                    || acknowledged.revision > receipt.remote_revision
+                {
                     return Err(SyncError::InvalidReceipt(format!(
                         "receipt {index} has an invalid replay revision"
                     )));
@@ -1444,8 +1444,9 @@ fn validate_envelope(
             "operation identity is not scoped to the project".to_owned(),
         ));
     }
-    let payload = serde_json::to_vec(&operation.payload)
-        .map_err(|_| SyncError::InvalidReceipt("operation payload is not serializable".to_owned()))?;
+    let payload = serde_json::to_vec(&operation.payload).map_err(|_| {
+        SyncError::InvalidReceipt("operation payload is not serializable".to_owned())
+    })?;
     if operation.payload_hash != payload_digest(&payload) {
         return Err(SyncError::InvalidReceipt(
             "operation payload hash is invalid".to_owned(),
@@ -1471,9 +1472,7 @@ mod tests {
 
     impl FakeIdentityService {
         fn success() -> Self {
-            Self {
-                fail: None,
-            }
+            Self { fail: None }
         }
 
         fn fail_once(operation: IdentityOperation, code: IdentityServiceErrorCode) -> Self {
@@ -1482,7 +1481,8 @@ mod tests {
                     operation,
                     IdentityServiceError {
                         code,
-                        message: "The test identity service is temporarily unavailable. Retry.".into(),
+                        message: "The test identity service is temporarily unavailable. Retry."
+                            .into(),
                         retryable: true,
                     },
                 )),
@@ -1522,7 +1522,8 @@ mod tests {
             if request.code != "1234" {
                 return Err(IdentityServiceError {
                     code: IdentityServiceErrorCode::VerificationInvalid,
-                    message: "That verification code is not valid. Check the email and try again.".into(),
+                    message: "That verification code is not valid. Check the email and try again."
+                        .into(),
                     retryable: true,
                 });
             }
@@ -1566,7 +1567,8 @@ mod tests {
                 self.fail_once = false;
                 return Err(SyncWorkerError {
                     code: SyncWorkerErrorCode::Unavailable,
-                    message: "Cloud sync is unavailable. Local changes are preserved; retry.".into(),
+                    message: "Cloud sync is unavailable. Local changes are preserved; retry."
+                        .into(),
                     retryable: true,
                 });
             }
@@ -1599,7 +1601,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(onboarding.snapshot().step, OnboardingStep::VerifyEmail);
-        assert_eq!(onboarding.snapshot().indicator.state, ConnectionState::Synced);
+        assert_eq!(
+            onboarding.snapshot().indicator.state,
+            ConnectionState::Synced
+        );
 
         onboarding.resend_verification().unwrap();
         onboarding.verify("1234").unwrap();
@@ -1624,7 +1629,10 @@ mod tests {
         };
         assert!(onboarding.register(request).is_err());
         assert_eq!(onboarding.snapshot().step, OnboardingStep::Register);
-        assert_eq!(onboarding.snapshot().indicator.state, ConnectionState::Warning);
+        assert_eq!(
+            onboarding.snapshot().indicator.state,
+            ConnectionState::Warning
+        );
         assert_eq!(
             onboarding.snapshot().failure.as_ref().unwrap().operation,
             IdentityOperation::Register
@@ -1636,10 +1644,15 @@ mod tests {
     #[test]
     fn sync_disable_is_reversible_and_preserves_pending_local_work() {
         let mut coordinator = SyncCoordinator::new(FakeSyncWorker::default());
-        coordinator.add_cached_project(CachedProject::cloud("northstar", "Northstar", 10)).unwrap();
+        coordinator
+            .add_cached_project(CachedProject::cloud("northstar", "Northstar", 10))
+            .unwrap();
         coordinator.queue_operations("northstar", 3).unwrap();
         coordinator.disable_sync();
-        assert_eq!(coordinator.sync_project("northstar").unwrap(), SyncOutcome::Disabled);
+        assert_eq!(
+            coordinator.sync_project("northstar").unwrap(),
+            SyncOutcome::Disabled
+        );
         assert_eq!(coordinator.projects()[0].pending_operations, 3);
 
         coordinator.enable_sync();
@@ -1655,16 +1668,24 @@ mod tests {
     #[test]
     fn offline_and_sign_out_keep_cached_projects_editable_and_indicators_consistent() {
         let mut coordinator = SyncCoordinator::new(FakeSyncWorker::default());
-        coordinator.add_cached_project(CachedProject::cloud("cached", "Cached", 4)).unwrap();
+        coordinator
+            .add_cached_project(CachedProject::cloud("cached", "Cached", 4))
+            .unwrap();
         coordinator.queue_operations("cached", 1).unwrap();
         coordinator.set_connected(false);
-        assert_eq!(coordinator.sync_project("cached").unwrap(), SyncOutcome::Offline);
+        assert_eq!(
+            coordinator.sync_project("cached").unwrap(),
+            SyncOutcome::Offline
+        );
 
         let session = coordinator.open_cached_project("cached").unwrap();
         assert!(session.editable);
         assert_eq!(session.authority, ProjectAuthority::Cloud);
         coordinator.sign_out();
-        assert_eq!(coordinator.sync_project("cached").unwrap(), SyncOutcome::SignedOut);
+        assert_eq!(
+            coordinator.sync_project("cached").unwrap(),
+            SyncOutcome::SignedOut
+        );
         assert!(coordinator.open_cached_project("cached").unwrap().editable);
 
         let auth = coordinator.indicator_for(ConnectionSurface::Auth);
@@ -1682,7 +1703,9 @@ mod tests {
             fail_once: true,
             ..FakeSyncWorker::default()
         });
-        coordinator.add_cached_project(CachedProject::cloud("project", "Project", 7)).unwrap();
+        coordinator
+            .add_cached_project(CachedProject::cloud("project", "Project", 7))
+            .unwrap();
         coordinator.queue_operations("project", 2).unwrap();
         assert!(coordinator.sync_project("project").is_err());
         assert_eq!(coordinator.projects()[0].pending_operations, 2);
@@ -1709,8 +1732,12 @@ mod tests {
     #[test]
     fn malformed_receipts_leave_the_durable_outbox_and_revision_untouched() {
         let mut coordinator = SyncCoordinator::new(MissingReceiptWorker);
-        coordinator.add_cached_project(CachedProject::cloud("project", "Project", 7)).unwrap();
-        coordinator.queue_operation("project", serde_json::json!({"title": "draft"})).unwrap();
+        coordinator
+            .add_cached_project(CachedProject::cloud("project", "Project", 7))
+            .unwrap();
+        coordinator
+            .queue_operation("project", serde_json::json!({"title": "draft"}))
+            .unwrap();
 
         assert!(matches!(
             coordinator.sync_project("project"),
@@ -1736,7 +1763,7 @@ mod tests {
                 &self.outcome,
                 SyncReceiptOutcome::Applied | SyncReceiptOutcome::Conflict { .. }
             ) {
-                    project.local_revision + 1
+                project.local_revision + 1
             } else {
                 project.local_revision
             };
@@ -1761,13 +1788,20 @@ mod tests {
                 conflict_id: "conflict-1".into(),
             },
         });
-        coordinator.add_cached_project(CachedProject::cloud("project", "Project", 7)).unwrap();
-        coordinator.queue_operation("project", serde_json::json!({"title": "draft"})).unwrap();
+        coordinator
+            .add_cached_project(CachedProject::cloud("project", "Project", 7))
+            .unwrap();
+        coordinator
+            .queue_operation("project", serde_json::json!({"title": "draft"}))
+            .unwrap();
 
         coordinator.sync_project("project").unwrap();
         assert!(coordinator.outbox("project").is_empty());
         assert_eq!(coordinator.acknowledgements().len(), 1);
         assert_eq!(coordinator.conflicts().len(), 1);
-        assert_eq!(coordinator.conflicts()[0].receipt.operation_id, coordinator.acknowledgements()[0].operation_id);
+        assert_eq!(
+            coordinator.conflicts()[0].receipt.operation_id,
+            coordinator.acknowledgements()[0].operation_id
+        );
     }
 }

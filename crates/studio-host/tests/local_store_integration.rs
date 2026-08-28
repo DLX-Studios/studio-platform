@@ -1,4 +1,9 @@
 #![allow(missing_docs)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::needless_pass_by_value,
+    clippy::err_expect
+)]
 
 //! Integration coverage for the embedded LocalStore boundary against
 //! temporary RocksDB directories: idempotent reopen, durability validation,
@@ -45,7 +50,7 @@ fn store_initializes_schema_metadata_and_reopens_idempotently() {
         .expect("test runtime starts");
 
     runtime.block_on(async {
-        let store = opened(directory.path());
+        let store = opened(directory.path()).await;
         assert_eq!(store.directory(), directory.path());
         assert_eq!(store.durability(), Durability::Every);
 
@@ -60,7 +65,7 @@ fn store_initializes_schema_metadata_and_reopens_idempotently() {
         store.close().await.expect("store closes");
 
         // Idempotent reopen across a simulated process restart.
-        let reopened = opened(directory.path());
+        let reopened = opened(directory.path()).await;
         let metadata = reopened.metadata().await.expect("metadata re-reads");
         assert_eq!(metadata.schema_version(), 1);
         let entries = reopened
@@ -80,7 +85,7 @@ fn unknown_batches_read_back_empty() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let store = opened(directory.path());
+            let store = opened(directory.path()).await;
             let entries = store
                 .batch_entries("never-written")
                 .await
@@ -107,7 +112,7 @@ fn durability_and_batches_fail_with_stable_safe_codes() {
             .expect("sub-100 ms interval is rejected");
             assert_code(error, LocalStoreDiagnosticCode::DurabilityInvalid);
 
-            let store = opened(directory.path());
+            let store = opened(directory.path()).await;
             let empty = StoreBatch::new("empty", std::iter::empty::<StoreBatchEntry>());
             match empty {
                 Err(error) => assert_code(error, LocalStoreDiagnosticCode::BatchInvalid),
@@ -161,7 +166,7 @@ fn recovery_requires_a_fully_initialized_store() {
     // After open + close, recovery succeeds.
     let initialized = tempfile::tempdir().expect("temporary directory");
     runtime.block_on(async {
-        let store = opened(initialized.path());
+        let store = opened(initialized.path()).await;
         store.close().await.expect("closes");
         EmbeddedLocalStore::recover(initialized.path(), Durability::Every)
             .await
@@ -177,7 +182,7 @@ fn corrupted_manifest_fails_safely() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let store = opened(directory.path());
+            let store = opened(directory.path()).await;
             store.close().await.expect("closes");
         });
 
@@ -213,7 +218,7 @@ fn incompatible_manifest_fails_safely() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let store = opened(directory.path());
+            let store = opened(directory.path()).await;
             store.close().await.expect("closes");
         });
 

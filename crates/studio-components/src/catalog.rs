@@ -335,6 +335,7 @@ const fn batch_a_rendered(kind: NodeKind) -> bool {
             | NodeKind::Empty
             | NodeKind::Skeleton
             | NodeKind::Separator
+            | NodeKind::AspectRatio
     )
 }
 

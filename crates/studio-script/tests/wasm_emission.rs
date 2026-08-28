@@ -1,4 +1,4 @@
-//! AssemblyScript backend tests: determinism, protocol-conformant mount
+//! `AssemblyScript` backend tests: determinism, protocol-conformant mount
 //! payloads, and parity between the compiled module and the reviewed
 //! hand-written counterpart fixture.
 

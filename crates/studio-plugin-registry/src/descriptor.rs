@@ -619,6 +619,7 @@ fn validate_compatibility(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_contributions(descriptor: &PluginDescriptorV1) -> Result<(), DescriptorError> {
     let mut composition_ids = std::collections::BTreeSet::new();
     for composition in &descriptor.contributions.compositions {
@@ -686,11 +687,12 @@ fn validate_contributions(descriptor: &PluginDescriptorV1) -> Result<(), Descrip
                 return Err(DescriptorError::duplicate_contribution(&slot.id));
             }
             if !token_ids.contains(slot.token_id.as_str())
-                || slot.kind.as_str() != template
-                    .tokens
-                    .iter()
-                    .find(|token| token.id == slot.token_id)
-                    .map_or("", |token| token.kind.as_str())
+                || slot.kind.as_str()
+                    != template
+                        .tokens
+                        .iter()
+                        .find(|token| token.id == slot.token_id)
+                        .map_or("", |token| token.kind.as_str())
             {
                 return Err(DescriptorError::contribution_invalid(format!(
                     "template brand slot {} references an unknown or mismatched token",

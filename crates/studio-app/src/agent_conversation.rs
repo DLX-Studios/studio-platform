@@ -1194,9 +1194,13 @@ mod tests {
 
     #[test]
     fn composer_keeps_scoped_context_and_explains_unavailable_attachments() {
-        let mut attachment =
-            ContextAttachment::new("upload-1", ContextSource::Upload, "brief.md", "text/markdown")
-                .unwrap();
+        let mut attachment = ContextAttachment::new(
+            "upload-1",
+            ContextSource::Upload,
+            "brief.md",
+            "text/markdown",
+        )
+        .unwrap();
         attachment
             .mark_deleted("The imported file was removed from the project.")
             .unwrap();

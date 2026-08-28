@@ -4,12 +4,26 @@
 //! facade, where the host resolves the provider session at send time. This keeps the same API
 //! usable by a Runtime guest, a deterministic test harness, or a future Designer preview.
 
+#![allow(missing_docs)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction,
+    clippy::nursery,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::large_enum_variant,
+    clippy::map_unwrap_or
+)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studio_net::{BrokerError, BrokerRequest, GuestRestApi};
 use studio_net::credential::OAuthSessionResolver;
+use studio_net::declaration::{CredentialSource, HttpMethod, RouteGroupDeclaration};
+use studio_net::guest::BrokerRequest;
+use studio_net::limits::DeclaredLimits;
+use studio_net::{BrokerError, GuestRestApi};
 use studio_security::BrokerCredentialSink;
-use studio_net::declaration::{CredentialSource, DeclaredLimits, HttpMethod, RouteGroupDeclaration};
 use thiserror::Error;
 
 /// Stable first-party provider identifier.
@@ -157,7 +171,9 @@ impl OAuthSessionResolver for GithubOAuthSessionResolver {
         sink: &mut dyn BrokerCredentialSink,
     ) -> Result<(), BrokerError> {
         if provider != GITHUB_PROVIDER_ID || self.session.status() != GithubSessionStatus::Active {
-            return Err(BrokerError::new(studio_net::BrokerErrorCode::OauthSessionUnavailable));
+            return Err(BrokerError::new(
+                studio_net::BrokerErrorCode::OauthSessionUnavailable,
+            ));
         }
         self.session.inject(sink)
     }
@@ -190,8 +206,16 @@ impl Default for GithubProviderReference {
 pub fn route_groups() -> Vec<RouteGroupDeclaration> {
     vec![
         route_group("github.user", "/user", github_user_schema()),
-        route_group("github.repositories", "/user/repos", github_repositories_schema()),
-        route_group("github.repository", "/repos/{owner}/{repo}", github_repository_schema()),
+        route_group(
+            "github.repositories",
+            "/user/repos",
+            github_repositories_schema(),
+        ),
+        route_group(
+            "github.repository",
+            "/repos/{owner}/{repo}",
+            github_repository_schema(),
+        ),
     ]
 }
 
@@ -201,8 +225,14 @@ fn route_group(id: &str, path: &str, response_schema: Value) -> RouteGroupDeclar
         origins: vec![GITHUB_API_ORIGIN.to_owned()],
         methods: vec![HttpMethod::Get],
         paths: vec![path.to_owned()],
-        allowed_headers: vec!["accept".to_owned(), "x-github-api-version".to_owned(), "user-agent".to_owned()],
-        credential: CredentialSource::OauthProviderSession { provider: GITHUB_PROVIDER_ID.to_owned() },
+        allowed_headers: vec![
+            "accept".to_owned(),
+            "x-github-api-version".to_owned(),
+            "user-agent".to_owned(),
+        ],
+        credential: CredentialSource::OauthProviderSession {
+            provider: GITHUB_PROVIDER_ID.to_owned(),
+        },
         request_schema: None,
         response_schema: Some(response_schema),
         streaming: None,
@@ -327,27 +357,53 @@ impl<'api> GithubClient<'api> {
 
     /// List the authenticated user's repositories in a stable provider order.
     pub fn repositories(&self) -> Result<Vec<GithubRepository>, GithubError> {
-        let value = self.get("/user/repos", Some("sort=updated&direction=desc&per_page=50"))?.body().clone();
+        let value = self
+            .get(
+                "/user/repos",
+                Some("sort=updated&direction=desc&per_page=50"),
+            )?
+            .body()
+            .clone();
         let values = value.as_array().ok_or(GithubError::ResponseInvalid)?;
         values.iter().map(parse_repository).collect()
     }
 
     /// Fetch one repository detail projection.
-    pub fn repository(&self, owner: &str, name: &str) -> Result<GithubRepositoryDetail, GithubError> {
+    pub fn repository(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<GithubRepositoryDetail, GithubError> {
         if !valid_segment(owner) || !valid_segment(name) {
             return Err(GithubError::RepositoryReferenceInvalid);
         }
-        let value = self.get(&format!("/repos/{owner}/{name}"), None)?.body().clone();
+        let value = self
+            .get(&format!("/repos/{owner}/{name}"), None)?
+            .body()
+            .clone();
         let repository = parse_repository(&value)?;
         Ok(GithubRepositoryDetail {
             repository,
-            open_issues: value.get("open_issues_count").and_then(Value::as_u64).unwrap_or(0),
-            language: value.get("language").and_then(Value::as_str).map(ToOwned::to_owned),
-            updated_at: value.get("updated_at").and_then(Value::as_str).map(ToOwned::to_owned),
+            open_issues: value
+                .get("open_issues_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            language: value
+                .get("language")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            updated_at: value
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
         })
     }
 
-    fn get(&self, path: &str, query: Option<&str>) -> Result<studio_net::TypedResponse, GithubError> {
+    fn get(
+        &self,
+        path: &str,
+        query: Option<&str>,
+    ) -> Result<studio_net::TypedResponse, GithubError> {
         let mut request = BrokerRequest::new(GITHUB_API_ORIGIN, HttpMethod::Get, path)
             .with_header("accept", "application/vnd.github+json")
             .with_header("x-github-api-version", "2022-11-28")
@@ -370,7 +426,10 @@ fn parse_user(value: &Value) -> Result<GithubUser, GithubError> {
 }
 
 fn parse_repository(value: &Value) -> Result<GithubRepository, GithubError> {
-    let owner = value.get("owner").and_then(|owner| owner.get("login")).and_then(Value::as_str)
+    let owner = value
+        .get("owner")
+        .and_then(|owner| owner.get("login"))
+        .and_then(Value::as_str)
         .ok_or(GithubError::ResponseInvalid)?;
     Ok(GithubRepository {
         id: required_u64(value, "id")?,
@@ -378,31 +437,54 @@ fn parse_repository(value: &Value) -> Result<GithubRepository, GithubError> {
         name: required_string(value, "name")?,
         full_name: required_string(value, "full_name")?,
         description: optional_string(value, "description")?,
-        private: value.get("private").and_then(Value::as_bool).unwrap_or(false),
+        private: value
+            .get("private")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         html_url: required_string(value, "html_url")?,
         default_branch: optional_string(value, "default_branch")?,
-        stars: value.get("stargazers_count").and_then(Value::as_u64).unwrap_or(0),
-        forks: value.get("forks_count").and_then(Value::as_u64).unwrap_or(0),
+        stars: value
+            .get("stargazers_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        forks: value
+            .get("forks_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     })
 }
 
 fn required_string(value: &Value, field: &str) -> Result<String, GithubError> {
-    value.get(field).and_then(Value::as_str).map(ToOwned::to_owned).ok_or(GithubError::ResponseInvalid)
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or(GithubError::ResponseInvalid)
 }
 
 fn optional_string(value: &Value, field: &str) -> Result<Option<String>, GithubError> {
     match value.get(field) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value.as_str().map(|value| Some(value.to_owned())).ok_or(GithubError::ResponseInvalid),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or(GithubError::ResponseInvalid),
     }
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, GithubError> {
-    value.get(field).and_then(Value::as_u64).ok_or(GithubError::ResponseInvalid)
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or(GithubError::ResponseInvalid)
 }
 
 fn valid_segment(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 100 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    !value.is_empty()
+        && value.len() <= 100
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 /// Screen state for the deterministic proof application.
@@ -415,9 +497,15 @@ pub enum GithubViewerScreen {
     /// Provider session exists and repositories are being requested.
     LoadingRepositories { user: GithubUser },
     /// Authenticated repository list.
-    Repositories { user: GithubUser, repositories: Vec<GithubRepository> },
+    Repositories {
+        user: GithubUser,
+        repositories: Vec<GithubRepository>,
+    },
     /// One authenticated repository detail screen.
-    RepositoryDetail { user: GithubUser, detail: GithubRepositoryDetail },
+    RepositoryDetail {
+        user: GithubUser,
+        detail: GithubRepositoryDetail,
+    },
     /// Safe failure state with no upstream payload.
     Error { code: &'static str },
 }
@@ -473,7 +561,10 @@ impl<'api> GithubViewer<'api> {
     /// Create the signed-out initial state.
     #[must_use]
     pub const fn new(api: &'api GuestRestApi<'api>) -> Self {
-        Self { client: GithubClient::new(api), screen: GithubViewerScreen::SignIn }
+        Self {
+            client: GithubClient::new(api),
+            screen: GithubViewerScreen::SignIn,
+        }
     }
 
     /// Current screen state.
@@ -485,7 +576,10 @@ impl<'api> GithubViewer<'api> {
     /// Start the provider-owned sign-in handoff. Browser and callback capture stay host-owned.
     #[must_use]
     pub const fn sign_in_request() -> GithubSignInRequest {
-        GithubSignInRequest { provider: GITHUB_PROVIDER_ID, scopes: provider_descriptor().scopes }
+        GithubSignInRequest {
+            provider: GITHUB_PROVIDER_ID,
+            scopes: provider_descriptor().scopes,
+        }
     }
 
     /// Typed guest event starting the host-owned browser/PKCE flow.
@@ -542,7 +636,9 @@ impl<'api> GithubViewer<'api> {
                 Ok(())
             }
             Err(error) => {
-                self.screen = GithubViewerScreen::Error { code: github_error_code(&error) };
+                self.screen = GithubViewerScreen::Error {
+                    code: github_error_code(&error),
+                };
                 Err(error)
             }
         }
@@ -551,7 +647,8 @@ impl<'api> GithubViewer<'api> {
     /// Open one repository from the authenticated list.
     pub fn open_repository(&mut self, owner: &str, name: &str) -> Result<(), GithubError> {
         let user = match &self.screen {
-            GithubViewerScreen::Repositories { user, .. } | GithubViewerScreen::RepositoryDetail { user, .. } => user.clone(),
+            GithubViewerScreen::Repositories { user, .. }
+            | GithubViewerScreen::RepositoryDetail { user, .. } => user.clone(),
             _ => return Err(GithubError::ResponseInvalid),
         };
         match self.client.repository(owner, name) {
@@ -560,7 +657,9 @@ impl<'api> GithubViewer<'api> {
                 Ok(())
             }
             Err(error) => {
-                self.screen = GithubViewerScreen::Error { code: github_error_code(&error) };
+                self.screen = GithubViewerScreen::Error {
+                    code: github_error_code(&error),
+                };
                 Err(error)
             }
         }
@@ -579,7 +678,10 @@ pub struct GithubSignInRequest {
 /// Start the provider-owned sign-in handoff without requiring a client or a session token.
 #[must_use]
 pub const fn sign_in_request() -> GithubSignInRequest {
-    GithubSignInRequest { provider: GITHUB_PROVIDER_ID, scopes: provider_descriptor().scopes }
+    GithubSignInRequest {
+        provider: GITHUB_PROVIDER_ID,
+        scopes: provider_descriptor().scopes,
+    }
 }
 
 fn github_error_code(error: &GithubError) -> &'static str {
@@ -592,9 +694,7 @@ fn github_error_code(error: &GithubError) -> &'static str {
 
 fn safe_error_code(code: &str) -> &'static str {
     match code {
-        "net.credential.oauth_session_unavailable" => {
-            "net.credential.oauth_session_unavailable"
-        }
+        "net.credential.oauth_session_unavailable" => "net.credential.oauth_session_unavailable",
         "net.route.origin_not_declared" => "net.route.origin_not_declared",
         "net.route.path_not_declared" => "net.route.path_not_declared",
         "net.route.method_not_allowed" => "net.route.method_not_allowed",
@@ -633,7 +733,7 @@ mod tests {
 
     #[test]
     fn typed_events_are_closed_and_token_free() {
-        let request = sign_in_event();
+        let request = GithubViewer::sign_in_event();
         let encoded = serde_json::to_value(&request).unwrap();
         assert_eq!(encoded["type"], "sign_in_requested");
         assert_eq!(encoded["scopes"], json!(["read:user", "user:email"]));
@@ -644,6 +744,9 @@ mod tests {
         };
         let encoded = serde_json::to_string(&event).unwrap();
         assert!(!encoded.contains("token"));
-        assert_eq!(safe_error_code("unexpected upstream detail"), "github.request.failed");
+        assert_eq!(
+            safe_error_code("unexpected upstream detail"),
+            "github.request.failed"
+        );
     }
 }

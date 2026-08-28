@@ -319,16 +319,16 @@ impl PrototypeSession {
     /// identity validation.
     #[allow(clippy::missing_panics_doc)]
     pub fn dispatch_interaction(&mut self, interaction_id: &InteractionId) -> PrototypeDispatch {
-        let event = self
-            .interactions
-            .entry(interaction_id)
-            .map_or_else(|| PrototypeEvent {
+        let event = self.interactions.entry(interaction_id).map_or_else(
+            || PrototypeEvent {
                 node_id: NodeId::new(format!("missing:{interaction_id}")).expect("safe identity"),
                 event: InteractionEvent::Pressed,
-            }, |entry| PrototypeEvent {
+            },
+            |entry| PrototypeEvent {
                 node_id: entry.source_node_id.clone(),
                 event: entry.event,
-            });
+            },
+        );
         let mut trace = Vec::new();
         let mut interaction_ids = Vec::new();
         let mut diagnostics = Vec::new();
@@ -540,5 +540,9 @@ fn prototype_diagnostic(
         message,
         node_id,
         interaction_id,
+        collection_id: None,
+        binding_id: None,
+        form_id: None,
+        record_id: None,
     }
 }

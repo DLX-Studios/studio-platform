@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use studio_host::{
     ApplyResult, CenterId, CenterServer, CenterTopology, ConflictResolution, Durability,
-    EmbeddedLocalStore, OperationId, PersistentCenter, Station, StationSettings,
+    EmbeddedLocalStore, LocalStore, OperationId, PersistentCenter, Station, StationSettings,
     StationWriteResult, WriteOperation,
 };
 
@@ -37,7 +37,10 @@ fn pairing_tokens_are_scoped_single_use_and_logically_expiring() {
     let enrollment = center.pair(&token, "counter-a").expect("pair");
     assert_eq!(enrollment.station_id().as_str(), "station-1");
     assert_eq!(
-        center.pair(&token, "counter-b").expect_err("token is single-use").code(),
+        center
+            .pair(&token, "counter-b")
+            .expect_err("token is single-use")
+            .code(),
         studio_host::TopologyErrorCode::PairingTokenUnknown
     );
 
@@ -73,7 +76,10 @@ fn two_stations_converge_on_authoritative_table_and_check_state() {
         station_a.local_state().cache().snapshot(),
         station_b.local_state().cache().snapshot()
     );
-    assert_eq!(center.snapshot().expect("snapshot"), *station_a.local_state().cache().snapshot().expect("cache"));
+    assert_eq!(
+        center.snapshot().expect("snapshot"),
+        *station_a.local_state().cache().snapshot().expect("cache")
+    );
 }
 
 #[test]
@@ -91,7 +97,10 @@ fn disconnected_writes_replay_once_logically_after_reconnect() {
     };
     assert_eq!(station.pending_count(), 1);
     let replay = station.reconnect().expect("reconnect");
-    assert!(matches!(replay.as_slice(), [StationWriteResult::Applied(_)]));
+    assert!(matches!(
+        replay.as_slice(),
+        [StationWriteResult::Applied(_)]
+    ));
     assert_eq!(station.pending_count(), 0);
     let revision = center.snapshot().expect("snapshot").revision();
 
@@ -143,8 +152,14 @@ fn concurrent_stale_intents_remain_as_explicit_resolvable_conflicts() {
         other => panic!("expected conflict, got {other:?}"),
     };
     assert!(matches!(conflict.state(), studio_host::ConflictState::Open));
-    assert_eq!(conflict.authoritative().expect("authority").value(), Some(&serde_json::json!({"total": 1200})));
-    assert_eq!(conflict.incoming_intent(), &studio_host::WriteIntent::Set(serde_json::json!({"total": 1000})));
+    assert_eq!(
+        conflict.authoritative().expect("authority").value(),
+        Some(&serde_json::json!({"total": 1200}))
+    );
+    assert_eq!(
+        conflict.incoming_intent(),
+        &studio_host::WriteIntent::Set(serde_json::json!({"total": 1000}))
+    );
 
     center
         .resolve_conflict(
@@ -156,7 +171,10 @@ fn concurrent_stale_intents_remain_as_explicit_resolvable_conflicts() {
         .expect("resolve");
     station_a.sync().expect("a sync");
     station_b.sync().expect("b sync");
-    assert_eq!(station_a.local_state().cache().snapshot(), station_b.local_state().cache().snapshot());
+    assert_eq!(
+        station_a.local_state().cache().snapshot(),
+        station_b.local_state().cache().snapshot()
+    );
     assert!(matches!(
         station_a
             .local_state()
@@ -207,6 +225,7 @@ fn acknowledged_state_survives_center_restart_through_local_store() {
             .expect("apply");
         let before = persistent.snapshot().expect("snapshot");
         drop(persistent);
+        let store = Arc::try_unwrap(store).unwrap_or_else(|_| panic!("store still referenced"));
         store.close().await.expect("close");
 
         let reopened_store = Arc::new(
@@ -225,9 +244,15 @@ fn acknowledged_state_survives_center_restart_through_local_store() {
         .expect("reopen");
         assert_eq!(reopened.snapshot().expect("snapshot"), before);
         assert!(matches!(
-            reopened.apply(&enrollment, &operation).await.expect("replay"),
+            reopened
+                .apply(&enrollment, &operation)
+                .await
+                .expect("replay"),
             ApplyResult::Replayed(_)
         ));
+        drop(reopened);
+        let reopened_store =
+            Arc::try_unwrap(reopened_store).unwrap_or_else(|_| panic!("store still referenced"));
         reopened_store.close().await.expect("close");
     });
 }

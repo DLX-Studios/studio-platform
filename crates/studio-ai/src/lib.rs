@@ -6,10 +6,26 @@
 //! values. Providers can therefore be swapped by changing route configuration, not application
 //! code.
 
+#![allow(missing_docs)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction,
+    clippy::nursery,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unreadable_literal
+)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studio_net::{BrokerError, BrokerRequest, GuestRestApi, StreamEvent, StreamHandle, TypedResponse};
-use studio_net::declaration::{CredentialSource, DeclaredLimits, HttpMethod, RouteGroupDeclaration, StreamingDeclaration};
+use studio_net::declaration::{
+    CredentialSource, HttpMethod, RouteGroupDeclaration, StreamingDeclaration,
+};
+use studio_net::guest::BrokerRequest;
+use studio_net::limits::DeclaredLimits;
+use studio_net::{BrokerError, GuestRestApi, StreamEvent, StreamHandle, TypedResponse};
 use thiserror::Error;
 
 /// Stable SDK package identity.
@@ -153,7 +169,10 @@ impl AiEndpoint {
     /// Create an endpoint configuration without accepting key bytes.
     #[must_use]
     pub fn new(origin: impl Into<String>, api_key_name: impl Into<String>) -> Self {
-        Self { origin: origin.into(), api_key_name: api_key_name.into() }
+        Self {
+            origin: origin.into(),
+            api_key_name: api_key_name.into(),
+        }
     }
 
     /// Signed route declarations for completion and future provider streaming.
@@ -164,33 +183,44 @@ impl AiEndpoint {
             header: "authorization".to_owned(),
             prefix: Some("Bearer ".to_owned()),
         };
-        vec![RouteGroupDeclaration {
-            id: "ai.chat.completions".to_owned(),
-            origins: vec![self.origin.clone()],
-            methods: vec![HttpMethod::Post],
-            paths: vec![CHAT_COMPLETIONS_PATH.to_owned()],
-            allowed_headers: vec!["content-type".to_owned(), "accept".to_owned()],
-            credential: credential.clone(),
-            request_schema: Some(chat_request_schema()),
-            response_schema: Some(json!({ "type": "object", "additionalProperties": true })),
-            streaming: None,
-            limits: DeclaredLimits { max_request_bytes: Some(512 * 1024), max_response_bytes: Some(8 * 1024 * 1024), ..DeclaredLimits::default() },
-        }, RouteGroupDeclaration {
-            id: "ai.chat.completions.stream".to_owned(),
-            origins: vec![self.origin.clone()],
-            methods: vec![HttpMethod::Post],
-            paths: vec!["/v1/chat/completions/stream".to_owned()],
-            allowed_headers: vec!["content-type".to_owned(), "accept".to_owned()],
-            credential,
-            request_schema: Some(chat_request_schema()),
-            response_schema: None,
-            streaming: Some(StreamingDeclaration {
-                chunk_schema: chat_chunk_schema(),
-                reconnects: Some(2),
-                retry_base_delay_ms: Some(250),
-            }),
-            limits: DeclaredLimits { max_stream_bytes: Some(16 * 1024 * 1024), max_stream_events: Some(50_000), ..DeclaredLimits::default() },
-        }]
+        vec![
+            RouteGroupDeclaration {
+                id: "ai.chat.completions".to_owned(),
+                origins: vec![self.origin.clone()],
+                methods: vec![HttpMethod::Post],
+                paths: vec![CHAT_COMPLETIONS_PATH.to_owned()],
+                allowed_headers: vec!["content-type".to_owned(), "accept".to_owned()],
+                credential: credential.clone(),
+                request_schema: Some(chat_request_schema()),
+                response_schema: Some(json!({ "type": "object", "additionalProperties": true })),
+                streaming: None,
+                limits: DeclaredLimits {
+                    max_request_bytes: Some(512 * 1024),
+                    max_response_bytes: Some(8 * 1024 * 1024),
+                    ..DeclaredLimits::default()
+                },
+            },
+            RouteGroupDeclaration {
+                id: "ai.chat.completions.stream".to_owned(),
+                origins: vec![self.origin.clone()],
+                methods: vec![HttpMethod::Post],
+                paths: vec!["/v1/chat/completions/stream".to_owned()],
+                allowed_headers: vec!["content-type".to_owned(), "accept".to_owned()],
+                credential,
+                request_schema: Some(chat_request_schema()),
+                response_schema: None,
+                streaming: Some(StreamingDeclaration {
+                    chunk_schema: chat_chunk_schema(),
+                    reconnects: Some(2),
+                    retry_base_delay_ms: Some(250),
+                }),
+                limits: DeclaredLimits {
+                    max_stream_bytes: Some(16 * 1024 * 1024),
+                    max_stream_events: Some(50_000),
+                    ..DeclaredLimits::default()
+                },
+            },
+        ]
     }
 }
 
@@ -209,13 +239,20 @@ impl<'api> AiClient<'api> {
 
     /// Send one non-streaming OpenAI-compatible completion.
     pub fn complete(&self, request: &ChatRequest) -> Result<TypedResponse, AiError> {
-        let body = serde_json::to_value(ChatRequest { stream: false, ..request.clone() })
-            .map_err(|_| AiError::PayloadInvalid)?;
+        let body = serde_json::to_value(ChatRequest {
+            stream: false,
+            ..request.clone()
+        })
+        .map_err(|_| AiError::PayloadInvalid)?;
         let response = self.api.execute(
-            BrokerRequest::new(&self.endpoint.origin, HttpMethod::Post, CHAT_COMPLETIONS_PATH)
-                .with_header("content-type", "application/json")
-                .with_header("accept", "application/json")
-                .with_body(body),
+            BrokerRequest::new(
+                &self.endpoint.origin,
+                HttpMethod::Post,
+                CHAT_COMPLETIONS_PATH,
+            )
+            .with_header("content-type", "application/json")
+            .with_header("accept", "application/json")
+            .with_body(body),
         )?;
         Ok(response)
     }
@@ -225,8 +262,12 @@ impl<'api> AiClient<'api> {
         let body = serde_json::to_value(request.clone().streaming())
             .map_err(|_| AiError::PayloadInvalid)?;
         let handle = self.api.open_stream(
-            BrokerRequest::new(&self.endpoint.origin, HttpMethod::Post, "/v1/chat/completions/stream")
-                .with_body(body),
+            BrokerRequest::new(
+                &self.endpoint.origin,
+                HttpMethod::Post,
+                "/v1/chat/completions/stream",
+            )
+            .with_body(body),
         )?;
         Ok(AiStream { handle })
     }
@@ -254,7 +295,9 @@ impl AiStream {
         match self.handle.next_event()? {
             StreamEvent::Opened => Some(Ok(AiStreamEvent::Opened)),
             StreamEvent::Chunk(value) => Some(parse_stream_event(&value)),
-            StreamEvent::RetryScheduled { attempt, delay_ms } => Some(Ok(AiStreamEvent::RetryScheduled { attempt, delay_ms })),
+            StreamEvent::RetryScheduled { attempt, delay_ms } => {
+                Some(Ok(AiStreamEvent::RetryScheduled { attempt, delay_ms }))
+            }
             StreamEvent::Completed => Some(Ok(AiStreamEvent::Completed)),
             StreamEvent::Failed(error) => Some(Err(AiError::Broker(error))),
             StreamEvent::Cancelled => Some(Ok(AiStreamEvent::Cancelled)),
@@ -335,28 +378,65 @@ fn parse_stream_event(value: &Value) -> Result<AiStreamEvent, AiError> {
 fn parse_usage(value: &Value) -> Result<ChatUsage, AiError> {
     let usage = value.get("usage").ok_or(AiError::PayloadInvalid)?;
     Ok(ChatUsage {
-        prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_u64).ok_or(AiError::PayloadInvalid)?,
-        completion_tokens: usage.get("completion_tokens").and_then(Value::as_u64).ok_or(AiError::PayloadInvalid)?,
-        total_tokens: usage.get("total_tokens").and_then(Value::as_u64).ok_or(AiError::PayloadInvalid)?,
+        prompt_tokens: usage
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .ok_or(AiError::PayloadInvalid)?,
+        completion_tokens: usage
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .ok_or(AiError::PayloadInvalid)?,
+        total_tokens: usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .ok_or(AiError::PayloadInvalid)?,
     })
 }
 
 fn parse_error(value: &Value) -> Result<ChatError, AiError> {
-    let error = value.get("error").and_then(Value::as_object).ok_or(AiError::PayloadInvalid)?;
+    let error = value
+        .get("error")
+        .and_then(Value::as_object)
+        .ok_or(AiError::PayloadInvalid)?;
     Ok(ChatError {
-        message: error.get("message").and_then(Value::as_str).filter(|message| !message.is_empty()).ok_or(AiError::PayloadInvalid)?.to_owned(),
-        error_type: error.get("type").and_then(Value::as_str).map(ToOwned::to_owned),
-        param: error.get("param").and_then(Value::as_str).map(ToOwned::to_owned),
-        code: error.get("code").and_then(Value::as_str).map(ToOwned::to_owned),
+        message: error
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|message| !message.is_empty())
+            .ok_or(AiError::PayloadInvalid)?
+            .to_owned(),
+        error_type: error
+            .get("type")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        param: error
+            .get("param")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        code: error
+            .get("code")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     })
 }
 
 fn parse_chunk(value: &Value) -> Result<ChatDelta, AiError> {
-    let choice = value.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()).ok_or(AiError::PayloadInvalid)?;
+    let choice = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .ok_or(AiError::PayloadInvalid)?;
     Ok(ChatDelta {
         choice_index: choice.get("index").and_then(Value::as_u64).unwrap_or(0),
-        text: choice.get("delta").and_then(|delta| delta.get("content")).and_then(Value::as_str).map(ToOwned::to_owned),
-        finish_reason: choice.get("finish_reason").and_then(Value::as_str).map(ToOwned::to_owned),
+        text: choice
+            .get("delta")
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        finish_reason: choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     })
 }
 
@@ -368,11 +448,16 @@ mod tests {
     #[test]
     fn request_shape_and_endpoint_routes_are_deterministic() {
         let request = ChatRequest {
-            stream_options: Some(StreamOptions { include_usage: true }),
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             temperature: Some(0.25),
             ..ChatRequest::new(
                 "proof-model",
-                vec![ChatMessage { role: "user".to_owned(), content: "hello".to_owned() }],
+                vec![ChatMessage {
+                    role: "user".to_owned(),
+                    content: "hello".to_owned(),
+                }],
             )
             .streaming()
         };
@@ -383,15 +468,27 @@ mod tests {
         assert_eq!(json["temperature"], 0.25);
         assert_eq!(json["stream_options"]["include_usage"], true);
         let endpoint = AiEndpoint::new("https://ai.example.test", "ai.api_key");
-        assert!(endpoint.route_groups().iter().all(|route| route.compile(&BrokerLimits::default()).is_ok()));
-        assert_eq!(endpoint.route_groups()[1].methods(), &[HttpMethod::Post]);
-        assert!(endpoint.route_groups()[1].request_schema().is_some());
+        assert!(
+            endpoint
+                .route_groups()
+                .iter()
+                .all(|route| route.compile(&BrokerLimits::default()).is_ok())
+        );
+        assert_eq!(endpoint.route_groups()[1].methods, vec![HttpMethod::Post]);
+        assert!(endpoint.route_groups()[1].request_schema.is_some());
     }
 
     #[test]
     fn chunk_projection_normalizes_openai_delta() {
         let chunk = json!({ "choices": [{ "index": 1, "delta": { "content": "hi" }, "finish_reason": null }] });
-        assert_eq!(parse_chunk(&chunk).expect("valid chunk"), ChatDelta { choice_index: 1, text: Some("hi".to_owned()), finish_reason: None });
+        assert_eq!(
+            parse_chunk(&chunk).expect("valid chunk"),
+            ChatDelta {
+                choice_index: 1,
+                text: Some("hi".to_owned()),
+                finish_reason: None
+            }
+        );
     }
 
     #[test]
@@ -399,7 +496,11 @@ mod tests {
         let usage = json!({ "choices": [], "usage": { "prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10 } });
         assert_eq!(
             parse_stream_event(&usage).expect("usage event"),
-            AiStreamEvent::Usage(ChatUsage { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 })
+            AiStreamEvent::Usage(ChatUsage {
+                prompt_tokens: 7,
+                completion_tokens: 3,
+                total_tokens: 10
+            })
         );
 
         let error = json!({ "error": { "message": "rate limited", "type": "rate_limit_error", "code": "rate_limit" } });

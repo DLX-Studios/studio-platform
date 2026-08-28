@@ -5,7 +5,10 @@
 //! the operating-system credential facility. The identity catalog stores only
 //! session metadata; it never stores token bytes.
 
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use sha2::{Digest, Sha256};
 
@@ -61,6 +64,11 @@ impl std::error::Error for SessionCredentialError {}
 /// Host-only remembered-token vault used by the identity service.
 pub trait SessionCredentialStore: Send + Sync {
     /// Store or replace token bytes under one identity/session pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe error when the credential facility rejects the key or
+    /// cannot store the token.
     fn store(
         &self,
         identity_id: &str,
@@ -69,6 +77,11 @@ pub trait SessionCredentialStore: Send + Sync {
     ) -> Result<(), SessionCredentialError>;
 
     /// Check the exact token without returning token bytes to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe error when the credential facility rejects the key or
+    /// cannot read the token.
     fn matches(
         &self,
         identity_id: &str,
@@ -80,6 +93,11 @@ pub trait SessionCredentialStore: Send + Sync {
     ///
     /// This method is intentionally available only to host implementations;
     /// the returned bytes are never part of an identity snapshot or guest API.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe error when the credential facility rejects the key or
+    /// cannot read the token.
     fn load(
         &self,
         identity_id: &str,
@@ -87,11 +105,12 @@ pub trait SessionCredentialStore: Send + Sync {
     ) -> Result<Option<Vec<u8>>, SessionCredentialError>;
 
     /// Revoke the exact identity/session credential. Missing entries succeed.
-    fn revoke(
-        &self,
-        identity_id: &str,
-        session_id: &str,
-    ) -> Result<(), SessionCredentialError>;
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe error when the credential facility rejects the key or
+    /// cannot revoke the token.
+    fn revoke(&self, identity_id: &str, session_id: &str) -> Result<(), SessionCredentialError>;
 }
 
 /// Operating-system credential-facility adapter for remembered sessions.
@@ -136,15 +155,9 @@ impl SessionCredentialStore for OsSessionCredentialStore {
         }
     }
 
-    fn revoke(
-        &self,
-        identity_id: &str,
-        session_id: &str,
-    ) -> Result<(), SessionCredentialError> {
+    fn revoke(&self, identity_id: &str, session_id: &str) -> Result<(), SessionCredentialError> {
         validate_key(identity_id, session_id, b"token")?;
-        match entry(identity_id, session_id)?
-            .delete_credential()
-        {
+        match entry(identity_id, session_id)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(SessionCredentialError::unavailable()),
         }
@@ -159,9 +172,22 @@ pub struct MemorySessionCredentialStore {
 
 impl MemorySessionCredentialStore {
     /// Number of currently stored remembered tokens.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if another thread poisoned the in-memory store lock.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.records.lock().expect("session store lock is not poisoned").len()
+        self.records
+            .lock()
+            .expect("session store lock is not poisoned")
+            .len()
+    }
+
+    /// Whether no remembered tokens are currently stored.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -219,11 +245,7 @@ impl SessionCredentialStore for MemorySessionCredentialStore {
             .cloned())
     }
 
-    fn revoke(
-        &self,
-        identity_id: &str,
-        session_id: &str,
-    ) -> Result<(), SessionCredentialError> {
+    fn revoke(&self, identity_id: &str, session_id: &str) -> Result<(), SessionCredentialError> {
         validate_key(identity_id, session_id, b"token")?;
         self.records
             .lock()
@@ -233,10 +255,7 @@ impl SessionCredentialStore for MemorySessionCredentialStore {
     }
 }
 
-fn entry(
-    identity_id: &str,
-    session_id: &str,
-) -> Result<keyring::Entry, SessionCredentialError> {
+fn entry(identity_id: &str, session_id: &str) -> Result<keyring::Entry, SessionCredentialError> {
     keyring::Entry::new(CREDENTIAL_SERVICE, &key(identity_id, session_id))
         .map_err(|_| SessionCredentialError::unavailable())
 }
@@ -266,11 +285,12 @@ fn key(identity_id: &str, session_id: &str) -> String {
     digest.update(identity_id.as_bytes());
     digest.update([0]);
     digest.update(session_id.as_bytes());
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    let mut result = String::with_capacity(64);
+    for byte in digest.finalize() {
+        use std::fmt::Write as _;
+        write!(&mut result, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    result
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -292,11 +312,23 @@ mod tests {
     fn memory_store_matches_and_revokes_without_exposing_records() {
         let store = MemorySessionCredentialStore::default();
         store.store("identity", "session", b"opaque-token").unwrap();
-        assert!(store.matches("identity", "session", b"opaque-token").unwrap());
-        assert!(!store.matches("identity", "session", b"wrong-token").unwrap());
+        assert!(
+            store
+                .matches("identity", "session", b"opaque-token")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .matches("identity", "session", b"wrong-token")
+                .unwrap()
+        );
         assert_eq!(store.len(), 1);
         store.revoke("identity", "session").unwrap();
-        assert!(!store.matches("identity", "session", b"opaque-token").unwrap());
+        assert!(
+            !store
+                .matches("identity", "session", b"opaque-token")
+                .unwrap()
+        );
         assert_eq!(store.len(), 0);
         assert!(!format!("{store:?}").contains("opaque-token"));
     }

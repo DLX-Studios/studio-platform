@@ -279,12 +279,10 @@ fn post_stream_preserves_bounded_canonical_body_for_reconnects() {
         "additionalProperties": false
     }));
     let fixture = broker(&[group]);
-    fixture
-        .transport
-        .plan_stream(vec![
-            ReadStep::Bytes(b"data: {\"text\":\"ok\"}\n\n".to_vec()),
-            ReadStep::Fail(studio_net::transport::TransportError::ConnectionFailure),
-        ]);
+    fixture.transport.plan_stream(vec![
+        ReadStep::Bytes(b"data: {\"text\":\"ok\"}\n\n".to_vec()),
+        ReadStep::Fail(studio_net::transport::TransportError::ConnectionFailure),
+    ]);
     fixture.transport.plan_stream(vec![ReadStep::End]);
     let body = serde_json::json!({
         "model": "proof-model",
@@ -303,7 +301,10 @@ fn post_stream_preserves_bounded_canonical_body_for_reconnects() {
     let requests = fixture.transport.recorded_requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].method, HttpMethod::Post);
-    assert_eq!(requests[0].body, Some(serde_json::to_vec(&body).expect("json body")));
+    assert_eq!(
+        requests[0].body,
+        Some(serde_json::to_vec(&body).expect("json body"))
+    );
     assert_eq!(requests[1].body, requests[0].body);
 }
 
@@ -332,7 +333,11 @@ fn invalid_post_stream_body_is_rejected_before_dispatch() {
 #[test]
 fn terminal_usage_and_error_frames_keep_order_before_done() {
     let mut group = sse_group();
-    group.chunk_schema = serde_json::json!({
+    group
+        .streaming
+        .as_mut()
+        .expect("streaming declaration")
+        .chunk_schema = serde_json::json!({
         "type": "object",
         "properties": {
             "choices": { "type": "array" },

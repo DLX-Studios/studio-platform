@@ -56,13 +56,14 @@ fn main() {
         std::process::exit(2);
     };
 
-    let bootstrap = match NativeProductBootstrap::open(NativeProductBootstrap::default_data_directory()) {
-        Ok(bootstrap) => bootstrap,
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(2);
-        }
-    };
+    let bootstrap =
+        match NativeProductBootstrap::open(NativeProductBootstrap::default_data_directory()) {
+            Ok(bootstrap) => bootstrap,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+        };
     let arguments = std::env::args_os().collect::<Vec<_>>();
     let plugin_surface = if arguments.len() == 1 {
         None

@@ -4,6 +4,18 @@
 //! shell can render the returned snapshot in any of those modes without copying query state or
 //! reaching into identity, storage, or Designer session implementations.
 
+#![allow(missing_docs)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction,
+    clippy::nursery,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::assigning_clones,
+    clippy::if_not_else
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

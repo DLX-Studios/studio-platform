@@ -5,6 +5,18 @@
 //! center handler and station client exchange bounded JSON over those seams; guest code never
 //! receives a transport, credential, endpoint, or raw network error.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::no_effect_underscore_binding
+)]
+
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
@@ -18,9 +30,9 @@ use thiserror::Error;
 
 use crate::{
     ApplyResult, CenterConflict, CenterId, CenterServer, CenterSnapshot, ConflictId,
-    ConflictResolution, Enrollment, OperationId, OperationReceipt, PairingToken,
-    LocalStore, StationId, StationSettings, StationWriteResult, StoreBatch, StoreBatchEntry,
-    TopologyError, TopologyErrorCode, WriteOperation,
+    ConflictResolution, Enrollment, LocalStore, OperationId, OperationReceipt, PairingToken,
+    StationId, StationSettings, StationWriteResult, StoreBatch, StoreBatchEntry, TopologyError,
+    TopologyErrorCode, WriteOperation,
 };
 
 /// Current center protocol version carried on every HTTP and WebSocket message.
@@ -79,7 +91,10 @@ pub struct CenterHttpResponse {
 /// Host network movement seam for center HTTP requests.
 pub trait CenterHttpTransport: Send + Sync {
     /// Execute one already-authenticated, bounded request.
-    fn request(&self, request: CenterHttpRequest) -> Result<CenterHttpResponse, CenterTransportError>;
+    fn request(
+        &self,
+        request: CenterHttpRequest,
+    ) -> Result<CenterHttpResponse, CenterTransportError>;
 }
 
 /// Host-only WebSocket connect request. The credential is intentionally redacted in debug output.
@@ -183,7 +198,9 @@ impl CenterProtocolLimits {
             || self.reconnect_base_delay.is_zero()
             || self.reconnect_max_delay < self.reconnect_base_delay
         {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::InvalidConfiguration));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::InvalidConfiguration,
+            ));
         }
         Ok(())
     }
@@ -361,10 +378,7 @@ pub enum CenterWebSocketFrame {
         result: CenterOperationResponse,
     },
     /// Value-free protocol error.
-    Error {
-        version: u16,
-        code: String,
-    },
+    Error { version: u16, code: String },
 }
 
 /// Center protocol handler that can be mounted behind HTTP or WebSocket servers.
@@ -413,7 +427,13 @@ impl CenterProtocolServer {
             (CenterHttpMethod::Get, CENTER_SNAPSHOT_PATH) => {
                 self.authenticated_http(&request, |server, enrollment| {
                     let snapshot = server.center.snapshot().map_err(map_topology_error)?;
-                    Ok((200, serde_json::to_value(snapshot).map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Transport))?, enrollment))
+                    Ok((
+                        200,
+                        serde_json::to_value(snapshot).map_err(|_| {
+                            CenterNetworkError::new(CenterNetworkErrorCode::Transport)
+                        })?,
+                        enrollment,
+                    ))
                 })
             }
             (CenterHttpMethod::Post, CENTER_OPERATIONS_PATH) => {
@@ -424,29 +444,44 @@ impl CenterProtocolServer {
                         .center
                         .apply(&enrollment, &body.operation)
                         .map_err(map_topology_error)?;
-                    Ok((200, serde_json::to_value(operation_response(result)).map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Transport))?, enrollment))
+                    Ok((
+                        200,
+                        serde_json::to_value(operation_response(result)).map_err(|_| {
+                            CenterNetworkError::new(CenterNetworkErrorCode::Transport)
+                        })?,
+                        enrollment,
+                    ))
                 })
             }
-            (CenterHttpMethod::Get, path) if path.starts_with(CENTER_RECEIPTS_PATH_PREFIX) => {
-                self.authenticated_http(&request, |server, enrollment| {
+            (CenterHttpMethod::Get, path) if path.starts_with(CENTER_RECEIPTS_PATH_PREFIX) => self
+                .authenticated_http(&request, |server, enrollment| {
                     let operation_id = path.trim_start_matches(CENTER_RECEIPTS_PATH_PREFIX);
-                    let operation_id = OperationId::new(operation_id).map_err(map_topology_error)?;
+                    let operation_id =
+                        OperationId::new(operation_id).map_err(map_topology_error)?;
                     let receipt = server
                         .center
                         .receipt(&enrollment, &operation_id)
                         .map_err(map_topology_error)?;
-                    Ok((200, serde_json::to_value(receipt).map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Transport))?, enrollment))
-                })
-            }
-            (CenterHttpMethod::Post, path) if path.starts_with(CENTER_CONFLICT_PATH_PREFIX) => {
-                self.authenticated_http(&request, |server, enrollment| {
+                    Ok((
+                        200,
+                        serde_json::to_value(receipt).map_err(|_| {
+                            CenterNetworkError::new(CenterNetworkErrorCode::Transport)
+                        })?,
+                        enrollment,
+                    ))
+                }),
+            (CenterHttpMethod::Post, path) if path.starts_with(CENTER_CONFLICT_PATH_PREFIX) => self
+                .authenticated_http(&request, |server, enrollment| {
                     let body: CenterConflictResolutionRequest = decode_body(&request.body)?;
                     let path_id = path.trim_start_matches(CENTER_CONFLICT_PATH_PREFIX);
                     if path_id.is_empty() || body.conflict_id != path_id {
-                        return Err(CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest));
+                        return Err(CenterNetworkError::new(
+                            CenterNetworkErrorCode::InvalidRequest,
+                        ));
                     }
                     server.check_quota(enrollment.station_id())?;
-                    let conflict_id = ConflictId::from_str(body.conflict_id)?;
+                    let conflict_id =
+                        ConflictId::from_str(body.conflict_id).map_err(map_topology_error)?;
                     let result = server
                         .center
                         .resolve_conflict(
@@ -456,9 +491,14 @@ impl CenterProtocolServer {
                             body.resolution,
                         )
                         .map_err(map_topology_error)?;
-                    Ok((200, serde_json::to_value(operation_response(result)).map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Transport))?, enrollment))
-                })
-            }
+                    Ok((
+                        200,
+                        serde_json::to_value(operation_response(result)).map_err(|_| {
+                            CenterNetworkError::new(CenterNetworkErrorCode::Transport)
+                        })?,
+                        enrollment,
+                    ))
+                }),
             _ => self.error_response(404, CenterNetworkErrorCode::NotFound),
         }
     }
@@ -475,12 +515,19 @@ impl CenterProtocolServer {
         let incoming = serde_json::to_vec(&frame)
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))?;
         if incoming.len() > self.limits.max_frame_bytes {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::QuotaExceeded));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::QuotaExceeded,
+            ));
         }
         let response = match frame {
-            CenterWebSocketFrame::Hello { version, station_id } => {
+            CenterWebSocketFrame::Hello {
+                version,
+                station_id,
+            } => {
                 if version != CENTER_PROTOCOL_VERSION || station_id != *enrollment.station_id() {
-                    return Err(CenterNetworkError::new(CenterNetworkErrorCode::Unauthorized));
+                    return Err(CenterNetworkError::new(
+                        CenterNetworkErrorCode::Unauthorized,
+                    ));
                 }
                 Ok(CenterWebSocketFrame::HelloAccepted {
                     version: CENTER_PROTOCOL_VERSION,
@@ -522,7 +569,8 @@ impl CenterProtocolServer {
             CenterWebSocketFrame::ResolveConflict { version, request } => {
                 require_version(version)?;
                 self.check_quota(enrollment.station_id())?;
-                let conflict_id = ConflictId::from_str(request.conflict_id)?;
+                let conflict_id =
+                    ConflictId::from_str(request.conflict_id).map_err(map_topology_error)?;
                 Ok(CenterWebSocketFrame::ResolutionResult {
                     version: CENTER_PROTOCOL_VERSION,
                     result: operation_response(
@@ -537,12 +585,16 @@ impl CenterProtocolServer {
                     ),
                 })
             }
-            _ => Err(CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest)),
+            _ => Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::InvalidRequest,
+            )),
         }?;
         let outgoing = serde_json::to_vec(&response)
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))?;
         if outgoing.len() > self.limits.max_frame_bytes {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::QuotaExceeded));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::QuotaExceeded,
+            ));
         }
         Ok(response)
     }
@@ -561,8 +613,8 @@ impl CenterProtocolServer {
     fn enroll_http(&self, body: &[u8]) -> CenterHttpResponse {
         let result = (|| {
             let request: CenterEnrollmentRequest = decode_body(body)?;
-            let token = PairingToken::from_str(request.pairing_token)
-                .map_err(map_topology_error)?;
+            let token =
+                PairingToken::from_str(request.pairing_token).map_err(map_topology_error)?;
             let enrollment = self
                 .center
                 .pair(&token, request.display_name)
@@ -617,7 +669,9 @@ impl CenterProtocolServer {
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Transport))?;
         let count = counts.entry(station.clone()).or_default();
         if *count >= self.limits.max_operations_per_station {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::QuotaExceeded));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::QuotaExceeded,
+            ));
         }
         *count = count.saturating_add(1);
         Ok(())
@@ -704,7 +758,9 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
         limits.validate()?;
         let endpoint = endpoint.into();
         if endpoint.is_empty() || endpoint.chars().any(char::is_control) {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::InvalidRequest,
+            ));
         }
         let request = CenterHttpRequest {
             endpoint: endpoint.clone(),
@@ -747,7 +803,9 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
         if state.version != CENTER_PROTOCOL_VERSION
             || state.pending.len() > limits.max_outbox_operations
         {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::InvalidRequest,
+            ));
         }
         Ok(Self {
             transport,
@@ -809,7 +867,7 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Persistence))?;
         let entry = entries
             .first()
-            .filter(|entry| entries.len() == 1)
+            .filter(|_entry| entries.len() == 1)
             .ok_or_else(|| CenterNetworkError::new(CenterNetworkErrorCode::Persistence))?;
         let state: CenterStationState = serde_json::from_value(entry.payload.clone())
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Persistence))?;
@@ -888,7 +946,9 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
     /// Pull the authoritative center snapshot.
     pub fn sync(&mut self) -> Result<(), CenterNetworkError> {
         if !self.connected {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::Disconnected));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::Disconnected,
+            ));
         }
         let response = self.request(CenterHttpRequest {
             endpoint: self.endpoint.clone(),
@@ -897,7 +957,11 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
             headers: protocol_headers(Some(&self.enrollment)),
             body: Vec::new(),
         })?;
-        self.snapshot = Some(decode_response(response, 200, self.limits.max_response_bytes)?);
+        self.snapshot = Some(decode_response(
+            response,
+            200,
+            self.limits.max_response_bytes,
+        )?);
         Ok(())
     }
 
@@ -928,7 +992,9 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
         resolution: ConflictResolution,
     ) -> Result<StationWriteResult, CenterNetworkError> {
         if !self.connected {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::Disconnected));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::Disconnected,
+            ));
         }
         let request = CenterConflictResolutionRequest {
             conflict_id: conflict_id.as_str().to_owned(),
@@ -1006,7 +1072,9 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
     /// Replay queued work in FIFO order. A failed send remains queued.
     pub fn flush(&mut self) -> Result<Vec<StationWriteResult>, CenterNetworkError> {
         if !self.connected {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::Disconnected));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::Disconnected,
+            ));
         }
         let mut results = Vec::new();
         while let Some(operation) = self.pending.front().cloned() {
@@ -1033,8 +1101,12 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
     ) -> Result<StationWriteResult, CenterNetworkError> {
         self.next_operation = self.next_operation.saturating_add(1);
         let operation = WriteOperation::new(
-            OperationId::new(format!("{}:{}", self.station_id().as_str(), self.next_operation))
-                .map_err(map_topology_error)?,
+            OperationId::new(format!(
+                "{}:{}",
+                self.station_id().as_str(),
+                self.next_operation
+            ))
+            .map_err(map_topology_error)?,
             table,
             key,
             self.snapshot.as_ref().map_or(0, CenterSnapshot::revision),
@@ -1057,7 +1129,10 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
         }
     }
 
-    fn queue(&mut self, operation: WriteOperation) -> Result<StationWriteResult, CenterNetworkError> {
+    fn queue(
+        &mut self,
+        operation: WriteOperation,
+    ) -> Result<StationWriteResult, CenterNetworkError> {
         if self.pending.len() >= self.limits.max_outbox_operations {
             return Err(CenterNetworkError::new(CenterNetworkErrorCode::OutboxFull));
         }
@@ -1089,14 +1164,19 @@ impl<T: CenterHttpTransport + ?Sized> CenterStationClient<T> {
         })
     }
 
-    fn request(&self, request: CenterHttpRequest) -> Result<CenterHttpResponse, CenterNetworkError> {
+    fn request(
+        &self,
+        request: CenterHttpRequest,
+    ) -> Result<CenterHttpResponse, CenterNetworkError> {
         let _endpoint = &self.endpoint;
         let response = self
             .transport
             .request(request)
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::Transport))?;
         if response.body.len() > self.limits.max_response_bytes {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::QuotaExceeded));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::QuotaExceeded,
+            ));
         }
         if !(200..=299).contains(&response.status) {
             return Err(parse_error(response));
@@ -1148,7 +1228,9 @@ impl<W: CenterWebSocketTransport + ?Sized> CenterWebSocketClient<W> {
             station_id: enrollment.station_id().clone(),
         })?;
         if !matches!(accepted, CenterWebSocketFrame::HelloAccepted { .. }) {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::Unauthorized));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::Unauthorized,
+            ));
         }
         Ok(client)
     }
@@ -1161,7 +1243,9 @@ impl<W: CenterWebSocketTransport + ?Sized> CenterWebSocketClient<W> {
         let bytes = serde_json::to_vec(&frame)
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))?;
         if bytes.len() > self.limits.max_frame_bytes {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::QuotaExceeded));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::QuotaExceeded,
+            ));
         }
         self.connection
             .send(frame)
@@ -1174,7 +1258,9 @@ impl<W: CenterWebSocketTransport + ?Sized> CenterWebSocketClient<W> {
         let response_bytes = serde_json::to_vec(&response)
             .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))?;
         if response_bytes.len() > self.limits.max_frame_bytes {
-            return Err(CenterNetworkError::new(CenterNetworkErrorCode::QuotaExceeded));
+            return Err(CenterNetworkError::new(
+                CenterNetworkErrorCode::QuotaExceeded,
+            ));
         }
         if let CenterWebSocketFrame::Error { code, .. } = &response {
             return Err(error_from_code(code));
@@ -1212,19 +1298,30 @@ fn operation_response(result: ApplyResult) -> CenterOperationResponse {
 
 fn protocol_headers(enrollment: Option<&Enrollment>) -> Vec<(String, String)> {
     let mut headers = vec![
-        ("x-studio-center-version".to_owned(), CENTER_PROTOCOL_VERSION.to_string()),
-        ("content-type".to_owned(), CENTER_PROTOCOL_MEDIA_TYPE.to_owned()),
+        (
+            "x-studio-center-version".to_owned(),
+            CENTER_PROTOCOL_VERSION.to_string(),
+        ),
+        (
+            "content-type".to_owned(),
+            CENTER_PROTOCOL_MEDIA_TYPE.to_owned(),
+        ),
     ];
     if let Some(enrollment) = enrollment {
-        headers.push(("x-studio-station-id".to_owned(), enrollment.station_id().as_str().to_owned()));
-        headers.push(("authorization".to_owned(), format!("Bearer {}", enrollment.credential())));
+        headers.push((
+            "x-studio-station-id".to_owned(),
+            enrollment.station_id().as_str().to_owned(),
+        ));
+        headers.push((
+            "authorization".to_owned(),
+            format!("Bearer {}", enrollment.credential()),
+        ));
     }
     headers
 }
 
 fn valid_version_header(headers: &[(String, String)]) -> bool {
-    header(headers, "x-studio-center-version")
-        .and_then(|version| version.parse::<u16>().ok())
+    header(headers, "x-studio-center-version").and_then(|version| version.parse::<u16>().ok())
         == Some(CENTER_PROTOCOL_VERSION)
 }
 
@@ -1236,11 +1333,13 @@ fn header<'a>(headers: &'a [(String, String)], wanted: &str) -> Option<&'a str> 
 }
 
 fn encode_body<T: Serialize>(value: &T) -> Result<Vec<u8>, CenterNetworkError> {
-    serde_json::to_vec(value).map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))
+    serde_json::to_vec(value)
+        .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))
 }
 
 fn decode_body<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, CenterNetworkError> {
-    serde_json::from_slice(body).map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))
+    serde_json::from_slice(body)
+        .map_err(|_| CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest))
 }
 
 fn decode_response<T: for<'de> Deserialize<'de>>(
@@ -1362,7 +1461,9 @@ fn error_from_code(code: &str) -> CenterNetworkError {
 
 fn station_state_batch_id(key: &str) -> Result<String, CenterNetworkError> {
     if key.is_empty() || key.len() > 256 || key.chars().any(char::is_control) {
-        return Err(CenterNetworkError::new(CenterNetworkErrorCode::InvalidRequest));
+        return Err(CenterNetworkError::new(
+            CenterNetworkErrorCode::InvalidRequest,
+        ));
     }
     Ok(format!("{STATION_STATE_BATCH_PREFIX}{key}"))
 }

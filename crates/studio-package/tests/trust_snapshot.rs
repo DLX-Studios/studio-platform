@@ -1,4 +1,9 @@
 #![allow(missing_docs)]
+#![allow(
+    clippy::needless_raw_string_hashes,
+    clippy::format_collect,
+    clippy::needless_pass_by_value
+)]
 
 use ed25519_dalek::SigningKey;
 use serde_json::json;
@@ -69,7 +74,9 @@ fn rejects_missing_expired_and_malformed_snapshots_without_raw_details() {
         })),
     );
     assert_eq!(
-        TrustStore::from_json_at(&malformed, 200).unwrap_err().code(),
+        TrustStore::from_json_at(&malformed, 200)
+            .unwrap_err()
+            .code(),
         TrustStoreErrorCode::Malformed
     );
 }
@@ -85,7 +92,10 @@ fn revocation_blocks_a_key_while_overlapping_rotation_remains_active() {
         "enabled": true
     });
     let store = TrustStore::from_json_at(
-        &snapshot(json!([{ "publisherId": "example", "keyId": "key-old" }]), Some(rotated)),
+        &snapshot(
+            json!([{ "publisherId": "example", "keyId": "key-old" }]),
+            Some(rotated),
+        ),
         200,
     )
     .unwrap();
@@ -96,7 +106,10 @@ fn revocation_blocks_a_key_while_overlapping_rotation_remains_active() {
 fn revoked_only_snapshot_fails_closed() {
     assert_eq!(
         TrustStore::from_json_at(
-            &snapshot(json!([{ "publisherId": "example", "keyId": "key-old" }]), None),
+            &snapshot(
+                json!([{ "publisherId": "example", "keyId": "key-old" }]),
+                None
+            ),
             200,
         )
         .unwrap_err()

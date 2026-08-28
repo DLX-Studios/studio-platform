@@ -42,7 +42,7 @@ impl VerifiedMigrationBundle {
         if manifest.migrations.is_empty() {
             return Err(MigrationAdmissionError::NoMigrations);
         }
-        let declared_assets = manifest.assets.iter().cloned().collect::<Vec<_>>();
+        let declared_assets = manifest.assets.clone();
         let archived_assets = archive.assets.keys().cloned().collect::<Vec<_>>();
         if declared_assets != archived_assets {
             return Err(MigrationAdmissionError::AssetMismatch);

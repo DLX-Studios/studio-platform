@@ -3,8 +3,7 @@
 use serde_json::json;
 use studio_components::{
     COMPONENT_RENDERER_READINESS, ComponentCatalog, DispatchErrorCode, HostEventDispatcher,
-    InputAction, NativeLayer, RuntimeControl, certify_renderer_readiness, component_readiness,
-    uncertified_renderer_kinds,
+    InputAction, NativeLayer, RuntimeControl, component_readiness,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;

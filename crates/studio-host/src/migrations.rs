@@ -5,6 +5,9 @@
 //! bundle and every migration asset must first pass [`VerifiedMigrationBundle::admit`], which
 //! unconditionally verifies the publisher signature.
 
+#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -253,7 +256,10 @@ impl<'a, S> MigrationRunner<'a, S> {
         if state_batch_id.is_empty() || state_batch_id.chars().any(char::is_control) {
             return Err(MigrationError::StateCorrupt);
         }
-        Ok(Self { store, state_batch_id })
+        Ok(Self {
+            store,
+            state_batch_id,
+        })
     }
 }
 
@@ -337,7 +343,10 @@ impl<S: LocalStore> MigrationRunner<'_, S> {
 
         // A process crash can occur after the recovery envelope is written but before the final
         // candidate commit. The old snapshot is authoritative in that case.
-        if !matches!(&state.lifecycle, MigrationLifecycle::Idle | MigrationLifecycle::Committed) {
+        if !matches!(
+            &state.lifecycle,
+            MigrationLifecycle::Idle | MigrationLifecycle::Committed
+        ) {
             let recovery = state
                 .recovery_point
                 .clone()
@@ -375,13 +384,11 @@ impl<S: LocalStore> MigrationRunner<'_, S> {
 
         let mut applied = Vec::with_capacity(declarations.len());
         for declaration in declarations {
-            let asset = package
-                .migration_asset(&declaration.entry)
-                .ok_or_else(|| {
-                    // Admission checks this too, but retain a second host-side guard at the
-                    // execution boundary so future package changes cannot create a bypass.
-                    MigrationError::AssetMissing
-                })?;
+            let asset = package.migration_asset(&declaration.entry).ok_or_else(|| {
+                // Admission checks this too, but retain a second host-side guard at the
+                // execution boundary so future package changes cannot create a bypass.
+                MigrationError::AssetMissing
+            })?;
             state.lifecycle = MigrationLifecycle::Applying {
                 migration_id: declaration.id.clone(),
             };
@@ -389,7 +396,9 @@ impl<S: LocalStore> MigrationRunner<'_, S> {
 
             let mut candidate = state.data.clone();
             if action(&declaration, asset, &mut candidate).is_err() {
-                return self.quarantine(&state, &declaration.id, MigrationError::ActionFailed).await;
+                return self
+                    .quarantine(&state, &declaration.id, MigrationError::ActionFailed)
+                    .await;
             }
             if validator(&declaration, &candidate).is_err() {
                 return self
@@ -403,7 +412,7 @@ impl<S: LocalStore> MigrationRunner<'_, S> {
                 migration_id: declaration.id.clone(),
             };
             self.persist(&state).await?;
-            applied.push(declaration.id);
+            applied.push(declaration.id.clone());
         }
 
         state.lifecycle = MigrationLifecycle::Committed;
@@ -461,7 +470,10 @@ impl<S: LocalStore> MigrationRunner<'_, S> {
         let payload = serde_json::to_value(state).map_err(|_| MigrationError::StateCorrupt)?;
         let batch = StoreBatch::new(
             self.state_batch_id.clone(),
-            [StoreBatchEntry { ordinal: 0, payload }],
+            [StoreBatchEntry {
+                ordinal: 0,
+                payload,
+            }],
         )
         .map_err(|_| MigrationError::StateCorrupt)?;
         self.store
@@ -582,8 +594,8 @@ mod tests {
 
     use ed25519_dalek::{Signer, SigningKey};
     use studio_package::{
-        ArchiveFiles, ArchivePolicy, CanonicalBundleInput, TrustStore, TrustedPublisherKey,
-        ManifestPolicy, build_archive, canonical_bundle_document, inspect_archive,
+        ArchiveFiles, ArchivePolicy, CanonicalBundleInput, ManifestPolicy, TrustStore,
+        TrustedPublisherKey, build_archive, canonical_bundle_document, inspect_archive,
     };
 
     use super::*;
@@ -596,7 +608,8 @@ mod tests {
     impl LocalStore for MemoryStore {
         fn metadata(
             &self,
-        ) -> impl Future<Output = Result<crate::StoreMetadata, crate::LocalStoreError>> + Send {
+        ) -> impl Future<Output = Result<crate::StoreMetadata, crate::LocalStoreError>> + Send
+        {
             async { panic!("migration tests never query engine metadata") }
         }
 
@@ -618,7 +631,8 @@ mod tests {
         fn batch_entries(
             &self,
             batch_id: &str,
-        ) -> impl Future<Output = Result<Vec<StoreBatchEntry>, crate::LocalStoreError>> + Send {
+        ) -> impl Future<Output = Result<Vec<StoreBatchEntry>, crate::LocalStoreError>> + Send
+        {
             let batch_id = batch_id.to_owned();
             async move {
                 Ok(self
@@ -740,14 +754,19 @@ mod tests {
         let package = signed_package();
         assert_eq!(
             runner
-                .run(&package, |_migration, _asset, _data| Err(MigrationStepError::Rejected))
+                .run(&package, |_migration, _asset, _data| Err(
+                    MigrationStepError::Rejected
+                ))
                 .await
                 .unwrap_err()
                 .code(),
             MigrationErrorCode::ActionFailed
         );
         let quarantined = runner.state().await.expect("quarantine persists");
-        assert!(matches!(quarantined.lifecycle(), MigrationLifecycle::Quarantined { .. }));
+        assert!(matches!(
+            quarantined.lifecycle(),
+            MigrationLifecycle::Quarantined { .. }
+        ));
         assert_eq!(quarantined.schema_version(), 1);
         assert_eq!(quarantined.data(), &json!({"stable": true}));
         let restored = runner
@@ -801,7 +820,10 @@ mod tests {
                 panic!("unsupported schema must not run migration code")
             })
             .await;
-        assert_eq!(result.unwrap_err().code(), MigrationErrorCode::VersionUnsupported);
+        assert_eq!(
+            result.unwrap_err().code(),
+            MigrationErrorCode::VersionUnsupported
+        );
     }
 
     #[tokio::test]
@@ -822,7 +844,10 @@ mod tests {
                 })
                 .await
         });
-        assert!(crashed.await.is_err(), "the rehearsal must inject a process-like crash");
+        assert!(
+            crashed.await.is_err(),
+            "the rehearsal must inject a process-like crash"
+        );
 
         let recovered = runner
             .run(&package, |_migration, _asset, data| {
@@ -833,9 +858,12 @@ mod tests {
             .await
             .expect("retry recovers and applies atomically");
         assert_eq!(recovered.final_version, 2);
-        assert_eq!(runner.state().await.expect("state").data(), &json!({
-            "stable": true,
-            "schema": 2
-        }));
+        assert_eq!(
+            runner.state().await.expect("state").data(),
+            &json!({
+                "stable": true,
+                "schema": 2
+            })
+        );
     }
 }

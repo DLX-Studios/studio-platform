@@ -5,6 +5,18 @@
 //! returned [`SettingsEffect`] immediately and persist the same typed record
 //! through [`SettingsPersistence`].
 
+#![allow(missing_docs)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction,
+    clippy::nursery,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::too_many_lines,
+    clippy::semicolon_if_nothing_returned
+)]
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},

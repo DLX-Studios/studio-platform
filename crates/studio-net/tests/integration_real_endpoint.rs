@@ -19,8 +19,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -78,7 +78,11 @@ impl StagingConfig {
         let Some((scheme, authority)) = origin.split_once("://") else {
             panic!("STUDIO_NET_REAL_ENDPOINT_URL must be an HTTPS origin")
         };
-        assert_eq!(scheme.to_ascii_lowercase(), "https", "staging transport requires TLS");
+        assert_eq!(
+            scheme.to_ascii_lowercase(),
+            "https",
+            "staging transport requires TLS"
+        );
         assert!(
             !authority.is_empty()
                 && !authority.contains('/')
@@ -163,7 +167,10 @@ impl CurlTransport {
             duration_seconds(request.timeout),
         );
         if let Some(path) = response_path {
-            config.push_str(&format!("output = \"{}\"\n", curl_quote(&path.as_path().to_string_lossy())));
+            config.push_str(&format!(
+                "output = \"{}\"\n",
+                curl_quote(&path.as_path().to_string_lossy())
+            ));
         }
         if let Some(path) = body_path {
             config.push_str(&format!(
@@ -194,7 +201,11 @@ impl CurlTransport {
             .arg("--config")
             .arg("-")
             .stdin(Stdio::piped())
-            .stdout(if streaming { Stdio::piped() } else { Stdio::null() })
+            .stdout(if streaming {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| TransportError::ConnectionFailure)?;
@@ -414,7 +425,14 @@ fn parse_http_headers(raw: &[u8]) -> Result<ParsedHeaders, TransportError> {
             return Err(TransportError::ConnectionFailure);
         };
         if name.eq_ignore_ascii_case("content-type") {
-            media_type = Some(value.trim().split(';').next().unwrap_or_default().to_owned());
+            media_type = Some(
+                value
+                    .trim()
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
         }
     }
     Ok(ParsedHeaders { status, media_type })
@@ -642,9 +660,15 @@ fn staging_get_uses_tls_and_keeps_headers_out_of_json_body() {
         ))
         .expect("approved staging GET");
     assert!((200..=299).contains(&response.status()));
-    assert!(response.body().is_object(), "staging GET must return a JSON object");
+    assert!(
+        response.body().is_object(),
+        "staging GET must return a JSON object"
+    );
     assert!(!response.body().to_string().contains("HTTP/"));
-    assert!(credential_seen.load(Ordering::Acquire), "credential was not injected at send time");
+    assert!(
+        credential_seen.load(Ordering::Acquire),
+        "credential was not injected at send time"
+    );
 }
 
 #[test]
@@ -731,8 +755,16 @@ fn staging_sse_parses_typed_events_and_completes() {
             ))
             .expect("approved staging SSE"),
     );
-    assert!(events.iter().any(|event| matches!(event, StreamEvent::Opened)));
-    assert!(events.iter().any(|event| matches!(event, StreamEvent::Chunk(value) if value["text"].is_string())));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Opened))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Chunk(value) if value["text"].is_string()))
+    );
     assert!(matches!(events.last(), Some(StreamEvent::Completed)));
 }
 
@@ -750,8 +782,16 @@ fn staging_sse_reconnects_with_last_event_id() {
             ))
             .expect("approved reconnecting staging SSE"),
     );
-    assert!(events.iter().any(|event| matches!(event, StreamEvent::RetryScheduled { .. })));
-    assert!(events.iter().any(|event| matches!(event, StreamEvent::Chunk(_))));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::RetryScheduled { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Chunk(_)))
+    );
     assert!(matches!(events.last(), Some(StreamEvent::Completed)));
     assert!(last_event_id_seen.load(Ordering::Acquire));
 }
@@ -786,7 +826,7 @@ fn staging_transport_rejects_plain_http_before_connecting() {
     let error = transport
         .execute(OutgoingRequest {
             method: HttpMethod::Get,
-            url: String::from("http://not-tls.example.test/") ,
+            url: String::from("http://not-tls.example.test/"),
             headers: Vec::new(),
             body: None,
             timeout: Duration::from_secs(1),

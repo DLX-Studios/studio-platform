@@ -138,7 +138,8 @@ impl CompiledWebhook {
         {
             return Err(invalid());
         }
-        let payload_schema = JsonSchema::new(declaration.payload_schema.clone()).map_err(|_| invalid())?;
+        let payload_schema =
+            JsonSchema::new(declaration.payload_schema.clone()).map_err(|_| invalid())?;
         let source_verification = validate_source(&declaration.source_verification)?;
         let max_payload_bytes = declaration
             .limits
@@ -245,7 +246,9 @@ impl WebhookClock for SystemWebhookClock {
         use std::time::SystemTime;
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .map_or(0, |duration| {
+                duration.as_millis().min(u128::from(u64::MAX)) as u64
+            })
     }
 }
 
@@ -420,7 +423,9 @@ impl WebhookHost {
         now_ms: u64,
     ) -> Result<WebhookEvent, BrokerError> {
         let Some(declaration) = declaration else {
-            return Err(BrokerError::new(BrokerErrorCode::WebhookEndpointNotDeclared));
+            return Err(BrokerError::new(
+                BrokerErrorCode::WebhookEndpointNotDeclared,
+            ));
         };
         if now_ms >= declaration.expires_at_ms {
             return Err(BrokerError::new(BrokerErrorCode::WebhookExpired));
@@ -437,7 +442,11 @@ impl WebhookHost {
             declaration.rate_window,
             now_ms,
         )?;
-        self.verify_source(&declaration.source_verification, &request.headers, &request.body)?;
+        self.verify_source(
+            &declaration.source_verification,
+            &request.headers,
+            &request.body,
+        )?;
         let payload: Value = serde_json::from_slice(&request.body)
             .map_err(|_| BrokerError::new(BrokerErrorCode::WebhookPayloadMalformed))?;
         declaration
@@ -458,8 +467,14 @@ impl WebhookHost {
         body: &[u8],
     ) -> Result<(), BrokerError> {
         let (header, secret_name) = match verification {
-            SourceVerification::HmacSha256 { header, secret_name }
-            | SourceVerification::BearerToken { header, secret_name } => (header, secret_name),
+            SourceVerification::HmacSha256 {
+                header,
+                secret_name,
+            }
+            | SourceVerification::BearerToken {
+                header,
+                secret_name,
+            } => (header, secret_name),
         };
         let supplied = headers
             .iter()
@@ -513,7 +528,12 @@ impl WebhookHost {
         Ok(())
     }
 
-    fn audit(&self, endpoint_id: Option<String>, accepted: bool, rejection: Option<BrokerErrorCode>) {
+    fn audit(
+        &self,
+        endpoint_id: Option<String>,
+        accepted: bool,
+        rejection: Option<BrokerErrorCode>,
+    ) {
         if let Some(sink) = self
             .audit
             .lock()
@@ -532,8 +552,14 @@ impl WebhookHost {
 
 fn validate_source(source: &SourceVerification) -> Result<SourceVerification, BrokerError> {
     let (header, secret_name) = match source {
-        SourceVerification::HmacSha256 { header, secret_name }
-        | SourceVerification::BearerToken { header, secret_name } => (header, secret_name),
+        SourceVerification::HmacSha256 {
+            header,
+            secret_name,
+        }
+        | SourceVerification::BearerToken {
+            header,
+            secret_name,
+        } => (header, secret_name),
     };
     if !valid_header_name(header)
         || secret_name.is_empty()
@@ -625,8 +651,7 @@ fn valid_path(path: &str) -> bool {
         && !path.contains("//")
         && path.len() <= 512
         && path.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~')
+            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~')
         })
 }
 

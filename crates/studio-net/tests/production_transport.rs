@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use studio_net::declaration::HttpMethod;
 use studio_net::transport::{
-    ByteStream, HttpsClient, HttpTransport, IncomingResponse, OutgoingRequest,
+    ByteStream, HttpTransport, HttpsClient, IncomingResponse, OutgoingRequest,
     ProductionHttpTransport, TransportError, TransportLimits,
 };
 
@@ -60,7 +60,9 @@ impl ByteStream for OneChunkStream {
 #[test]
 fn production_transport_rejects_plaintext_before_client_invocation() {
     let transport = ProductionHttpTransport::new(
-        Arc::new(FakeClient { body: b"ok".to_vec() }),
+        Arc::new(FakeClient {
+            body: b"ok".to_vec(),
+        }),
         TransportLimits::default(),
     );
     assert!(matches!(
@@ -107,10 +109,9 @@ fn production_transport_enforces_total_stream_bytes_and_chunk_size() {
 #[test]
 fn outgoing_request_debug_redacts_header_and_body_values() {
     let mut outgoing = request("https://api.example.test/items");
-    outgoing.headers.push((
-        "authorization".to_owned(),
-        "Bearer do-not-print".to_owned(),
-    ));
+    outgoing
+        .headers
+        .push(("authorization".to_owned(), "Bearer do-not-print".to_owned()));
     outgoing.body = Some(b"also-do-not-print".to_vec());
     let rendered = format!("{outgoing:?}");
     assert!(!rendered.contains("do-not-print"));

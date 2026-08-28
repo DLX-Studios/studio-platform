@@ -7,10 +7,11 @@ use std::{
 };
 
 use studio_design::{
-    access::ScopedDesignerAccess, Actor, ActorId, ActorKind, Command, CommandBatch, CommandOutcome,
-    DefaultDesignerSession, DesignNode, DesignerQuery, DesignerQueryResult, DesignerScope,
-    HistoryOperation, InMemoryDesignerPersistence, McpClient, NodeId, NodeParent, OperationId,
-    ProjectId, RevisionId, Screen, ScreenId, StudioDesign, UndoGroupId,
+    Actor, ActorId, ActorKind, Command, CommandBatch, CommandOutcome, DefaultDesignerSession,
+    DesignNode, DesignerQuery, DesignerQueryResult, DesignerScope, HistoryOperation,
+    InMemoryDesignerPersistence, McpClient, NodeId, NodeParent, OperationId, ProjectId, RevisionId,
+    STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, StudioDesign, UndoGroupId,
+    access::ScopedDesignerAccess,
 };
 use studio_protocol::NodeKind;
 
