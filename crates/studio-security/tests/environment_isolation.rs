@@ -379,3 +379,361 @@ fn malformed_inputs_return_stable_safe_codes() {
         EnvironmentErrorCode::RequestInvalid
     );
 }
+
+#[test]
+fn localstore_and_secret_namespaces_are_separate_and_independent() {
+    // Same application and environment produce independent namespaces for data
+    // and for protected secrets because the partition digests use distinct
+    // domain separators (data: studio.environment.data-partition.v1,
+    // credential: studio.protected-secret.partition.v1). Operating on one
+    // must never alias or move state belonging to the other.
+    let backend = MemoryBackend::default();
+    let secret_store = ProtectedSecretStore::new(backend.clone());
+    let data_store = EnvironmentDataStore::new("com.example.pos").unwrap();
+    let principal = principal("publisher.example", "signing-key-1", "com.example.pos");
+    let secret_key =
+        ProtectedSecretKey::new("payments.restricted_key", "Authenticate payments").unwrap();
+
+    let staging_data = data_store.scope(ApplicationEnvironment::Staging);
+    let staging_secrets = secret_store
+        .for_application(&principal, ApplicationEnvironment::Staging)
+        .unwrap();
+
+    // Data keys and secret locators for the same logical name must be
+    // independent: minting a data key does not affect secret state and
+    // configuring a secret does not affect data key admission.
+    let data_key = staging_data.key("payments.restricted_key").unwrap();
+    assert!(staging_data.admit(&data_key).is_ok());
+    assert_eq!(
+        staging_secrets.status(&secret_key).unwrap().state(),
+        ProtectedSecretState::Missing
+    );
+
+    staging_secrets
+        .configure(
+            &secret_key,
+            SecretInput::new(b"rk_staging_secret_material".to_vec()).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        staging_secrets.status(&secret_key).unwrap().state(),
+        ProtectedSecretState::Configured
+    );
+    // Data key remains valid in its own namespace after secret configuration.
+    assert!(staging_data.admit(&data_key).is_ok());
+    assert_eq!(backend.snapshot().len(), 1);
+
+    // Promotion of data records must leave credential material untouched,
+    // proving the two namespaces are separate promotion domains.
+    let plan = PromotionPlan::build(
+        PromotionDirection::StagingToProduction,
+        [staging_secrets.status(&secret_key).unwrap()],
+    )
+    .unwrap();
+    let before = backend.snapshot();
+    let mut source_records = BTreeMap::new();
+    source_records.insert(
+        "payments.restricted_key".to_string(),
+        b"data-payload".to_vec(),
+    );
+    let production_data = data_store.scope(ApplicationEnvironment::Production);
+    let (receipt, promoted) =
+        apply_promotion(&plan, &staging_data, &production_data, &source_records).unwrap();
+    assert_eq!(receipt.data_records_copied, 1);
+    assert_eq!(
+        promoted.get("payments.restricted_key"),
+        Some(&b"data-payload".to_vec())
+    );
+    assert_eq!(before, backend.snapshot());
+    let production_secrets = secret_store
+        .for_application(&principal, ApplicationEnvironment::Production)
+        .unwrap();
+    assert_eq!(
+        production_secrets.status(&secret_key).unwrap().state(),
+        ProtectedSecretState::Missing
+    );
+}
+
+#[test]
+fn promotion_refuses_invalid_source_target_identities() {
+    let primary = EnvironmentDataStore::new("com.example.pos").unwrap();
+    let other_app = EnvironmentDataStore::new("com.example.other").unwrap();
+
+    // Mismatched application identities must be refused even when the
+    // environment direction is correct.
+    let plan =
+        PromotionPlan::build::<ProtectedSecretStatus>(PromotionDirection::StagingToProduction, [])
+            .unwrap();
+    let cross_app = apply_promotion(
+        &plan,
+        &primary.scope(ApplicationEnvironment::Staging),
+        &other_app.scope(ApplicationEnvironment::Production),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        cross_app.code(),
+        EnvironmentErrorCode::CrossEnvironmentDenied
+    );
+    assert_eq!(
+        cross_app.stable_code(),
+        "environment.cross_environment_denied"
+    );
+
+    // Same-environment promotion is invalid (direction requires distinct
+    // environments).
+    let same_env = apply_promotion(
+        &plan,
+        &primary.scope(ApplicationEnvironment::Staging),
+        &primary.scope(ApplicationEnvironment::Staging),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        same_env.code(),
+        EnvironmentErrorCode::CrossEnvironmentDenied
+    );
+
+    // Swapped environments relative to the plan direction must be refused.
+    let swapped = apply_promotion(
+        &plan,
+        &primary.scope(ApplicationEnvironment::Production),
+        &primary.scope(ApplicationEnvironment::Staging),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(swapped.code(), EnvironmentErrorCode::CrossEnvironmentDenied);
+
+    // Development → Production direct jump is not a valid plan direction;
+    // the scopes would mismatch either allowed direction.
+    let dev_to_prod_plan =
+        PromotionPlan::build::<ProtectedSecretStatus>(PromotionDirection::DevelopmentToStaging, [])
+            .unwrap();
+    let dev_to_prod = apply_promotion(
+        &dev_to_prod_plan,
+        &primary.scope(ApplicationEnvironment::Development),
+        &primary.scope(ApplicationEnvironment::Production),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        dev_to_prod.code(),
+        EnvironmentErrorCode::CrossEnvironmentDenied
+    );
+
+    // Malformed logical record names in the promotion payload must be
+    // rejected with RequestInvalid, not silently copied.
+    let backend = MemoryBackend::default();
+    let secret_store = ProtectedSecretStore::new(backend);
+    let principal = principal("publisher.example", "signing-key-1", "com.example.pos");
+    let staging_secrets = secret_store
+        .for_application(&principal, ApplicationEnvironment::Staging)
+        .unwrap();
+    let secret =
+        ProtectedSecretKey::new("payments.restricted_key", "Authenticate payments").unwrap();
+    staging_secrets
+        .configure(
+            &secret,
+            SecretInput::new(b"rk_staging_value".to_vec()).unwrap(),
+        )
+        .unwrap();
+    let realistic_plan = PromotionPlan::build(
+        PromotionDirection::StagingToProduction,
+        [staging_secrets.status(&secret).unwrap()],
+    )
+    .unwrap();
+    for bad_logical in ["", "../escape", "bad/key", "a".repeat(257).as_str()] {
+        let mut records = BTreeMap::new();
+        records.insert(bad_logical.to_string(), b"value".to_vec());
+        let err = apply_promotion(
+            &realistic_plan,
+            &primary.scope(ApplicationEnvironment::Staging),
+            &primary.scope(ApplicationEnvironment::Production),
+            &records,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.code(),
+            EnvironmentErrorCode::RequestInvalid,
+            "bad logical {bad_logical:?} should be RequestInvalid"
+        );
+        assert_eq!(err.stable_code(), "environment.request_invalid");
+        if !bad_logical.is_empty() {
+            assert!(!format!("{err}").contains(bad_logical));
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn os_credential_backend_evidence_with_explicit_external_gate() {
+    use studio_security::{OsCredentialBackend, ProtectedSecretErrorCode};
+
+    // This test exercises the most production-real backend safely available
+    // in deterministic CI: the OS credential facility. It must not fake
+    // claims about vault availability — when the facility is unavailable
+    // (e.g., no Secret Service on headless Linux), the test records the
+    // external gap and still passes via the deterministic MemoryBackend
+    // proof above.
+    let facility = OsCredentialBackend::shipped_facility();
+    // On mobile targets no facility is shipped; that is an explicit gap.
+    if facility.is_none() {
+        eprintln!(
+            "external gap: no shipped credential facility on this target — OsCredentialBackend::shipped_facility() is None"
+        );
+        return;
+    }
+    let facility = facility.unwrap();
+    // Adapter initialization check; D-Bus/Secret Service may still be locked.
+    if !OsCredentialBackend::is_available() {
+        eprintln!(
+            "external gap: OsCredentialBackend unavailable (facility {facility} not initialized) — deterministic MemoryBackend still proves isolation"
+        );
+        return;
+    }
+
+    // Use a unique principal and declaration per test invocation to avoid
+    // polluting a developer machine's real vault with leftover credentials.
+    let unique = {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pid = u128::from(std::process::id());
+        let thread = {
+            let id = std::thread::current().id();
+            // Debug format of ThreadId is stable enough for uniqueness: "ThreadId(1)"
+            let s = format!("{id:?}");
+            let mut h: u128 = 0;
+            for b in s.bytes() {
+                h = h.wrapping_mul(31).wrapping_add(u128::from(b));
+            }
+            h
+        };
+        let combined = nanos ^ (pid << 32) ^ (thread << 64);
+        let bytes: [u8; 8] = combined.to_le_bytes()[..8].try_into().unwrap();
+        hex::encode(bytes)
+    };
+    let publisher = format!("publisher.example.os-gate-{unique}");
+    let application = format!("com.example.os-gate-{unique}");
+    let declaration_name = format!("payments.os_gate_{unique}");
+    // ProtectedSecretKey names must be lowercase alphanumeric plus ._- ; hex satisfies.
+    let secret_key = ProtectedSecretKey::new(
+        declaration_name.clone(),
+        "OS gate evidence: staging-only credential",
+    )
+    .unwrap();
+
+    let backend = OsCredentialBackend;
+    let store = ProtectedSecretStore::new(backend);
+    let principal = PluginPrincipal::new_verified(
+        publisher.clone(),
+        format!("signing-key-os-{unique}"),
+        application.clone(),
+        [9; 32],
+        [10; 16],
+        TrustMode::Production,
+    )
+    .unwrap();
+
+    // If the vault is locked or D-Bus unavailable, individual operations
+    // will fail with BackendUnavailable — treat that as the external gate
+    // rather than a test failure.
+    let staging = match store.for_application(&principal, ApplicationEnvironment::Staging) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("external gap: for_application failed with {e:?} — vault unavailable");
+            return;
+        }
+    };
+    let production = store
+        .for_application(&principal, ApplicationEnvironment::Production)
+        .unwrap();
+
+    // Purge any leftover from a prior interrupted run before asserting.
+    let _ = staging.purge(&secret_key);
+    let _ = production.purge(&secret_key);
+
+    let staging_value = format!("rk_os_staging_{unique}").into_bytes();
+    match staging.configure(
+        &secret_key,
+        SecretInput::new(staging_value.clone()).unwrap(),
+    ) {
+        Ok(_) => {}
+        Err(e) if e.code() == ProtectedSecretErrorCode::BackendUnavailable => {
+            eprintln!(
+                "external gap: OsCredentialBackend configure failed with {e:?} (facility {facility} unavailable/locked) — gate retained"
+            );
+            return;
+        }
+        Err(e) => panic!("unexpected error from OsCredentialBackend configure: {e:?}"),
+    }
+
+    // Secret resolution must follow the active environment, not the package:
+    // staging is Configured, production remains Missing when using the real
+    // OS facility.
+    let staging_status = match staging.status(&secret_key) {
+        Ok(s) => s,
+        Err(e) if e.code() == ProtectedSecretErrorCode::BackendUnavailable => {
+            eprintln!("external gap: status failed with {e:?} — gate retained");
+            let _ = staging.purge(&secret_key);
+            return;
+        }
+        Err(e) => panic!("staging status failed: {e:?}"),
+    };
+    assert_eq!(staging_status.state(), ProtectedSecretState::Configured);
+    let production_status = production.status(&secret_key).unwrap();
+    assert_eq!(production_status.state(), ProtectedSecretState::Missing);
+
+    // Promotion must still copy zero secret bytes even with the real backend:
+    // build a plan from value-free status only and prove the production
+    // partition stays Missing after promotion.
+    let plan =
+        PromotionPlan::build(PromotionDirection::StagingToProduction, [staging_status]).unwrap();
+    let rendered = format!("{plan:?}");
+    assert!(!rendered.contains(&*String::from_utf8_lossy(&staging_value)));
+
+    let data_store = EnvironmentDataStore::new(application.clone()).unwrap();
+    let mut source_records = BTreeMap::new();
+    source_records.insert("orders.counter".to_string(), b"42".to_vec());
+    let (receipt, _) = apply_promotion(
+        &plan,
+        &data_store.scope(ApplicationEnvironment::Staging),
+        &data_store.scope(ApplicationEnvironment::Production),
+        &source_records,
+    )
+    .unwrap();
+    assert_eq!(receipt.data_records_copied, 1);
+    assert_eq!(
+        receipt.secrets_requiring_configuration,
+        vec![declaration_name.clone()]
+    );
+
+    // Verify the OS backend still shows production Missing (promotion did not
+    // move the credential).
+    let after = production.status(&secret_key).unwrap();
+    assert_eq!(after.state(), ProtectedSecretState::Missing);
+
+    // Clean up so the developer vault does not retain the test credential.
+    staging.purge(&secret_key).unwrap_or_else(|e| {
+        eprintln!("warning: failed to purge OS test credential {e:?}");
+    });
+    let _ = production.purge(&secret_key);
+    eprintln!(
+        "production-real evidence: OsCredentialBackend ({facility}) proved isolated staging secret and secret-free promotion"
+    );
+}
+
+// Minimal hex helper to avoid adding a new dependency: the workspace already
+// depends on sha2/hex via other crates, but we keep this self-contained.
+mod hex {
+    pub fn encode(bytes: [u8; 8]) -> String {
+        const LUT: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(16);
+        for b in bytes {
+            out.push(LUT[(b >> 4) as usize] as char);
+            out.push(LUT[(b & 0x0f) as usize] as char);
+        }
+        out
+    }
+}
