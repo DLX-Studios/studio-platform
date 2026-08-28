@@ -12,7 +12,10 @@ fn fixture_files(directory: &str) -> Vec<std::path::PathBuf> {
     let mut files: Vec<_> = fs::read_dir(&root)
         .expect("fixture directory should exist")
         .map(|entry| entry.expect("fixture entry should be readable").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "studio"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "studio")
+        })
         .collect();
     files.sort();
     assert!(
