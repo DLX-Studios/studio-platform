@@ -1,0 +1,8 @@
+studio 1
+<Screen id="home" title="Home"><Text id="home-title">Home</Text><Button id="open-detail" label="Open detail" /><TextInput id="search" placeholder="Search" /></Screen>
+<AppBar id="detail" title="Detail"><IconButton id="back-button" label="Back" /></AppBar>
+<script lang="studio">
+on pressed open-detail push(/detail)
+on changed search replace(/detail)
+on pressed back-button pop()
+</script>

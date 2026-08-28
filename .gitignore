@@ -13,6 +13,7 @@ examples/starter/build/*
 /dist/
 /build/
 *.studio
+!crates/studio-script/fixtures/**/*.studio
 !examples/pos-desktop/build/*.studio
 !examples/starter/build/*.studio
 *.wasm
