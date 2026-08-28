@@ -14,22 +14,24 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, Context as GpuiContext, FocusHandle, IntoElement, ParentElement, Render, Role,
-    Window, div, prelude::*, px, rgb,
+    AnyElement, Context as GpuiContext, Entity, FocusHandle, IntoElement, ParentElement, Render,
+    Role, Subscription, Window, div, prelude::*, px, rgb,
 };
 use gpui_component::{
     Disableable,
     button::{Button, ButtonVariants},
+    input::{Input, InputEvent, InputState},
 };
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
-    DefaultDesignerSession, DesignerDiagnostic, DesignerPersistence, DesignerQuery,
-    DesignerQueryResult, DesignerSession, HierarchyEdit, HistoryOperation, LibrarySnapshot, NodeId,
-    NodeParent, OperationId, ParentPlacement, ProjectionDiagnostic, ProjectionOptions,
-    ProjectionReport, PropertyValue, ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot,
-    SessionContextUpdate, SessionError, SnapConfig, StudioDesign, UndoGroupId, delete_batch,
-    drag_batch, duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch, nudge_batch,
-    reparent_batch, restore_batch,
+    DefaultDesignerSession, DesignToken, DesignerDiagnostic, DesignerPersistence, DesignerQuery,
+    DesignerQueryResult, DesignerSession, HierarchyEdit, HistoryOperation, LayoutProperties,
+    LibrarySnapshot, NodeId, NodeParent, OperationId, ParentPlacement, ProjectionDiagnostic,
+    ProjectionOptions, ProjectionReport, PropertyValue, ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION,
+    ScriptCommitMetadata, ScriptCommitOutcome, ScriptDocumentAdapter, SelectionSnapshot,
+    SessionContextUpdate, SessionError, SnapConfig, StudioDesign, TokenId, TokenKind, TokenValue,
+    UndoGroupId, WorkspaceCommand, WorkspaceController, delete_batch, drag_batch, duplicate_batch,
+    hierarchy_edit_batch, keyboard_resize_batch, nudge_batch, reparent_batch, restore_batch,
 };
 use studio_protocol::{NodeKind, UiNode};
 use thiserror::Error;
@@ -607,6 +609,327 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
         self.submit_manipulation(batch).await
     }
 
+    /// Submit a typed base-layout change for the selected node.
+    pub async fn set_layout_selected(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+        layout: LayoutProperties,
+    ) -> CommandOutcome {
+        let state = self.session_state();
+        let Some(node_id) = state.selection.primary else {
+            return self.reject_local(
+                "FOCUS_SELECTION_REQUIRED",
+                "select a canvas node before changing layout",
+            );
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Layout",
+            Command::SetLayout { node_id, layout },
+        )
+        .await
+    }
+
+    /// Return the session-owned state used by profile controls and view switches.
+    #[must_use]
+    pub fn session_state(&self) -> studio_design::SessionStateSnapshot {
+        match self.session.query(DesignerQuery::SessionState) {
+            DesignerQueryResult::SessionState(state) => state,
+            _ => unreachable!("DesignerSession returned the wrong query result"),
+        }
+    }
+
+    /// Switch the responsive preview profile without creating a design revision.
+    pub fn set_profile(&mut self, profile: Option<String>) {
+        self.session.update_context(SessionContextUpdate {
+            device_profile: Some(profile),
+            ..SessionContextUpdate::default()
+        });
+        self.refresh();
+    }
+
+    /// Return the complete profile matrix exposed by the authoritative session.
+    #[must_use]
+    pub fn responsive_profiles(&self) -> Option<studio_design::DeviceProfileMatrix> {
+        match self.session.query(DesignerQuery::ResponsiveProfiles) {
+            DesignerQueryResult::ResponsiveProfiles(profiles) => Some(profiles),
+            _ => None,
+        }
+    }
+
+    /// Return token browser entries from the authoritative session.
+    #[must_use]
+    pub fn tokens(&self) -> Vec<DesignToken> {
+        match self.session.query(DesignerQuery::Tokens) {
+            DesignerQueryResult::Tokens(tokens) => tokens,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Return token usage records for an authoritative token identity.
+    #[must_use]
+    pub fn token_usages(&self, token_id: TokenId) -> Vec<studio_design::TokenUsage> {
+        match self.session.query(DesignerQuery::TokenUsages { token_id }) {
+            DesignerQueryResult::TokenUsages(usages) => usages,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Create a deterministic sample token through the validated token command family.
+    pub async fn create_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let Ok(token_id) = TokenId::new("focus-accent") else {
+            return self.reject_local(
+                "FOCUS_TOKEN_ID_INVALID",
+                "the Focus token identity is invalid",
+            );
+        };
+        let token = DesignToken {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            id: token_id,
+            name: "Focus Accent".to_owned(),
+            kind: TokenKind::Length,
+            value: TokenValue::Length(studio_design::Length {
+                value: "8".to_owned(),
+                unit: studio_design::LengthUnit::Pixels,
+            }),
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Create token",
+            Command::CreateToken {
+                token: Box::new(token),
+            },
+        )
+        .await
+    }
+
+    /// Apply the selected token to the selected node's padding property.
+    pub async fn apply_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let state = self.session_state();
+        let Some(node_id) = state.selection.primary else {
+            return self.reject_local(
+                "FOCUS_SELECTION_REQUIRED",
+                "select a node before applying a token",
+            );
+        };
+        let tokens = self.tokens();
+        let Some(token) = tokens.first() else {
+            return self.reject_local("FOCUS_TOKEN_REQUIRED", "create a token before applying it");
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Apply token",
+            Command::ApplyToken {
+                node_id,
+                property: "padding".to_owned(),
+                token_id: token.id.clone(),
+            },
+        )
+        .await
+    }
+
+    /// Set a local token value while preserving its shared token identity.
+    pub async fn override_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let state = self.session_state();
+        let Some(node_id) = state.selection.primary else {
+            return self.reject_local(
+                "FOCUS_SELECTION_REQUIRED",
+                "select a node before overriding a token",
+            );
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Override token",
+            Command::OverrideToken {
+                node_id,
+                property: "padding".to_owned(),
+                value: TokenValue::Length(studio_design::Length {
+                    value: "12".to_owned(),
+                    unit: studio_design::LengthUnit::Pixels,
+                }),
+            },
+        )
+        .await
+    }
+
+    /// Clear the selected node's local token value.
+    pub async fn clear_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let state = self.session_state();
+        let Some(node_id) = state.selection.primary else {
+            return self.reject_local(
+                "FOCUS_SELECTION_REQUIRED",
+                "select a node before clearing a token",
+            );
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Clear token override",
+            Command::ClearTokenOverride {
+                node_id,
+                property: "padding".to_owned(),
+            },
+        )
+        .await
+    }
+
+    /// Rename the first token while retaining its stable identity.
+    pub async fn rename_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let tokens = self.tokens();
+        let Some(token) = tokens.first() else {
+            return self.reject_local("FOCUS_TOKEN_REQUIRED", "create a token before renaming it");
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Rename token",
+            Command::RenameToken {
+                token_id: token.id.clone(),
+                name: "Focus Accent Renamed".to_owned(),
+            },
+        )
+        .await
+    }
+
+    /// Ask the engine to delete the first token with explicit confirmation.
+    pub async fn delete_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let tokens = self.tokens();
+        let Some(token) = tokens.first() else {
+            return self.reject_local("FOCUS_TOKEN_REQUIRED", "create a token before deleting it");
+        };
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Delete token",
+            Command::DeleteToken {
+                token_id: token.id.clone(),
+                confirm: true,
+            },
+        )
+        .await
+    }
+
+    /// Run the declarative interaction graph in an isolated prototype state.
+    pub fn prototype_preview(
+        &self,
+    ) -> Result<Option<studio_design::PrototypeDispatch>, studio_design::PrototypeError> {
+        let snapshot = self.source_snapshot();
+        let mut prototype = studio_design::PrototypeSession::new(snapshot.design)?;
+        let Some(interaction_id) = prototype.design().interactions.keys().next().cloned() else {
+            return Ok(None);
+        };
+        Ok(Some(prototype.dispatch_interaction(&interaction_id)))
+    }
+
+    /// Commit an edited Studio Script buffer through the parser-of-record and session.
+    pub async fn commit_script_source(
+        &mut self,
+        source: String,
+        metadata: ScriptCommitMetadata,
+    ) -> ScriptCommitOutcome {
+        let snapshot = self.source_snapshot();
+        let mut editor = match ScriptDocumentAdapter::from_snapshot(&snapshot) {
+            Ok(editor) => editor,
+            Err(_) => {
+                return ScriptCommitOutcome::Invalid {
+                    diagnostics: Vec::new(),
+                };
+            }
+        };
+        editor.replace_source(source);
+        let outcome = editor.commit(&mut self.session, metadata).await;
+        if let ScriptCommitOutcome::Session(command_outcome) = &outcome {
+            self.apply_outcome(command_outcome.clone());
+        } else {
+            self.refresh();
+        }
+        outcome
+    }
+
+    async fn submit_command(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+        undo_group_name: &str,
+        command: Command,
+    ) -> CommandOutcome {
+        let state = self.session_state();
+        let batch = CommandBatch {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            operation_id,
+            actor,
+            project_id: state.project_id,
+            base_revision: state.revision_id,
+            undo_group_id,
+            undo_group_name: undo_group_name.to_owned(),
+            preconditions: Vec::new(),
+            commands: vec![command],
+        };
+        let outcome = self.session.submit(batch).await;
+        self.apply_outcome(outcome.clone());
+        outcome
+    }
+
+    fn reject_local(&mut self, code: &str, message: &str) -> CommandOutcome {
+        let outcome = CommandOutcome::Rejected(vec![DesignerDiagnostic {
+            code: code.to_owned(),
+            severity: studio_design::DiagnosticSeverity::Error,
+            message: message.to_owned(),
+            node_id: None,
+            interaction_id: None,
+            collection_id: None,
+            binding_id: None,
+            form_id: None,
+            record_id: None,
+        }]);
+        self.apply_outcome(outcome.clone());
+        outcome
+    }
+
     /// Return the immutable source snapshot currently held by the session.
     #[must_use]
     pub fn source_snapshot(&self) -> studio_design::StudioDesignSnapshot {
@@ -614,6 +937,14 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
             DesignerQueryResult::Snapshot(snapshot) => snapshot,
             _ => unreachable!("DesignerSession returned the wrong query result"),
         }
+    }
+
+    /// Return canonical Studio Script for the current immutable source.
+    #[must_use]
+    pub fn script_source(&self) -> String {
+        ScriptDocumentAdapter::from_snapshot(&self.source_snapshot())
+            .map(|editor| editor.source().to_owned())
+            .unwrap_or_default()
     }
 
     /// Return the current session selection, including deleted identities.
@@ -807,6 +1138,14 @@ pub struct FocusView<P> {
     pub model: Option<FocusViewModel<P>>,
     root_focus: FocusHandle,
     operation_in_flight: bool,
+    /// Presentation-only Focus/Workbench controller; both views use `model`.
+    workspace: WorkspaceController,
+    /// Native editable Studio Script buffer and its event subscription.
+    script_input: Option<Entity<InputState>>,
+    _script_subscription: Option<Subscription>,
+    script_source: String,
+    script_feedback: Option<String>,
+    prototype_feedback: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -823,6 +1162,22 @@ enum FocusAction {
     Duplicate,
     Delete,
     Restore,
+    LayoutFlow,
+    LayoutStack,
+    LayoutGrid,
+    LayoutAbsolute,
+    LayoutOverlay,
+    ProfilePhone,
+    ProfileTablet,
+    ProfileDesktop,
+    ProfileFourK,
+    CreateToken,
+    ApplyToken,
+    OverrideToken,
+    ClearToken,
+    RenameToken,
+    DeleteToken,
+    PrototypeRun,
 }
 
 impl<P: DesignerPersistence + 'static> FocusView<P> {
@@ -833,12 +1188,57 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             model: Some(model),
             root_focus: cx.focus_handle(),
             operation_in_flight: false,
+            workspace: WorkspaceController::default(),
+            script_input: None,
+            _script_subscription: None,
+            script_source: String::new(),
+            script_feedback: None,
+            prototype_feedback: None,
         }
     }
 
     fn start_action(&mut self, action: FocusAction, cx: &mut GpuiContext<Self>) {
         if self.operation_in_flight {
             return;
+        }
+        match action {
+            FocusAction::ProfilePhone
+            | FocusAction::ProfileTablet
+            | FocusAction::ProfileDesktop
+            | FocusAction::ProfileFourK => {
+                if let Some(model) = self.model.as_mut() {
+                    let profile = match action {
+                        FocusAction::ProfilePhone => "phone-portrait",
+                        FocusAction::ProfileTablet => "tablet-portrait",
+                        FocusAction::ProfileDesktop => "desktop-landscape",
+                        FocusAction::ProfileFourK => "4k-landscape",
+                        _ => unreachable!(),
+                    };
+                    model.set_profile(Some(profile.to_owned()));
+                }
+                cx.notify();
+                return;
+            }
+            FocusAction::PrototypeRun => {
+                if let Some(model) = self.model.as_ref() {
+                    self.prototype_feedback = Some(match model.prototype_preview() {
+                        Ok(Some(dispatch)) => format!(
+                            "Prototype route {} · {} interaction(s) · {} diagnostic(s)",
+                            dispatch
+                                .state
+                                .active_screen_id
+                                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+                            dispatch.interaction_ids.len(),
+                            dispatch.diagnostics.len()
+                        ),
+                        Ok(None) => "Prototype ready · no interactions declared".to_owned(),
+                        Err(error) => format!("Prototype diagnostic: {error}"),
+                    });
+                }
+                cx.notify();
+                return;
+            }
+            _ => {}
         }
         let Some(mut model) = self.model.take() else {
             return;
@@ -857,6 +1257,22 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             FocusAction::Duplicate => ("focus-duplicate", "focus-duplicate"),
             FocusAction::Delete => ("focus-delete", "focus-delete"),
             FocusAction::Restore => ("focus-restore", "focus-restore"),
+            FocusAction::LayoutFlow => ("focus-layout-flow", "focus-layout-flow"),
+            FocusAction::LayoutStack => ("focus-layout-stack", "focus-layout-stack"),
+            FocusAction::LayoutGrid => ("focus-layout-grid", "focus-layout-grid"),
+            FocusAction::LayoutAbsolute => ("focus-layout-absolute", "focus-layout-absolute"),
+            FocusAction::LayoutOverlay => ("focus-layout-overlay", "focus-layout-overlay"),
+            FocusAction::CreateToken => ("focus-token-create", "focus-token-create"),
+            FocusAction::ApplyToken => ("focus-token-apply", "focus-token-apply"),
+            FocusAction::OverrideToken => ("focus-token-override", "focus-token-override"),
+            FocusAction::ClearToken => ("focus-token-clear", "focus-token-clear"),
+            FocusAction::RenameToken => ("focus-token-rename", "focus-token-rename"),
+            FocusAction::DeleteToken => ("focus-token-delete", "focus-token-delete"),
+            FocusAction::ProfilePhone
+            | FocusAction::ProfileTablet
+            | FocusAction::ProfileDesktop
+            | FocusAction::ProfileFourK
+            | FocusAction::PrototypeRun => unreachable!("synchronous action handled above"),
         };
         let Ok(operation_id) = OperationId::new(format!("{name}-{revision}")) else {
             self.model = Some(model);
@@ -941,10 +1357,151 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                         .restore_selected(operation_id, actor, undo_group_id)
                         .await
                 }
+                FocusAction::LayoutFlow => {
+                    model
+                        .set_layout_selected(
+                            operation_id,
+                            actor,
+                            undo_group_id,
+                            LayoutProperties::flow(),
+                        )
+                        .await
+                }
+                FocusAction::LayoutStack => {
+                    model
+                        .set_layout_selected(
+                            operation_id,
+                            actor,
+                            undo_group_id,
+                            LayoutProperties::default(),
+                        )
+                        .await
+                }
+                FocusAction::LayoutGrid => {
+                    let mut layout = LayoutProperties::flow();
+                    layout.grid_columns = Some(2);
+                    model
+                        .set_layout_selected(operation_id, actor, undo_group_id, layout)
+                        .await
+                }
+                FocusAction::LayoutAbsolute => {
+                    model
+                        .set_layout_selected(
+                            operation_id,
+                            actor,
+                            undo_group_id,
+                            LayoutProperties::absolute(),
+                        )
+                        .await
+                }
+                FocusAction::LayoutOverlay => {
+                    model
+                        .set_layout_selected(
+                            operation_id,
+                            actor,
+                            undo_group_id,
+                            LayoutProperties::overlay(),
+                        )
+                        .await
+                }
+                FocusAction::CreateToken => {
+                    model
+                        .create_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
+                FocusAction::ApplyToken => {
+                    model
+                        .apply_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
+                FocusAction::OverrideToken => {
+                    model
+                        .override_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
+                FocusAction::ClearToken => {
+                    model
+                        .clear_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
+                FocusAction::RenameToken => {
+                    model
+                        .rename_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
+                FocusAction::DeleteToken => {
+                    model
+                        .delete_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
+                FocusAction::ProfilePhone
+                | FocusAction::ProfileTablet
+                | FocusAction::ProfileDesktop
+                | FocusAction::ProfileFourK
+                | FocusAction::PrototypeRun => unreachable!("synchronous action handled above"),
             };
             this.update(cx, |this, cx| {
                 this.model = Some(model);
                 this.operation_in_flight = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn start_script_commit(&mut self, cx: &mut GpuiContext<Self>) {
+        if self.operation_in_flight {
+            return;
+        }
+        let Some(mut model) = self.model.take() else {
+            return;
+        };
+        let source = self
+            .script_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_else(|| model.script_source());
+        let revision = model.snapshot().revision_id.get().saturating_add(1);
+        let Ok(operation_id) = OperationId::new(format!("focus-script-{revision}")) else {
+            self.model = Some(model);
+            return;
+        };
+        let Ok(undo_group_id) = UndoGroupId::new("focus-script") else {
+            self.model = Some(model);
+            return;
+        };
+        let Ok(actor) = focus_actor() else {
+            self.model = Some(model);
+            return;
+        };
+        let metadata =
+            ScriptCommitMetadata::new(operation_id, actor, undo_group_id, "Studio Script edit");
+        self.operation_in_flight = true;
+        self.script_feedback = Some("Checking Studio Script…".to_owned());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let outcome = model.commit_script_source(source, metadata).await;
+            let feedback = match &outcome {
+                ScriptCommitOutcome::Committed { receipt, .. } => format!(
+                    "Script committed at revision {:?}",
+                    receipt.committed_revision
+                ),
+                ScriptCommitOutcome::NoChanges { .. } => {
+                    "Script checked · no design changes".to_owned()
+                }
+                ScriptCommitOutcome::Invalid { diagnostics } => format!(
+                    "Script rejected · {} line-linked diagnostic(s)",
+                    diagnostics.len()
+                ),
+                ScriptCommitOutcome::Session(command_outcome) => {
+                    format!("Script session result: {command_outcome:?}")
+                }
+            };
+            this.update(cx, |this, cx| {
+                this.model = Some(model);
+                this.operation_in_flight = false;
+                this.script_feedback = Some(feedback);
                 cx.notify();
             })
             .ok();
@@ -994,7 +1551,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
 }
 
 impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
-    fn render(&mut self, _window: &mut Window, cx: &mut GpuiContext<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut GpuiContext<Self>) -> impl IntoElement {
         if self.model.is_none() {
             return div()
                 .id("studio-focus-loading")
@@ -1002,6 +1559,29 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 .aria_label("Designer operation in progress")
                 .p_4()
                 .child("Saving Designer changes…");
+        }
+        if self.script_input.is_none() {
+            let source = self
+                .model
+                .as_ref()
+                .map(FocusViewModel::script_source)
+                .unwrap_or_default();
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(source.clone())
+                    .code_editor("studio")
+            });
+            let subscription = cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.script_source = input.read(cx).value().to_string();
+                    this.script_feedback =
+                        Some("Unsaved script buffer · press Check & Commit".to_owned());
+                    cx.notify();
+                }
+            });
+            self.script_source = source;
+            self.script_input = Some(input);
+            self._script_subscription = Some(subscription);
         }
         let snapshot = self
             .model
@@ -1078,6 +1658,13 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
         let hierarchy = self.model.as_ref().map(|model| {
             studio_design::HierarchySnapshot::from_design(&model.source_snapshot().design)
         });
+        let active_view = self.workspace.state().active_view;
+        let profile = self
+            .model
+            .as_ref()
+            .and_then(|model| model.session_state().device_profile)
+            .unwrap_or_else(|| "base".to_owned());
+        let token_count = self.model.as_ref().map_or(0, |model| model.tokens().len());
         let action_button = |id: &'static str,
                              label: &'static str,
                              action: FocusAction,
@@ -1091,6 +1678,204 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     this.start_action(action, cx);
                 }))
         };
+        let command_button = |id: &'static str,
+                              label: &'static str,
+                              command: WorkspaceCommand,
+                              cx: &mut GpuiContext<Self>| {
+            Button::new(id)
+                .label(label)
+                .secondary()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(model) = this.model.as_ref() {
+                        let _ = this.workspace.execute(command, model.session());
+                    }
+                    cx.notify();
+                }))
+        };
+        let toolbar = div()
+            .id("focus-command-bar")
+            .role(Role::Toolbar)
+            .aria_label("Designer command bar")
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                Button::new("focus-view-toggle")
+                    .label(match active_view {
+                        studio_design::EditorView::Focus => "Open Workbench",
+                        studio_design::EditorView::Workbench => "Open Focus",
+                    })
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(model) = this.model.as_ref() {
+                            let _ = this.workspace.toggle(model.session());
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("focus-profile-current")
+                    .text_sm()
+                    .child(format!("Profile: {profile}")),
+            )
+            .child(action_button(
+                "focus-profile-phone",
+                "Phone",
+                FocusAction::ProfilePhone,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-profile-tablet",
+                "Tablet",
+                FocusAction::ProfileTablet,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-profile-desktop",
+                "Desktop",
+                FocusAction::ProfileDesktop,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-profile-4k",
+                "4K",
+                FocusAction::ProfileFourK,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-prototype-run",
+                "Run Prototype",
+                FocusAction::PrototypeRun,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-prototype-mode",
+                "Prototype mode",
+                FocusAction::PrototypeRun,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-prototype-route",
+                "Prototype route",
+                FocusAction::PrototypeRun,
+                false,
+                cx,
+            ))
+            .child(action_button(
+                "focus-prototype-graph",
+                "Interaction graph",
+                FocusAction::PrototypeRun,
+                false,
+                cx,
+            ))
+            .child(command_button(
+                "focus-command-hierarchy",
+                "Hierarchy",
+                WorkspaceCommand::OpenScreensHierarchy,
+                cx,
+            ))
+            .child(command_button(
+                "focus-command-library",
+                "Library",
+                WorkspaceCommand::OpenLibrary,
+                cx,
+            ))
+            .child(command_button(
+                "focus-command-diagnostics",
+                "Diagnostics",
+                WorkspaceCommand::OpenDiagnostics,
+                cx,
+            ))
+            .child(command_button(
+                "focus-command-history",
+                "History",
+                WorkspaceCommand::OpenHistory,
+                cx,
+            ));
+        let workbench_surface = if active_view == studio_design::EditorView::Workbench {
+            div()
+                .id("studio-workbench-view")
+                .role(Role::Pane)
+                .aria_label("Studio Designer Workbench")
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .p_2()
+                .border_1()
+                .border_color(rgb(COLOR_BORDER))
+                .bg(rgb(COLOR_PANEL))
+                .child(
+                    div()
+                        .id("workbench-screens-hierarchy")
+                        .role(Role::Pane)
+                        .child("Screens & Hierarchy"),
+                )
+                .child(
+                    div()
+                        .id("workbench-library")
+                        .role(Role::Pane)
+                        .child("Library"),
+                )
+                .child(
+                    div()
+                        .id("workbench-canvas-controls")
+                        .role(Role::Pane)
+                        .child("Canvas & Profiles"),
+                )
+                .child(
+                    div()
+                        .id("workbench-inspector")
+                        .role(Role::Pane)
+                        .child("Inspector"),
+                )
+                .child(
+                    div()
+                        .id("workbench-diagnostics")
+                        .role(Role::Pane)
+                        .child("Diagnostics"),
+                )
+                .child(
+                    div()
+                        .id("workbench-interactions")
+                        .role(Role::Pane)
+                        .child("Interactions"),
+                )
+                .child(
+                    div()
+                        .id("workbench-agent-activity")
+                        .role(Role::Pane)
+                        .child("Agent Activity"),
+                )
+                .child(
+                    div()
+                        .id("workbench-history")
+                        .role(Role::Pane)
+                        .child("History"),
+                )
+                .into_any_element()
+        } else {
+            div().id("studio-workbench-view-hidden").into_any_element()
+        };
+        let script_input = self
+            .script_input
+            .as_ref()
+            .expect("script input initialized before render")
+            .clone();
+        let script_feedback = self
+            .script_feedback
+            .clone()
+            .unwrap_or_else(|| "Studio Script · parser-of-record".to_owned());
+        let prototype_feedback = self
+            .prototype_feedback
+            .clone()
+            .unwrap_or_else(|| "Prototype preview is isolated from source history".to_owned());
         div()
             .id("studio-focus-view")
             .role(Role::Application)
@@ -1102,6 +1887,8 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .p_4()
             .bg(rgb(COLOR_CANVAS))
             .text_color(rgb(COLOR_TEXT))
+            .child(toolbar)
+            .child(workbench_surface)
             .child(
                 div()
                     .id("focus-canvas-panel")
@@ -1156,6 +1943,149 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                             })),
                     )
                     .child(div().text_sm().child(status))
+                    .child(div().text_sm().child(format!("Tokens: {token_count}")))
+                    .child(div().text_sm().child(prototype_feedback))
+                    .child(div().text_sm().child("Layout authoring"))
+                    .child(action_button(
+                        "focus-layout-flow",
+                        "Flow",
+                        FocusAction::LayoutFlow,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-layout-stack",
+                        "Stack",
+                        FocusAction::LayoutStack,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-layout-grid",
+                        "Grid",
+                        FocusAction::LayoutGrid,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-layout-absolute",
+                        "Absolute",
+                        FocusAction::LayoutAbsolute,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-layout-overlay",
+                        "Overlay",
+                        FocusAction::LayoutOverlay,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(div().text_sm().child("Token browser / inspector"))
+                    .child(action_button(
+                        "focus-token-create",
+                        "Create token",
+                        FocusAction::CreateToken,
+                        false,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-token-apply",
+                        "Apply token",
+                        FocusAction::ApplyToken,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-token-override",
+                        "Override token",
+                        FocusAction::OverrideToken,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-token-clear",
+                        "Clear override",
+                        FocusAction::ClearToken,
+                        !can_edit,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-token-rename",
+                        "Rename token",
+                        FocusAction::RenameToken,
+                        token_count == 0,
+                        cx,
+                    ))
+                    .child(action_button(
+                        "focus-token-delete",
+                        "Delete token",
+                        FocusAction::DeleteToken,
+                        token_count == 0,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .id("focus-script-panel")
+                            .role(Role::Pane)
+                            .child("Studio Script"),
+                    )
+                    .child(
+                        div()
+                            .id("focus-script-editor")
+                            .role(Role::TextInput)
+                            .aria_label("Editable Studio Script buffer")
+                            .h(px(220.0))
+                            .child(Input::new(&script_input)),
+                    )
+                    .child(
+                        div()
+                            .id("focus-script-feedback")
+                            .text_sm()
+                            .child(script_feedback),
+                    )
+                    .child(
+                        div()
+                            .id("focus-script-diagnostics")
+                            .role(Role::Status)
+                            .text_sm()
+                            .child("Line-linked diagnostics"),
+                    )
+                    .child(
+                        div()
+                            .id("focus-script-outline")
+                            .role(Role::List)
+                            .text_sm()
+                            .child("Outline · syntax highlights · canvas diff/comments"),
+                    )
+                    .child(
+                        Button::new("focus-script-check")
+                            .label("Check & Commit")
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_script_commit(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("focus-script-format")
+                            .label("Format & Commit")
+                            .secondary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_script_commit(cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("focus-script-diff")
+                            .text_sm()
+                            .child("Canvas ↔ text diff"),
+                    )
+                    .child(
+                        div()
+                            .id("focus-script-comments")
+                            .text_sm()
+                            .child("Source comments retained"),
+                    )
                     .child(div().text_sm().child("Hierarchy and canvas controls"))
                     .children(restore_selection.iter().map(|node_id| {
                         div()

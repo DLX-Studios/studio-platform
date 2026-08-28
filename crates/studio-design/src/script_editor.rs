@@ -496,6 +496,19 @@ impl ScriptDocumentAdapter {
         candidate.tokens = snapshot.design.tokens.clone();
         candidate.responsive_variants = snapshot.design.responsive_variants.clone();
         candidate.interactions = snapshot.design.interactions.clone();
+        // Canvas frames are editor presentation metadata, not Studio Script
+        // syntax. Preserve them while lowering the editable source so a
+        // script round-trip cannot accidentally clear Focus geometry.
+        for (node_id, current_node) in &snapshot.design.nodes {
+            if let (Some(frame), Some(candidate_node)) = (
+                current_node.properties.get(crate::CANVAS_RECT_PROPERTY),
+                candidate.nodes.get_mut(node_id),
+            ) {
+                candidate_node
+                    .properties
+                    .insert(crate::CANVAS_RECT_PROPERTY.to_owned(), frame.clone());
+            }
+        }
 
         let commands = match diff_designs(&snapshot.design, &candidate, &self.source) {
             Ok(commands) => commands,
@@ -691,7 +704,10 @@ fn element_from_design_node(
         element.set_attribute("name", AttributeValue::String(node.name.clone()));
     }
     for (name, value) in &node.properties {
-        if name == "name" || (kind == studio_protocol::NodeKind::Text && name == "text") {
+        if name == "name"
+            || name == crate::CANVAS_RECT_PROPERTY
+            || (kind == studio_protocol::NodeKind::Text && name == "text")
+        {
             continue;
         }
         element.set_attribute(name.clone(), attribute_from_property(value)?);

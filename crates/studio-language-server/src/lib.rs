@@ -587,15 +587,24 @@ impl LanguageServer {
                 return (None, notifications);
             }
             "textDocument/completion" => {
-                let (uri, position) = request_document_position(&params);
+                let (uri, position) = match request_document_position(&params) {
+                    Ok(value) => value,
+                    Err(error) => return (id.map(|id| rpc_error(id, error)), notifications),
+                };
                 serde_json::to_value(self.completion(&uri, position)).unwrap_or(Value::Null)
             }
             "textDocument/hover" => {
-                let (uri, position) = request_document_position(&params);
+                let (uri, position) = match request_document_position(&params) {
+                    Ok(value) => value,
+                    Err(error) => return (id.map(|id| rpc_error(id, error)), notifications),
+                };
                 serde_json::to_value(self.hover(&uri, position)).unwrap_or(Value::Null)
             }
             "textDocument/definition" => {
-                let (uri, position) = request_document_position(&params);
+                let (uri, position) = match request_document_position(&params) {
+                    Ok(value) => value,
+                    Err(error) => return (id.map(|id| rpc_error(id, error)), notifications),
+                };
                 serde_json::to_value(self.definition(&uri, position)).unwrap_or(Value::Array(Vec::new()))
             }
             "textDocument/diagnostic" => {
@@ -1151,17 +1160,37 @@ fn publish_diagnostics(uri: &str, diagnostics: &[Diagnostic]) -> Value {
     json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":uri,"diagnostics":diagnostics}})
 }
 
-fn request_document_position(params: &Value) -> (String, Position) {
-    let uri = params
+fn request_document_position(params: &Value) -> Result<(String, Position), Value> {
+    let Some(uri) = params
         .pointer("/textDocument/uri")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let position = params
-        .pointer("/position")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    (uri, position)
+        .filter(|uri| !uri.trim().is_empty() && uri.contains("://"))
+    else {
+        return Err(json!({
+            "code": -32602,
+            "message": "textDocument.uri must be a non-empty URI",
+            "data": {"field": "textDocument.uri"}
+        }));
+    };
+    let Some(position_value) = params.pointer("/position") else {
+        return Err(json!({
+            "code": -32602,
+            "message": "position is required",
+            "data": {"field": "position"}
+        }));
+    };
+    let position: Position = serde_json::from_value(position_value.clone()).map_err(|_| {
+        json!({
+            "code": -32602,
+            "message": "position.line and position.character must be unsigned integers",
+            "data": {"field": "position"}
+        })
+    })?;
+    Ok((uri.to_owned(), position))
+}
+
+fn rpc_error(id: Value, error: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": error})
 }
 
 fn read_message<R: BufRead>(reader: &mut R) -> io::Result<Option<Value>> {

@@ -8,7 +8,8 @@ use std::{
 
 use studio_design::{
     Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, InMemoryDesignerPersistence,
-    OperationId, ProjectId, PropertyValue, Screen, ScreenId, StudioDesign, UndoGroupId,
+    OperationId, ProjectId, PropertyValue, Screen, ScreenId, ScriptCommitMetadata,
+    ScriptCommitOutcome, StudioDesign, UndoGroupId,
 };
 use studio_designer::{FocusSelectionError, FocusViewModel, FocusViewState};
 use studio_protocol::NodeKind;
@@ -40,7 +41,7 @@ fn actor() -> Actor {
 
 fn seed() -> StudioDesign {
     let project_id = ProjectId::new("focus-project").unwrap();
-    let screen_id = ScreenId::new("home").unwrap();
+    let screen_id = ScreenId::new("canvas").unwrap();
     let root_id = studio_design::NodeId::new("canvas").unwrap();
     let node_id = studio_design::NodeId::new("headline").unwrap();
     let mut root = DesignNode::primitive(root_id.clone(), "Canvas", NodeKind::Box);
@@ -88,11 +89,11 @@ fn seed() -> StudioDesign {
             root_node_id: root_id,
         },
     );
-    design.screen_order.push(ScreenId::new("home").unwrap());
+    design.screen_order.push(ScreenId::new("canvas").unwrap());
     design
 }
 
-fn model() -> FocusViewModel<InMemoryDesignerPersistence> {
+fn make_model() -> FocusViewModel<InMemoryDesignerPersistence> {
     let persistence = InMemoryDesignerPersistence::default();
     let session = block_on(DefaultDesignerSession::create(
         persistence,
@@ -107,7 +108,7 @@ fn model() -> FocusViewModel<InMemoryDesignerPersistence> {
 
 #[test]
 fn focus_selection_inspector_edit_and_undo_are_session_backed() {
-    let mut model = model();
+    let mut model = make_model();
     let node_id = studio_design::NodeId::new("headline").unwrap();
     model.select(&node_id).unwrap();
     assert_eq!(model.snapshot().selected_node_id, Some(node_id));
@@ -137,7 +138,7 @@ fn focus_selection_inspector_edit_and_undo_are_session_backed() {
 
 #[test]
 fn focus_reports_selection_and_projection_failures_explicitly() {
-    let mut model = model();
+    let mut model = make_model();
     let missing = studio_design::NodeId::new("missing").unwrap();
     assert_eq!(
         model.select(&missing),
@@ -164,7 +165,7 @@ fn focus_reports_selection_and_projection_failures_explicitly() {
 
 #[test]
 fn ticket_40_controls_submit_through_the_session_authority() {
-    let mut model = model();
+    let mut model = make_model();
     let node_id = studio_design::NodeId::new("headline").unwrap();
     model.select(&node_id).unwrap();
 
@@ -204,12 +205,121 @@ fn ticket_40_controls_submit_through_the_session_authority() {
         "focus-restore",
         "focus-diagnostic-details",
         "focus-retry",
+        "focus-command-bar",
+        "focus-view-toggle",
+        "focus-profile-phone",
+        "focus-profile-tablet",
+        "focus-profile-desktop",
+        "focus-profile-4k",
+        "focus-layout-flow",
+        "focus-layout-stack",
+        "focus-layout-grid",
+        "focus-layout-absolute",
+        "focus-layout-overlay",
+        "focus-token-create",
+        "focus-token-apply",
+        "focus-token-override",
+        "focus-token-clear",
+        "focus-token-rename",
+        "focus-token-delete",
+        "focus-prototype-run",
+        "focus-prototype-mode",
+        "focus-prototype-route",
+        "focus-prototype-graph",
+        "focus-script-editor",
+        "focus-script-check",
+        "focus-script-format",
+        "focus-script-diagnostics",
+        "focus-script-outline",
+        "focus-script-diff",
+        "focus-script-comments",
+        "studio-workbench-view",
     ] {
         assert!(
             source.contains(control),
             "missing visible control {control}"
         );
     }
+}
+
+#[test]
+fn native_editor_depth_actions_use_typed_session_commands_and_preserve_context() {
+    let mut model = make_model();
+    let node_id = studio_design::NodeId::new("headline").unwrap();
+    model.select(&node_id).unwrap();
+    let revision = model.snapshot().revision_id;
+
+    let layout = block_on(model.set_layout_selected(
+        OperationId::new("layout-flow").unwrap(),
+        actor(),
+        UndoGroupId::new("layout").unwrap(),
+        studio_design::LayoutProperties::flow(),
+    ));
+    assert!(matches!(layout, studio_design::CommandOutcome::Accepted(_)));
+    assert_eq!(model.snapshot().revision_id.get(), revision.get() + 1);
+
+    model.set_profile(Some("phone".to_owned()));
+    assert_eq!(
+        model.session_state().device_profile.as_deref(),
+        Some("phone")
+    );
+    assert_eq!(model.snapshot().selected_node_id, Some(node_id.clone()));
+
+    let created = block_on(model.create_focus_token(
+        OperationId::new("token-create").unwrap(),
+        actor(),
+        UndoGroupId::new("tokens").unwrap(),
+    ));
+    assert!(matches!(
+        created,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    assert_eq!(model.tokens().len(), 1);
+    let applied = block_on(model.apply_focus_token(
+        OperationId::new("token-apply").unwrap(),
+        actor(),
+        UndoGroupId::new("tokens").unwrap(),
+    ));
+    assert!(matches!(
+        applied,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    let overridden = block_on(model.override_focus_token(
+        OperationId::new("token-override").unwrap(),
+        actor(),
+        UndoGroupId::new("tokens").unwrap(),
+    ));
+    assert!(matches!(
+        overridden,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    let cleared = block_on(model.clear_focus_token(
+        OperationId::new("token-clear").unwrap(),
+        actor(),
+        UndoGroupId::new("tokens").unwrap(),
+    ));
+    assert!(matches!(
+        cleared,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+
+    let mut script_model = make_model();
+    let source = script_model.script_source().replace("Before", "After");
+    let script = block_on(script_model.commit_script_source(
+        source,
+        ScriptCommitMetadata::new(
+            OperationId::new("script-edit").unwrap(),
+            actor(),
+            UndoGroupId::new("script").unwrap(),
+            "Studio Script edit",
+        ),
+    ));
+    assert!(
+        matches!(script, ScriptCommitOutcome::Committed { .. }),
+        "{script:?}"
+    );
+    assert_eq!(script_model.snapshot().revision_id.get(), 1);
+    assert_eq!(model.snapshot().selected_node_id, Some(node_id));
 }
 
 #[test]

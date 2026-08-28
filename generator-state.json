@@ -11,6 +11,11 @@
       "tried": "inspect Ticket 38 before editor-depth work",
       "found": "public session tests cover core composition, override, conflict, and closed-schema paths, while status/prose remain stale and CLI/reopen breadth must be evidenced",
       "fix": "execute the focused G0 gate and correct only genuine gaps before T41-T47"
+    },
+    {
+      "tried": "wire editor-depth controls into the native Designer surface",
+      "found": "domain seams already covered layout, responsive, token, prototype, workspace, and script behavior, but FocusView exposed only Ticket 40 actions and no editable script/LSP E2E breadth",
+      "fix": "added session-authorized layout/profile/token/script actions, Workbench command-bar/panel surface, prototype controls, native code-editor buffer, strict LSP request validation, and deterministic focused tests"
     }
   ]
 }
