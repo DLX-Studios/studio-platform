@@ -420,6 +420,17 @@ impl ScriptDocumentAdapter {
         self.snapshot()
     }
 
+    /// Format the current parsed buffer without submitting a design command.
+    /// The parser-of-record remains the source of truth, so invalid text is
+    /// left untouched and its diagnostics remain visible.
+    pub fn format_source(&mut self) -> EditorSnapshot {
+        if let Some(document) = self.parsed.clone() {
+            self.source = canonical_print(&document);
+            self.reindex();
+        }
+        self.snapshot()
+    }
+
     /// Return an immutable view of all editor surfaces.
     #[must_use]
     pub fn snapshot(&self) -> EditorSnapshot {

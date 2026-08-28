@@ -598,8 +598,14 @@ impl NativeProductShell {
             this.update(cx, |shell, cx| {
                 shell.focus_loading = false;
                 match result {
-                    Ok(model) => {
-                        shell.focus_view = Some(cx.new(|cx| FocusView::new(model, cx)));
+                    Ok((model, workspace_persistence)) => {
+                        shell.focus_view = Some(cx.new(|cx| {
+                            FocusView::new_with_workspace_persistence(
+                                model,
+                                workspace_persistence,
+                                cx,
+                            )
+                        }));
                         shell.focus_error = None;
                     }
                     Err(error) => {
@@ -643,13 +649,21 @@ async fn open_or_create_focus(
     store: Arc<EmbeddedLocalStore>,
     project_id: ProjectId,
     actor: Actor,
-) -> Result<FocusViewModel<LocalStoreDesignerPersistence>, FocusOpenError> {
+) -> Result<
+    (
+        FocusViewModel<LocalStoreDesignerPersistence>,
+        Arc<dyn studio_design::WorkspacePersistence>,
+    ),
+    FocusOpenError,
+> {
     let persistence =
         LocalStoreDesignerPersistence::new_shared(Arc::clone(&store)).map_err(|error| {
             FocusOpenError::Session(studio_design::SessionError::Persistence(error))
         })?;
+    let workspace_persistence: Arc<dyn studio_design::WorkspacePersistence> =
+        Arc::new(persistence.clone());
     match FocusViewModel::open(persistence.clone(), &project_id, None).await {
-        Ok(model) => Ok(model),
+        Ok(model) => Ok((model, workspace_persistence)),
         Err(FocusOpenError::Session(studio_design::SessionError::NotFound(_))) => {
             let operation_id =
                 OperationId::new(format!("create-{project_id}")).map_err(|error| {
@@ -672,7 +686,10 @@ async fn open_or_create_focus(
             )
             .await
             .map_err(FocusOpenError::Session)?;
-            Ok(FocusViewModel::from_session(session, None))
+            Ok((
+                FocusViewModel::from_session(session, None),
+                workspace_persistence,
+            ))
         }
         Err(error) => Err(error),
     }

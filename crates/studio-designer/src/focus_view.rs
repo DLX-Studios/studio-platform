@@ -25,13 +25,15 @@ use gpui_component::{
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
     DefaultDesignerSession, DesignToken, DesignerDiagnostic, DesignerPersistence, DesignerQuery,
-    DesignerQueryResult, DesignerSession, HierarchyEdit, HistoryOperation, LayoutProperties,
-    LibrarySnapshot, NodeId, NodeParent, OperationId, ParentPlacement, ProjectionDiagnostic,
-    ProjectionOptions, ProjectionReport, PropertyValue, ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION,
-    ScriptCommitMetadata, ScriptCommitOutcome, ScriptDocumentAdapter, SelectionSnapshot,
-    SessionContextUpdate, SessionError, SnapConfig, StudioDesign, TokenId, TokenKind, TokenValue,
-    UndoGroupId, WorkspaceCommand, WorkspaceController, delete_batch, drag_batch, duplicate_batch,
-    hierarchy_edit_batch, keyboard_resize_batch, nudge_batch, reparent_batch, restore_batch,
+    DesignerQueryResult, DesignerSession, EditorSnapshot, HierarchyEdit, HistoryOperation,
+    InteractionId, LayoutProperties, LibrarySnapshot, NodeId, NodeParent, OperationId,
+    ParentPlacement, ProjectionDiagnostic, ProjectionOptions, ProjectionReport, PropertyValue,
+    ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION, ScriptCommitMetadata, ScriptCommitOutcome,
+    ScriptDocumentAdapter, SelectionSnapshot, SessionContextUpdate, SessionError, SnapConfig,
+    StudioDesign, TokenId, TokenKind, TokenValue, UndoGroupId, WORKSPACE_STATE_SCHEMA_VERSION,
+    WorkspaceCommand, WorkspaceController, WorkspacePersistence, WorkspaceRecord, WorkspaceState,
+    delete_batch, drag_batch, duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch,
+    nudge_batch, reparent_batch, restore_batch,
 };
 use studio_protocol::{NodeKind, UiNode};
 use thiserror::Error;
@@ -679,6 +681,23 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
         }
     }
 
+    /// Return the selected node's shared/local token provenance for the
+    /// inspector. The query remains session-owned; the native view only
+    /// renders this immutable projection.
+    #[must_use]
+    pub fn node_token_values(&self) -> Vec<studio_design::InspectedTokenValue> {
+        let Some(node_id) = self.session_state().selection.primary else {
+            return Vec::new();
+        };
+        match self
+            .session
+            .query(DesignerQuery::NodeTokenValues { node_id })
+        {
+            DesignerQueryResult::NodeTokenValues(values) => values,
+            _ => Vec::new(),
+        }
+    }
+
     /// Create a deterministic sample token through the validated token command family.
     pub async fn create_focus_token(
         &mut self,
@@ -1140,12 +1159,20 @@ pub struct FocusView<P> {
     operation_in_flight: bool,
     /// Presentation-only Focus/Workbench controller; both views use `model`.
     workspace: WorkspaceController,
+    /// Durable per-project presentation preferences. This never stores a
+    /// second design or session; it only records view/panel geometry.
+    workspace_persistence: Arc<dyn WorkspacePersistence>,
     /// Native editable Studio Script buffer and its event subscription.
     script_input: Option<Entity<InputState>>,
     _script_subscription: Option<Subscription>,
+    script_editor: Option<ScriptDocumentAdapter>,
     script_source: String,
     script_feedback: Option<String>,
     prototype_feedback: Option<String>,
+    prototype: Option<studio_design::PrototypeSession>,
+    prototype_mode: bool,
+    prototype_screen: Option<studio_design::ScreenId>,
+    prototype_interaction: Option<InteractionId>,
 }
 
 #[derive(Clone, Copy)]
@@ -1178,23 +1205,183 @@ enum FocusAction {
     RenameToken,
     DeleteToken,
     PrototypeRun,
+    PrototypeMode,
+    PrototypeRoute,
+    PrototypeGraph,
 }
 
 impl<P: DesignerPersistence + 'static> FocusView<P> {
     /// Create the GPUI adapter around one already-open model.
     #[must_use]
     pub fn new(model: FocusViewModel<P>, cx: &mut GpuiContext<Self>) -> Self {
+        Self::with_workspace(
+            model,
+            Arc::new(studio_design::InMemoryWorkspacePersistence::default()),
+            cx,
+        )
+    }
+
+    /// Create the native view with the host's durable workspace adapter.
+    /// Presentation state is loaded before the first frame and saved after
+    /// each command-bar/view change.
+    pub fn new_with_workspace_persistence(
+        model: FocusViewModel<P>,
+        workspace_persistence: Arc<dyn WorkspacePersistence>,
+        cx: &mut GpuiContext<Self>,
+    ) -> Self {
+        Self::with_workspace(model, workspace_persistence, cx)
+    }
+
+    fn with_workspace(
+        model: FocusViewModel<P>,
+        workspace_persistence: Arc<dyn WorkspacePersistence>,
+        cx: &mut GpuiContext<Self>,
+    ) -> Self {
+        let project_id = model.session_state().project_id;
+        let workspace = block_on(workspace_persistence.load(&project_id))
+            .ok()
+            .flatten()
+            .and_then(|record| WorkspaceController::from_state(record.state).ok())
+            .unwrap_or_else(|| {
+                WorkspaceController::from_state(WorkspaceState::new())
+                    .expect("default workspace state is valid")
+            });
         Self {
             model: Some(model),
             root_focus: cx.focus_handle(),
             operation_in_flight: false,
-            workspace: WorkspaceController::default(),
+            workspace,
+            workspace_persistence,
             script_input: None,
             _script_subscription: None,
+            script_editor: None,
             script_source: String::new(),
             script_feedback: None,
             prototype_feedback: None,
+            prototype: None,
+            prototype_mode: false,
+            prototype_screen: None,
+            prototype_interaction: None,
         }
+    }
+
+    fn save_workspace(&self) {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        let project_id = model.session_state().project_id;
+        let record = WorkspaceRecord {
+            schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
+            project_id,
+            state: self.workspace.state().clone(),
+        };
+        let _ = block_on(self.workspace_persistence.save(&record));
+    }
+
+    fn execute_workspace(&mut self, command: WorkspaceCommand) {
+        if let Some(model) = self.model.as_ref() {
+            let _ = self.workspace.execute(command, model.session());
+            self.save_workspace();
+        }
+    }
+
+    fn enter_prototype(&mut self) {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        let snapshot = model.source_snapshot();
+        let screen_id = self
+            .prototype_screen
+            .clone()
+            .or_else(|| snapshot.design.screen_order.first().cloned());
+        let Some(screen_id) = screen_id else {
+            self.prototype_feedback =
+                Some("Prototype unavailable · no screens declared".to_owned());
+            return;
+        };
+        match studio_design::PrototypeSession::new_at(&snapshot.design, screen_id.clone()) {
+            Ok(prototype) => {
+                self.prototype = Some(prototype);
+                self.prototype_screen = Some(screen_id);
+                self.prototype_mode = true;
+                self.prototype_feedback = Some(
+                    "Prototype mode active · choose a route or interaction, then run".to_owned(),
+                );
+            }
+            Err(error) => {
+                self.prototype_feedback = Some(format!("Prototype diagnostic: {error}"));
+            }
+        }
+    }
+
+    fn leave_prototype(&mut self) {
+        self.prototype_mode = false;
+        self.prototype = None;
+        self.prototype_feedback = Some("Returned to Design mode · source unchanged".to_owned());
+    }
+
+    fn select_prototype_route(&mut self, screen_id: studio_design::ScreenId) {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        let snapshot = model.source_snapshot();
+        match studio_design::PrototypeSession::new_at(&snapshot.design, screen_id.clone()) {
+            Ok(prototype) => {
+                let route = prototype.active_route().unwrap_or("/").to_owned();
+                self.prototype = Some(prototype);
+                self.prototype_screen = Some(screen_id.clone());
+                self.prototype_mode = true;
+                self.prototype_feedback = Some(format!(
+                    "Prototype route selected · {screen_id} · {route} · ephemeral stack reset"
+                ));
+            }
+            Err(error) => self.prototype_feedback = Some(format!("Route diagnostic: {error}")),
+        }
+    }
+
+    fn select_prototype_interaction(&mut self, interaction_id: InteractionId) {
+        if !self.prototype_mode {
+            self.enter_prototype();
+        }
+        self.prototype_interaction = Some(interaction_id.clone());
+        self.prototype_feedback = Some(format!(
+            "Interaction selected · {interaction_id} · press Run Prototype"
+        ));
+    }
+
+    fn run_prototype(&mut self) {
+        if !self.prototype_mode {
+            self.enter_prototype();
+        }
+        let Some(prototype) = self.prototype.as_mut() else {
+            return;
+        };
+        let interaction_id = self.prototype_interaction.clone().or_else(|| {
+            prototype
+                .interaction_graph()
+                .entries()
+                .keys()
+                .next()
+                .cloned()
+        });
+        let Some(interaction_id) = interaction_id else {
+            self.prototype_feedback = Some("Prototype ready · no interactions declared".to_owned());
+            return;
+        };
+        self.prototype_interaction = Some(interaction_id.clone());
+        let dispatch = prototype.dispatch_interaction(&interaction_id);
+        self.prototype_screen = dispatch.state.active_screen_id.clone();
+        self.prototype_feedback = Some(format!(
+            "Prototype run · screen {} · route {} · {} effect(s) · {} diagnostic(s)",
+            dispatch
+                .state
+                .active_screen_id
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), ToString::to_string),
+            prototype.active_route().unwrap_or("/"),
+            dispatch.trace.len(),
+            dispatch.diagnostics.len()
+        ));
     }
 
     fn start_action(&mut self, action: FocusAction, cx: &mut GpuiContext<Self>) {
@@ -1220,20 +1407,41 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 return;
             }
             FocusAction::PrototypeRun => {
-                if let Some(model) = self.model.as_ref() {
-                    self.prototype_feedback = Some(match model.prototype_preview() {
-                        Ok(Some(dispatch)) => format!(
-                            "Prototype route {} · {} interaction(s) · {} diagnostic(s)",
-                            dispatch
-                                .state
-                                .active_screen_id
-                                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
-                            dispatch.interaction_ids.len(),
-                            dispatch.diagnostics.len()
-                        ),
-                        Ok(None) => "Prototype ready · no interactions declared".to_owned(),
-                        Err(error) => format!("Prototype diagnostic: {error}"),
-                    });
+                self.run_prototype();
+                cx.notify();
+                return;
+            }
+            FocusAction::PrototypeMode => {
+                if self.prototype_mode {
+                    self.leave_prototype();
+                } else {
+                    self.enter_prototype();
+                }
+                cx.notify();
+                return;
+            }
+            FocusAction::PrototypeRoute => {
+                if let Some(screen_id) = self
+                    .model
+                    .as_ref()
+                    .and_then(|model| model.source_snapshot().design.screen_order.first().cloned())
+                {
+                    self.select_prototype_route(screen_id);
+                }
+                cx.notify();
+                return;
+            }
+            FocusAction::PrototypeGraph => {
+                if let Some(interaction_id) = self.model.as_ref().and_then(|model| {
+                    model
+                        .source_snapshot()
+                        .design
+                        .interactions
+                        .keys()
+                        .next()
+                        .cloned()
+                }) {
+                    self.select_prototype_interaction(interaction_id);
                 }
                 cx.notify();
                 return;
@@ -1272,7 +1480,10 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             | FocusAction::ProfileTablet
             | FocusAction::ProfileDesktop
             | FocusAction::ProfileFourK
-            | FocusAction::PrototypeRun => unreachable!("synchronous action handled above"),
+            | FocusAction::PrototypeRun
+            | FocusAction::PrototypeMode
+            | FocusAction::PrototypeRoute
+            | FocusAction::PrototypeGraph => unreachable!("synchronous action handled above"),
         };
         let Ok(operation_id) = OperationId::new(format!("{name}-{revision}")) else {
             self.model = Some(model);
@@ -1438,7 +1649,10 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 | FocusAction::ProfileTablet
                 | FocusAction::ProfileDesktop
                 | FocusAction::ProfileFourK
-                | FocusAction::PrototypeRun => unreachable!("synchronous action handled above"),
+                | FocusAction::PrototypeRun
+                | FocusAction::PrototypeMode
+                | FocusAction::PrototypeRoute
+                | FocusAction::PrototypeGraph => unreachable!("synchronous action handled above"),
             };
             this.update(cx, |this, cx| {
                 this.model = Some(model);
@@ -1457,11 +1671,18 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         let Some(mut model) = self.model.take() else {
             return;
         };
+        let mut editor = self
+            .script_editor
+            .take()
+            .or_else(|| ScriptDocumentAdapter::from_snapshot(&model.source_snapshot()).ok());
         let source = self
             .script_input
             .as_ref()
             .map(|input| input.read(cx).value().to_string())
             .unwrap_or_else(|| model.script_source());
+        if let Some(editor) = editor.as_mut() {
+            editor.replace_source(source.clone());
+        }
         let revision = model.snapshot().revision_id.get().saturating_add(1);
         let Ok(operation_id) = OperationId::new(format!("focus-script-{revision}")) else {
             self.model = Some(model);
@@ -1482,6 +1703,11 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = model.commit_script_source(source, metadata).await;
+            if matches!(&outcome, ScriptCommitOutcome::Committed { .. })
+                && let Some(editor) = editor.as_mut()
+            {
+                let _ = editor.refresh_from_snapshot(&model.source_snapshot());
+            }
             let feedback = match &outcome {
                 ScriptCommitOutcome::Committed { receipt, .. } => format!(
                     "Script committed at revision {:?}",
@@ -1500,6 +1726,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             };
             this.update(cx, |this, cx| {
                 this.model = Some(model);
+                this.script_editor = editor;
                 this.operation_in_flight = false;
                 this.script_feedback = Some(feedback);
                 cx.notify();
@@ -1507,6 +1734,52 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             .ok();
         })
         .detach();
+    }
+
+    fn start_script_check(&mut self, cx: &mut GpuiContext<Self>) {
+        let Some(editor) = self.script_editor.as_mut() else {
+            self.script_feedback = Some("Studio Script editor is still loading".to_owned());
+            cx.notify();
+            return;
+        };
+        if let Some(input) = self.script_input.as_ref() {
+            editor.replace_source(input.read(cx).value().to_string());
+        }
+        let snapshot = editor.snapshot();
+        self.script_feedback = Some(if snapshot.diagnostics.is_empty() {
+            format!(
+                "Check passed · {} syntax token(s) · {} outline node(s) · {} base revision",
+                snapshot.syntax.len(),
+                snapshot.outline.len(),
+                snapshot.base_revision.get()
+            )
+        } else {
+            format!(
+                "Check found {} line-linked diagnostic(s)",
+                snapshot.diagnostics.len()
+            )
+        });
+        cx.notify();
+    }
+
+    fn start_script_format(&mut self, window: &mut Window, cx: &mut GpuiContext<Self>) {
+        let Some(editor) = self.script_editor.as_mut() else {
+            self.script_feedback = Some("Studio Script editor is still loading".to_owned());
+            cx.notify();
+            return;
+        };
+        let snapshot = editor.format_source();
+        self.script_source = snapshot.source.clone();
+        if let Some(input) = self.script_input.as_ref() {
+            input.update(cx, |input, cx| {
+                input.set_value(snapshot.source.clone(), window, cx)
+            });
+        }
+        self.script_feedback = Some(format!(
+            "Formatted · {} syntax token(s) · committing parser-of-record buffer",
+            snapshot.syntax.len()
+        ));
+        self.start_script_commit(cx);
     }
 
     fn render_node(
@@ -1566,6 +1839,11 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 .as_ref()
                 .map(FocusViewModel::script_source)
                 .unwrap_or_default();
+            if self.script_editor.is_none() {
+                self.script_editor = self.model.as_ref().and_then(|model| {
+                    ScriptDocumentAdapter::from_snapshot(&model.source_snapshot()).ok()
+                });
+            }
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(source.clone())
@@ -1574,6 +1852,9 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             let subscription = cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.script_source = input.read(cx).value().to_string();
+                    if let Some(editor) = this.script_editor.as_mut() {
+                        editor.replace_source(this.script_source.clone());
+                    }
                     this.script_feedback =
                         Some("Unsaved script buffer · press Check & Commit".to_owned());
                     cx.notify();
@@ -1665,6 +1946,70 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .and_then(|model| model.session_state().device_profile)
             .unwrap_or_else(|| "base".to_owned());
         let token_count = self.model.as_ref().map_or(0, |model| model.tokens().len());
+        let token_entries = self
+            .model
+            .as_ref()
+            .map(|model| {
+                model
+                    .tokens()
+                    .into_iter()
+                    .map(|token| {
+                        let usages = model.token_usages(token.id.clone());
+                        (token, usages)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let token_provenance = self
+            .model
+            .as_ref()
+            .map(FocusViewModel::node_token_values)
+            .unwrap_or_default();
+        let prototype_routes = self
+            .model
+            .as_ref()
+            .map(|model| {
+                model
+                    .source_snapshot()
+                    .design
+                    .screen_order
+                    .iter()
+                    .filter_map(|screen_id| {
+                        model
+                            .source_snapshot()
+                            .design
+                            .screens
+                            .get(screen_id)
+                            .map(|screen| {
+                                (screen.id.clone(), screen.name.clone(), screen.route.clone())
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let prototype_interactions = self
+            .model
+            .as_ref()
+            .map(|model| {
+                studio_design::InteractionGraph::from_design(&model.source_snapshot().design)
+                    .entries()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let script_snapshot = self
+            .script_editor
+            .as_ref()
+            .map(ScriptDocumentAdapter::snapshot)
+            .unwrap_or_else(|| EditorSnapshot {
+                source: self.script_source.clone(),
+                diagnostics: Vec::new(),
+                syntax: Vec::new(),
+                outline: Vec::new(),
+                dirty: false,
+                base_revision: snapshot.revision_id,
+            });
         let action_button = |id: &'static str,
                              label: &'static str,
                              action: FocusAction,
@@ -1686,9 +2031,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 .label(label)
                 .secondary()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(model) = this.model.as_ref() {
-                        let _ = this.workspace.execute(command, model.session());
-                    }
+                    this.execute_workspace(command);
                     cx.notify();
                 }))
         };
@@ -1707,9 +2050,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     })
                     .primary()
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(model) = this.model.as_ref() {
-                            let _ = this.workspace.toggle(model.session());
-                        }
+                        this.execute_workspace(WorkspaceCommand::ToggleView);
                         cx.notify();
                     })),
             )
@@ -1756,22 +2097,26 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             ))
             .child(action_button(
                 "focus-prototype-mode",
-                "Prototype mode",
-                FocusAction::PrototypeRun,
+                if self.prototype_mode {
+                    "Return to Design"
+                } else {
+                    "Enter Prototype"
+                },
+                FocusAction::PrototypeMode,
                 false,
                 cx,
             ))
             .child(action_button(
                 "focus-prototype-route",
-                "Prototype route",
-                FocusAction::PrototypeRun,
+                "Select start route",
+                FocusAction::PrototypeRoute,
                 false,
                 cx,
             ))
             .child(action_button(
                 "focus-prototype-graph",
-                "Interaction graph",
-                FocusAction::PrototypeRun,
+                "Select interaction",
+                FocusAction::PrototypeGraph,
                 false,
                 cx,
             ))
@@ -1800,6 +2145,22 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 cx,
             ));
         let workbench_surface = if active_view == studio_design::EditorView::Workbench {
+            let panel_label = |id: &'static str, panel: studio_design::PanelId, content: String| {
+                let state = self.workspace.state().workbench.panel(panel);
+                div().id(id).role(Role::Pane).child(format!(
+                    "{content} · {}x{} at {},{} · {}",
+                    state.geometry.width,
+                    state.geometry.height,
+                    state.geometry.x,
+                    state.geometry.y,
+                    if state.collapsed { "collapsed" } else { "open" }
+                ))
+            };
+            let hierarchy_count = hierarchy
+                .as_ref()
+                .map_or(0, |hierarchy| hierarchy.roots.len());
+            let diagnostic_count = diagnostic_details.len();
+            let interaction_count = prototype_interactions.len();
             div()
                 .id("studio-workbench-view")
                 .role(Role::Pane)
@@ -1811,54 +2172,46 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 .border_1()
                 .border_color(rgb(COLOR_BORDER))
                 .bg(rgb(COLOR_PANEL))
-                .child(
-                    div()
-                        .id("workbench-screens-hierarchy")
-                        .role(Role::Pane)
-                        .child("Screens & Hierarchy"),
-                )
-                .child(
-                    div()
-                        .id("workbench-library")
-                        .role(Role::Pane)
-                        .child("Library"),
-                )
-                .child(
-                    div()
-                        .id("workbench-canvas-controls")
-                        .role(Role::Pane)
-                        .child("Canvas & Profiles"),
-                )
-                .child(
-                    div()
-                        .id("workbench-inspector")
-                        .role(Role::Pane)
-                        .child("Inspector"),
-                )
-                .child(
-                    div()
-                        .id("workbench-diagnostics")
-                        .role(Role::Pane)
-                        .child("Diagnostics"),
-                )
-                .child(
-                    div()
-                        .id("workbench-interactions")
-                        .role(Role::Pane)
-                        .child("Interactions"),
-                )
-                .child(
-                    div()
-                        .id("workbench-agent-activity")
-                        .role(Role::Pane)
-                        .child("Agent Activity"),
-                )
-                .child(
-                    div()
-                        .id("workbench-history")
-                        .role(Role::Pane)
-                        .child("History"),
-                )
+                .child(panel_label(
+                    "workbench-screens-hierarchy",
+                    studio_design::PanelId::ScreensHierarchy,
+                    format!("Screens & Hierarchy · {hierarchy_count} root(s)"),
+                ))
+                .child(panel_label(
+                    "workbench-library",
+                    studio_design::PanelId::Library,
+                    "Library · authoritative snapshot".to_owned(),
+                ))
+                .child(panel_label(
+                    "workbench-canvas-controls",
+                    studio_design::PanelId::CanvasControls,
+                    format!("Canvas & Profiles · {profile}"),
+                ))
+                .child(panel_label(
+                    "workbench-inspector",
+                    studio_design::PanelId::Inspector,
+                    format!("Inspector · {selected_label}"),
+                ))
+                .child(panel_label(
+                    "workbench-diagnostics",
+                    studio_design::PanelId::Diagnostics,
+                    format!("Diagnostics · {diagnostic_count} issue(s)"),
+                ))
+                .child(panel_label(
+                    "workbench-interactions",
+                    studio_design::PanelId::Interactions,
+                    format!("Interactions · {interaction_count} graph node(s)"),
+                ))
+                .child(panel_label(
+                    "workbench-agent-activity",
+                    studio_design::PanelId::AgentActivity,
+                    "Agent Activity · shared session state".to_owned(),
+                ))
+                .child(panel_label(
+                    "workbench-history",
+                    studio_design::PanelId::History,
+                    "History · immutable revisions and undo".to_owned(),
+                ))
                 .into_any_element()
         } else {
             div().id("studio-workbench-view-hidden").into_any_element()
@@ -1943,7 +2296,57 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                             })),
                     )
                     .child(div().text_sm().child(status))
-                    .child(div().text_sm().child(format!("Tokens: {token_count}")))
+                    .child(
+                        div()
+                            .id("focus-token-browser")
+                            .role(Role::List)
+                            .aria_label("Design token browser")
+                            .child(format!("Token browser · {token_count} shared token(s)"))
+                            .children(token_entries.iter().map(|(token, usages)| {
+                                div()
+                                    .id(format!("focus-token-entry-{}", token.id))
+                                    .role(Role::ListItem)
+                                    .aria_label(format!("Token {}", token.name))
+                                    .child(format!(
+                                        "{} · shared {:?} · {} usage(s)",
+                                        token.name,
+                                        token.value,
+                                        usages.len()
+                                    ))
+                                    .children(usages.iter().map(|usage| {
+                                        div()
+                                            .id(format!(
+                                                "focus-token-usage-{}-{}",
+                                                token.id, usage.property
+                                            ))
+                                            .text_xs()
+                                            .child(format!(
+                                                "Usage · {} · {} · {}",
+                                                usage.owner,
+                                                usage.property,
+                                                usage.node_id
+                                                    .as_ref()
+                                                    .map_or_else(|| "global".to_owned(), ToString::to_string)
+                                            ))
+                                    }))
+                            }))
+                            .children(token_provenance.iter().map(|value| {
+                                div()
+                                    .id(format!("focus-token-provenance-{}", value.property))
+                                    .text_xs()
+                                    .child(format!(
+                                        "{} · shared {:?} · local {:?} · {}",
+                                        value.property,
+                                        value.shared_value,
+                                        value.local_value,
+                                        if value.local_value.is_some() {
+                                            "local override"
+                                        } else {
+                                            "shared provenance"
+                                        }
+                                    ))
+                            })),
+                    )
                     .child(div().text_sm().child(prototype_feedback))
                     .child(div().text_sm().child("Layout authoring"))
                     .child(action_button(
@@ -2024,6 +2427,44 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                         token_count == 0,
                         cx,
                     ))
+                    .child(div().text_sm().child("Token values are session-backed; edits show shared/local provenance and usage."))
+                    .child(
+                        div()
+                            .id("focus-prototype-routes")
+                            .role(Role::List)
+                            .aria_label("Prototype route picker")
+                            .child("Prototype routes")
+                            .children(prototype_routes.iter().map(|(screen_id, name, route)| {
+                                let screen_id = screen_id.clone();
+                                Button::new(format!("focus-prototype-route-{screen_id}"))
+                                    .label(format!("{name} · {route}"))
+                                    .secondary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_prototype_route(screen_id.clone());
+                                        cx.notify();
+                                    }))
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("focus-prototype-graph")
+                            .role(Role::List)
+                            .aria_label("Prototype interaction graph")
+                            .child("Interaction graph")
+                            .children(prototype_interactions.iter().map(|entry| {
+                                let interaction_id = entry.interaction_id.clone();
+                                Button::new(format!("focus-prototype-interaction-{interaction_id}"))
+                                    .label(format!(
+                                        "{} · {:?} · {:?}",
+                                        interaction_id, entry.event, entry.action
+                                    ))
+                                    .secondary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_prototype_interaction(interaction_id.clone());
+                                        cx.notify();
+                                    }))
+                            })),
+                    )
                     .child(
                         div()
                             .id("focus-script-panel")
@@ -2049,42 +2490,85 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                             .id("focus-script-diagnostics")
                             .role(Role::Status)
                             .text_sm()
-                            .child("Line-linked diagnostics"),
+                            .child(if script_snapshot.diagnostics.is_empty() {
+                                "No line-linked diagnostics".to_owned()
+                            } else {
+                                script_snapshot
+                                    .diagnostics
+                                    .iter()
+                                    .map(|diagnostic| {
+                                        format!(
+                                            "line {}:{} · {} · {}",
+                                            diagnostic.line(),
+                                            diagnostic.column(),
+                                            diagnostic.code,
+                                            diagnostic.message
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" | ")
+                            }),
                     )
                     .child(
                         div()
                             .id("focus-script-outline")
                             .role(Role::List)
                             .text_sm()
-                            .child("Outline · syntax highlights · canvas diff/comments"),
+                            .child(format!(
+                                "Outline {} node(s) · syntax highlights {} token(s)",
+                                script_snapshot.outline.len(),
+                                script_snapshot.syntax.len()
+                            ))
+                            .children(script_snapshot.outline.iter().map(|outline| {
+                                div()
+                                    .id(format!("focus-script-outline-{}", outline.id))
+                                    .role(Role::ListItem)
+                                    .child(format!(
+                                        "{} <{}> · line {}:{}",
+                                        outline.id, outline.kind, outline.line, outline.column
+                                    ))
+                            })),
                     )
                     .child(
                         Button::new("focus-script-check")
-                            .label("Check & Commit")
+                            .label("Check")
                             .primary()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.start_script_commit(cx);
+                                this.start_script_check(cx);
                             })),
                     )
                     .child(
                         Button::new("focus-script-format")
                             .label("Format & Commit")
                             .secondary()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.start_script_commit(cx);
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.start_script_format(window, cx);
                             })),
                     )
                     .child(
                         div()
                             .id("focus-script-diff")
                             .text_sm()
-                            .child("Canvas ↔ text diff"),
+                            .child(if script_snapshot.dirty {
+                                "Canvas ↔ text diff · pending authored changes"
+                            } else {
+                                "Canvas ↔ text diff · synchronized"
+                            }),
                     )
                     .child(
                         div()
                             .id("focus-script-comments")
                             .text_sm()
-                            .child("Source comments retained"),
+                            .child(format!(
+                                "Source comments retained · {} comment token(s)",
+                                script_snapshot
+                                    .syntax
+                                    .iter()
+                                    .filter(|token| {
+                                        token.kind == studio_design::SyntaxTokenKind::Comment
+                                    })
+                                    .count()
+                            )),
                     )
                     .child(div().text_sm().child("Hierarchy and canvas controls"))
                     .children(restore_selection.iter().map(|node_id| {
