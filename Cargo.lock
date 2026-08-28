@@ -8060,7 +8060,6 @@ dependencies = [
  "sha2 0.11.0",
  "studio-actions",
  "studio-components",
- "studio-design",
  "studio-host",
  "studio-navigation",
  "studio-net",
@@ -8110,6 +8109,25 @@ dependencies = [
  "studio-plugin-registry",
  "studio-protocol",
  "studio-script",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "studio-designer"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "studio-design",
+ "studio-host",
+ "studio-protocol",
+ "studio-security",
+ "tempfile",
  "thiserror 2.0.20",
 ]
 

@@ -6,11 +6,11 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use studio_app::{FocusSelectionError, FocusViewModel, FocusViewState};
 use studio_design::{
     Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, InMemoryDesignerPersistence,
     OperationId, ProjectId, PropertyValue, Screen, ScreenId, StudioDesign, UndoGroupId,
 };
+use studio_designer::{FocusSelectionError, FocusViewModel, FocusViewState};
 use studio_protocol::NodeKind;
 
 struct NoopWake;
@@ -46,6 +46,12 @@ fn seed() -> StudioDesign {
     node.properties.insert(
         "text".to_owned(),
         PropertyValue::String("Before".to_owned()),
+    );
+    node.properties.insert(
+        studio_design::CANVAS_RECT_PROPERTY.to_owned(),
+        studio_design::CanvasRect::new(8.0, 8.0, 160.0, 32.0)
+            .to_property_value()
+            .unwrap(),
     );
     let mut design = StudioDesign::empty(project_id, "Focus project");
     design.nodes.insert(node_id.clone(), node);
@@ -137,4 +143,54 @@ fn focus_reports_selection_and_projection_failures_explicitly() {
         model.snapshot().state,
         FocusViewState::CommandRejected(_)
     ));
+}
+
+#[test]
+fn ticket_40_controls_submit_through_the_session_authority() {
+    let mut model = model();
+    let node_id = studio_design::NodeId::new("headline").unwrap();
+    model.select(&node_id).unwrap();
+
+    let moved = block_on(model.nudge_selected(
+        OperationId::new("nudge-1").unwrap(),
+        actor(),
+        UndoGroupId::new("nudge").unwrap(),
+        studio_design::CanvasPoint::new(1.0, 0.0),
+    ));
+    assert!(matches!(moved, studio_design::CommandOutcome::Accepted(_)));
+    assert_eq!(model.snapshot().revision_id.get(), 1);
+
+    let renamed = block_on(model.rename_selected(
+        OperationId::new("rename-1").unwrap(),
+        actor(),
+        UndoGroupId::new("rename").unwrap(),
+    ));
+    assert!(matches!(
+        renamed,
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    assert_eq!(
+        model.snapshot().selected_node.unwrap().name,
+        "Renamed layer"
+    );
+
+    let source = include_str!("../src/focus_view.rs");
+    for control in [
+        "focus-drag",
+        "focus-hit-test",
+        "focus-nudge-left",
+        "focus-resize",
+        "focus-rename",
+        "focus-reparent",
+        "focus-duplicate",
+        "focus-delete",
+        "focus-restore",
+        "focus-diagnostic-details",
+        "focus-retry",
+    ] {
+        assert!(
+            source.contains(control),
+            "missing visible control {control}"
+        );
+    }
 }

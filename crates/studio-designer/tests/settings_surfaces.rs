@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use studio_app::SafeDiagnostic;
-use studio_app::{
+use studio_designer::SafeDiagnostic;
+use studio_designer::{
     AboutInfo, AccessibilitySettings, BuildSigningSettings, DiagnosticConsent, FeedbackConsent,
     FeedbackDraft, FeedbackError, FeedbackPayload, FeedbackService, FeedbackTransport,
     GlobalSettingChange, HelpNavigator, InMemorySettingsPersistence, KeyboardAction,
@@ -175,7 +175,7 @@ fn support_and_help_surfaces_have_stable_keyboard_order() {
     let mut help = HelpNavigator::new();
     assert_eq!(help.current().title, "Welcome to Studio");
     help.next();
-    assert_eq!(help.current().topic, studio_app::HelpTopic::Identity);
+    assert_eq!(help.current().topic, studio_designer::HelpTopic::Identity);
     help.previous();
     assert_eq!(help.current().steps.len(), 3);
 

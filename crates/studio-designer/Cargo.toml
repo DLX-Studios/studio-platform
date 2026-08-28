@@ -1,0 +1,42 @@
+[package]
+name = "studio-designer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-component-assets = { path = "../../vendor/gpui-component-assets" }
+gpui_platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+studio-design = { path = "../studio-design" }
+studio-host = { path = "../studio-host" }
+studio-protocol = { path = "../studio-protocol" }
+studio-security = { path = "../studio-security" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[[test]]
+name = "focus_view"
+path = "tests/focus_view.rs"
+
+[[test]]
+name = "native_bootstrap"
+path = "tests/native_bootstrap.rs"
+
+[[test]]
+name = "resilience_routes"
+path = "tests/resilience_routes.rs"
+
+[[test]]
+name = "settings_surfaces"
+path = "tests/settings_surfaces.rs"
+
+[lints]
+workspace = true

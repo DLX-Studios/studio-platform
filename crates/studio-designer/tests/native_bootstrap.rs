@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use studio_app::{NativeProductState, ProductRoute};
+use studio_designer::{NativeProductState, ProductRoute};
 use studio_host::{IdentityKind, IdentitySnapshot, IdentityState, IdentitySummary};
 
 fn first_launch() -> NativeProductState {
@@ -68,4 +68,16 @@ fn product_routes_have_stable_paths_for_recovery_and_sync_entry_points() {
         .path(),
         "/identity/local-1/unlock"
     );
+}
+
+#[test]
+fn designer_binary_owns_the_product_shell_without_runtime_bundle_admission() {
+    let main = include_str!("../src/main.rs");
+    let bootstrap = include_str!("../src/bootstrap.rs");
+    assert!(main.contains("NativeProductBootstrap"));
+    assert!(main.contains("NativeProductShell"));
+    assert!(bootstrap.contains("FocusView::new"));
+    assert!(bootstrap.contains("LocalStoreDesignerPersistence"));
+    assert!(!main.contains("LaunchRequest"));
+    assert!(!bootstrap.contains("FoundationGallery"));
 }

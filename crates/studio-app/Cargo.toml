@@ -16,7 +16,6 @@ serde_json.workspace = true
 sha2.workspace = true
 studio-actions = { path = "../studio-actions" }
 studio-components = { path = "../studio-components" }
-studio-design = { path = "../studio-design" }
 studio-host = { path = "../studio-host" }
 studio-navigation = { path = "../studio-navigation" }
 studio-net = { path = "../studio-net" }

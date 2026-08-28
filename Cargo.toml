@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/studio-actions",
     "crates/studio-app",
+    "crates/studio-designer",
     "crates/studio-cli",
     "crates/studio-components",
     "crates/studio-design",
