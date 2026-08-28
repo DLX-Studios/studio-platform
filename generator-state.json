@@ -1,16 +1,16 @@
 {
-  "sprint": "02-remediation-01",
-  "base_commit": "0530e765070a9b4e27bc985e43068657896868cc",
+  "sprint": "03-editor-depth",
+  "base_commit": "06dcd9230469b63d48447a1a0f004f60c93eb185",
   "breadcrumbs": [
     {
-      "tried": "resume previous app-shell remediation",
-      "found": "requirements moved the Designer shell out of studio-app",
-      "fix": "extracted product modules into studio-designer and restored studio-app Runtime-only"
+      "tried": "negotiate the Sprint 03 contract",
+      "found": "Evaluator accepted G0 Ticket 38 plus bounded T41-T47 criteria without scope relaxation",
+      "fix": "persisted the accepted contract and rubric under the canonical sprint-03 artifact"
     },
     {
-      "tried": "compose Project route",
-      "found": "FocusViewModel needs durable LocalStoreDesignerPersistence and async open",
-      "fix": "Designer shell opens or durably seeds a project through the host persistence adapter"
+      "tried": "inspect Ticket 38 before editor-depth work",
+      "found": "public session tests cover core composition, override, conflict, and closed-schema paths, while status/prose remain stale and CLI/reopen breadth must be evidenced",
+      "fix": "execute the focused G0 gate and correct only genuine gaps before T41-T47"
     }
   ]
 }
