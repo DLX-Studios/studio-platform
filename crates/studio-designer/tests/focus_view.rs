@@ -41,7 +41,16 @@ fn actor() -> Actor {
 fn seed() -> StudioDesign {
     let project_id = ProjectId::new("focus-project").unwrap();
     let screen_id = ScreenId::new("home").unwrap();
+    let root_id = studio_design::NodeId::new("canvas").unwrap();
     let node_id = studio_design::NodeId::new("headline").unwrap();
+    let mut root = DesignNode::primitive(root_id.clone(), "Canvas", NodeKind::Box);
+    root.children.push(node_id.clone());
+    root.properties.insert(
+        studio_design::CANVAS_RECT_PROPERTY.to_owned(),
+        studio_design::CanvasRect::new(0.0, 0.0, 200.0, 80.0)
+            .to_property_value()
+            .unwrap(),
+    );
     let mut node = DesignNode::primitive(node_id.clone(), "Headline", NodeKind::Text);
     node.properties.insert(
         "text".to_owned(),
@@ -54,11 +63,19 @@ fn seed() -> StudioDesign {
             .unwrap(),
     );
     let mut design = StudioDesign::empty(project_id, "Focus project");
-    design.nodes.insert(node_id.clone(), node);
+    design
+        .nodes
+        .extend([(root_id.clone(), root), (node_id.clone(), node)]);
     design.parents.insert(
-        node_id.clone(),
+        root_id.clone(),
         studio_design::NodeParent::Screen {
             screen_id: screen_id.clone(),
+        },
+    );
+    design.parents.insert(
+        node_id.clone(),
+        studio_design::NodeParent::Node {
+            node_id: root_id.clone(),
         },
     );
     design.screens.insert(
@@ -68,7 +85,7 @@ fn seed() -> StudioDesign {
             id: screen_id,
             name: "Home".to_owned(),
             route: "/home".to_owned(),
-            root_node_id: node_id,
+            root_node_id: root_id,
         },
     );
     design.screen_order.push(ScreenId::new("home").unwrap());
@@ -109,13 +126,13 @@ fn focus_selection_inspector_edit_and_undo_are_session_backed() {
     ));
     let edited = model.snapshot();
     assert_eq!(edited.revision_id.get(), 1);
-    assert_eq!(edited.canvas.unwrap().props["text"], "After");
+    assert_eq!(edited.canvas.unwrap().children[0].props["text"], "After");
 
     let undone = block_on(model.undo(OperationId::new("undo-1").unwrap(), actor()));
     assert!(matches!(undone, studio_design::CommandOutcome::Accepted(_)));
     let restored = model.snapshot();
     assert_eq!(restored.revision_id.get(), 2);
-    assert_eq!(restored.canvas.unwrap().props["text"], "Before");
+    assert_eq!(restored.canvas.unwrap().children[0].props["text"], "Before");
 }
 
 #[test]
