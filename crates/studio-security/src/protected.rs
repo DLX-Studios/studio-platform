@@ -59,7 +59,9 @@ pub enum ApplicationEnvironment {
 }
 
 impl ApplicationEnvironment {
-    pub(crate) const fn label(self) -> &'static str {
+    /// Stable wire/storage label for this deployment environment.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Development => "development",
             Self::Staging => "staging",

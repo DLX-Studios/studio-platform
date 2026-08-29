@@ -438,6 +438,7 @@ fn validate_schema_metadata(metadata: &StoredMetadata) -> Result<(), LocalStoreD
 /// Returns the stored schema metadata, initializing it on a fresh store.
 async fn ensure_schema_metadata(
     database: &Surreal<Db>,
+    initialize_if_missing: bool,
 ) -> Result<StoredMetadata, LocalStoreDiagnosticCode> {
     match read_schema_metadata(database).await? {
         Some(found) => {
@@ -445,6 +446,9 @@ async fn ensure_schema_metadata(
             Ok(found)
         }
         None => {
+            if !initialize_if_missing {
+                return Err(LocalStoreDiagnosticCode::SchemaMetadataCorrupt);
+            }
             let initial = StoredMetadata {
                 schema_version: STORE_SCHEMA_VERSION,
                 engine_format_version: ENGINE_FORMAT_VERSION,
@@ -556,7 +560,7 @@ impl EmbeddedLocalStore {
         select_session(&database)
             .await
             .map_err(LocalStoreError::new)?;
-        ensure_schema_metadata(&database)
+        ensure_schema_metadata(&database, fresh_store)
             .await
             .map_err(LocalStoreError::new)?;
         if fresh_store {
@@ -691,7 +695,7 @@ impl EmbeddedLocalStore {
 impl LocalStore for EmbeddedLocalStore {
     fn metadata(&self) -> impl Future<Output = Result<StoreMetadata, LocalStoreError>> + Send {
         async move {
-            ensure_schema_metadata(&self.database)
+            ensure_schema_metadata(&self.database, false)
                 .await
                 .map(|found| StoreMetadata {
                     schema_version: found.schema_version,
@@ -981,7 +985,7 @@ mod tests {
             "fresh engine has no schema metadata yet"
         );
 
-        ensure_schema_metadata(&database)
+        ensure_schema_metadata(&database, true)
             .await
             .expect("initializes metadata");
         let stored = read_schema_metadata(&database).await.unwrap();
@@ -1030,7 +1034,7 @@ mod tests {
     async fn typed_batches_persist_and_read_back_atomically_on_the_memory_engine() {
         let database = memory_database().await;
         select_session(&database).await.expect("session selects");
-        ensure_schema_metadata(&database)
+        ensure_schema_metadata(&database, true)
             .await
             .expect("schema initializes");
 
