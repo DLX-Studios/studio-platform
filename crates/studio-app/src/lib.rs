@@ -23,7 +23,7 @@
 )]
 
 mod action_dispatch;
-pub mod agent_conversation;
+
 pub mod cli;
 mod confirmation_surface;
 mod diagnostic;
