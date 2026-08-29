@@ -45,6 +45,7 @@ use crate::project_dashboard::{
     ProjectDashboard, ProjectRecord,
 };
 use crate::settings::{GlobalSettingChange, GlobalSettings, ProjectSettings};
+use crate::welcome::welcome_screen;
 use crate::{
     IdentityShellRoute, IdentityShellState, SettingsController, SettingsError, SettingsErrorCode,
     SettingsPersistence,
@@ -386,6 +387,26 @@ impl NativeProductState {
         self.route = ProductRoute::IdentityChooser;
     }
 
+    /// Leave welcome for the local identity gate: sign-in, unlock, or create.
+    pub fn open_local_identity(&mut self) {
+        self.identity.dismiss_welcome();
+        let selected = self
+            .identity
+            .identities()
+            .first()
+            .map(|identity| (identity.identity_id.clone(), identity.state));
+        if let Some((identity_id, state)) = selected {
+            let _ = self.identity.choose_identity(&identity_id);
+            self.route = match state {
+                IdentityState::Available => ProductRoute::SignIn { identity_id },
+                IdentityState::Locked => ProductRoute::Unlock { identity_id },
+            };
+        } else {
+            self.identity.begin_create_identity();
+            self.route = ProductRoute::CreateIdentity;
+        }
+    }
+
     /// Navigate to a product route, rejecting authenticated routes when signed out.
     pub fn navigate(&mut self, route: ProductRoute) -> bool {
         if matches!(
@@ -518,6 +539,13 @@ impl NativeProductBootstrap {
     pub fn dismiss_welcome(&mut self) -> Result<(), IdentityError> {
         self.identity_service.dismiss_welcome_blocking()?;
         self.state.dismiss_welcome();
+        Ok(())
+    }
+
+    /// Persist welcome dismissal and open the local identity gate.
+    pub fn open_local_identity(&mut self) -> Result<(), IdentityError> {
+        self.identity_service.dismiss_welcome_blocking()?;
+        self.state.open_local_identity();
         Ok(())
     }
 
@@ -1098,6 +1126,19 @@ impl Render for NativeProductShell {
         let indicator = self.bootstrap.state().indicator().clone();
         let route_is_unlock = matches!(&route, ProductRoute::Unlock { .. });
         self.ensure_identity_inputs(&route, window, cx);
+        if matches!(&route, ProductRoute::Welcome) {
+            return welcome_screen(
+                cx.listener(|this, _, _, cx| {
+                    let _ = this.bootstrap.dismiss_welcome();
+                    cx.notify();
+                }),
+                cx.listener(|this, _, _, cx| {
+                    let _ = this.bootstrap.open_local_identity();
+                    cx.notify();
+                }),
+            )
+            .into_any_element();
+        }
         let mut content = div()
             .id("native-product-content")
             .flex()
@@ -1113,17 +1154,7 @@ impl Render for NativeProductShell {
             );
 
         match route {
-            ProductRoute::Welcome => {
-                content =
-                    content
-                        .child("Your local Studio projects stay available offline.")
-                        .child(Button::new("dismiss-welcome").label("Continue").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                let _ = this.bootstrap.dismiss_welcome();
-                                cx.notify();
-                            }),
-                        ));
-            }
+            ProductRoute::Welcome => {}
             ProductRoute::IdentityChooser => {
                 content = content.child("Choose a remembered identity or create a local identity.");
                 let identities = self.bootstrap.state().identity().identities().to_vec();
@@ -1471,6 +1502,6 @@ impl Render for NativeProductShell {
             }
         }
 
-        content
+        content.into_any_element()
     }
 }

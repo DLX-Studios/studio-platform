@@ -44,6 +44,43 @@ fn welcome_dismissal_reaches_identity_gate_and_support_routes_remain_reachable()
 }
 
 #[test]
+fn welcome_get_started_copy_matches_application_shell_monolith() {
+    let welcome = include_str!("../src/welcome.rs");
+    assert!(welcome.contains("Design the interface."));
+    assert!(welcome.contains("Shape the runtime."));
+    assert!(welcome.contains("Get started →"));
+    assert!(welcome.contains("Open local identity"));
+    assert!(welcome.contains("dismiss-welcome"));
+    assert!(include_str!("../src/bootstrap.rs").contains("welcome_screen"));
+}
+
+#[test]
+fn welcome_open_local_identity_signs_in_when_an_identity_exists() {
+    let mut state = first_launch();
+    state.open_local_identity();
+    assert_eq!(
+        state.route(),
+        &ProductRoute::SignIn {
+            identity_id: "local-1".to_owned()
+        }
+    );
+}
+
+#[test]
+fn welcome_open_local_identity_creates_when_the_device_is_empty() {
+    let mut state = NativeProductState::new(
+        IdentitySnapshot {
+            welcome_dismissed: false,
+            identities: Vec::new(),
+            sessions: Vec::new(),
+        },
+        None,
+    );
+    state.open_local_identity();
+    assert_eq!(state.route(), &ProductRoute::CreateIdentity);
+}
+
+#[test]
 fn product_routes_have_stable_paths_for_recovery_and_sync_entry_points() {
     assert_eq!(ProductRoute::Settings.path(), "/settings");
     assert_eq!(ProductRoute::SyncStatus.path(), "/dashboard/sync");

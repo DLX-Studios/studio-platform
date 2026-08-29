@@ -33,6 +33,8 @@ pub mod identity_shell;
 pub mod project_dashboard;
 pub mod resilience;
 pub mod settings;
+mod shell_theme;
+mod welcome;
 
 pub use bootstrap::{
     BootstrapError, LocalStoreDashboardPersistence, LocalStoreSettingsPersistence,

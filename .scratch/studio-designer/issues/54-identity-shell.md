@@ -11,3 +11,7 @@
 - [ ] Wrong password locks; unlock requires password; remembered session resumes and is revocable from another session's view
 - [ ] Multiple local identities keep projects isolated pre-authentication
 - [ ] Entire journey functions with networking disabled
+
+## Implementation notes
+
+Product welcome GPUI surface now follows application-shell Monolith (variant A): native title bar, split copy/board, canvas-mono tokens, `Get started →` dismisses to the identity chooser, `Open local identity` dismisses then routes to sign-in/unlock or create. Chooser, create, sign-in, and unlock screens are still the stub shell and remain in this ticket.

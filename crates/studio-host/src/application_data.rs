@@ -99,7 +99,7 @@ const HOST_MAX_QUERY_BYTES: usize = 64 * 1024;
 const HOST_MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
 const HOST_MAX_QUERY_DURATION: Duration = Duration::from_secs(10);
 
-    /// Opaque host-derived partition for one verified publisher/application/environment tuple.
+/// Opaque host-derived partition for one verified publisher/application/environment tuple.
 ///
 /// The digest is deliberately not exposed. Guest requests are bound to a namespace by the host
 /// after package verification and contain no namespace or database selector.
