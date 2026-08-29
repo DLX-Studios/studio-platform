@@ -840,6 +840,9 @@ fn scan_source(
                 documentation: None,
             });
         }
+        for schema in scan_json_response_schemas(uri, source) {
+            schemas.insert(schema.name.clone(), schema);
+        }
     }
     for schema in scan_schemas(uri, source) {
         schemas.insert(schema.name.clone(), schema);
@@ -904,6 +907,65 @@ fn scan_plugin_json_names(source: &str) -> Vec<String> {
     let mut names = BTreeSet::new();
     visit(&value, &mut names);
     names.into_iter().collect()
+}
+
+/// Index top-level fields from plugin route response schemas.
+///
+/// Plugin manifests are the source of truth for host-mediated response
+/// shapes.  They use JSON Schema under `routes[].responseSchema`; keeping the
+/// extraction here intentionally shallow exposes the fields that can be used
+/// directly as `$item.field` bindings without pretending to type arbitrary
+/// nested JSON Schema expressions.
+fn scan_json_response_schemas(uri: &str, source: &str) -> Vec<ResponseSchema> {
+    let Ok(value) = serde_json::from_str::<Value>(source) else {
+        return Vec::new();
+    };
+    let Some(routes) = value.get("routes").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    routes
+        .iter()
+        .filter_map(|route| {
+            let name = route.get("id").and_then(Value::as_str)?;
+            let response_schema = route.get("responseSchema")?;
+            let schema = if response_schema.get("type").and_then(Value::as_str) == Some("array") {
+                response_schema.get("items")?
+            } else {
+                response_schema
+            };
+            let properties = schema.get("properties").and_then(Value::as_object)?;
+            let fields = properties
+                .iter()
+                .map(|(field, definition)| {
+                    (
+                        field.clone(),
+                        SchemaField {
+                            name: field.clone(),
+                            ty: json_schema_type(definition),
+                            location: Location {
+                                uri: format!(
+                                    "{uri}#routes/{name}/responseSchema/properties/{field}"
+                                ),
+                                range: Range::default(),
+                            },
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            (!fields.is_empty()).then_some(ResponseSchema {
+                name: name.to_owned(),
+                fields,
+            })
+        })
+        .collect()
+}
+
+fn json_schema_type(definition: &Value) -> String {
+    definition
+        .get("type")
+        .and_then(Value::as_str)
+        .map_or_else(|| "unknown".to_owned(), ToOwned::to_owned)
 }
 
 fn scan_schemas(uri: &str, source: &str) -> Vec<ResponseSchema> {

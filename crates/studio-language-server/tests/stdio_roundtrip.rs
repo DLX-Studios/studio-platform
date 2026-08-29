@@ -4,7 +4,7 @@
 use std::io::Cursor;
 
 use serde_json::{Value, json};
-use studio_language_server::{LanguageServer, Workspace};
+use studio_language_server::{LanguageServer, Position, Workspace};
 
 fn frame(message: Value) -> Vec<u8> {
     let payload = serde_json::to_vec(&message).expect("fixture serializes");
@@ -154,5 +154,54 @@ fn drives_stdio_server_end_to_end_without_designer() {
         responses
             .iter()
             .any(|value| value.get("method") == Some(&json!("textDocument/publishDiagnostics")))
+    );
+}
+
+#[test]
+fn schema_completion_reads_plugin_manifest_response_shapes() {
+    let manifest = r#"
+    {
+      "routes": [{
+        "id": "github.user",
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "login": {"type": "string"},
+            "id": {"type": "integer"}
+          }
+        }
+      }]
+    }
+    "#;
+    let source = "<Text value={$item.login} />";
+    let mut workspace = Workspace::new();
+    workspace.add_file("file:///plugin/manifest.json", manifest);
+    workspace.add_file("file:///main.studio", source);
+    let server = LanguageServer::new(workspace);
+    let position = Position {
+        line: 0,
+        character: source.find("$item.").unwrap() as u32 + "$item.".len() as u32,
+    };
+
+    let completion = server.completion("file:///main.studio", position);
+    let login = completion
+        .items
+        .iter()
+        .find(|item| item.label == "login")
+        .expect("manifest response field should be completed");
+    assert_eq!(login.detail.as_deref(), Some("string"));
+
+    let definitions = server.definition(
+        "file:///main.studio",
+        Position {
+            line: 0,
+            character: position.character + 1,
+        },
+    );
+    assert_eq!(definitions.len(), 1);
+    assert!(
+        definitions[0]
+            .uri
+            .contains("plugin/manifest.json#routes/github.user/responseSchema")
     );
 }

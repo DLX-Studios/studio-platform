@@ -43,7 +43,7 @@ fn emitted_module_is_byte_identical_across_runs_and_equivalent_sources() {
 
     // The same semantics written with different whitespace, attribute order,
     // and comment placement must produce byte-identical output.
-    let reformatted = "studio 1\n\n<!-- two-screen sample -->\n<Screen id=\"home\" title=\"Home\">\n<Button label=\"Open detail\" id=\"open-detail\" />\n<TextInput placeholder=\"Search\" id=\"search\" />\n<Text id=\"home-title\">Home</Text>\n</Screen>\n<Screen id=\"detail\">\n<AppBar title=\"Detail\" id=\"detail-bar\" />\n<IconButton label=\"Back\" id=\"back-button\" />\n</Screen>\n<script lang=\"studio\">\non pressed open-detail push(/detail)\non changed search replace(/detail)\non pressed back-button pop()\n</script>\n";
+    let reformatted = "studio 1\n\n<!-- two-screen sample -->\n<Screen title=\"Home\" id=\"home\">\n<Text id=\"home-title\">Home</Text>\n<Button label=\"Open detail\" id=\"open-detail\" />\n<TextInput placeholder=\"Search\" id=\"search\" />\n</Screen>\n<Screen id=\"detail\">\n<AppBar title=\"Detail\" id=\"detail-bar\" />\n<IconButton label=\"Back\" id=\"back-button\" />\n</Screen>\n<script lang=\"studio\">\non pressed open-detail push(/detail)\non changed search replace(/detail)\non pressed back-button pop()\n</script>\n";
     let other_module = compile(reformatted).expect("reformatted source should lower");
     let other = assemblyscript::emit(&other_module);
     assert_eq!(first.assembly_source, other.assembly_source);

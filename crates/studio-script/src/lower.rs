@@ -217,7 +217,9 @@ fn lower_node(element: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>
             }
         }
     }
-    children.sort_by(|left, right| node_identity(left).cmp(node_identity(right)));
+    // Preserve authored child order: it is observable in a static screen
+    // tree, while property order is normalized below for deterministic output.
+    properties.sort_by(|left, right| left.0.cmp(&right.0));
 
     IrNode::Element(IrElement {
         id: element.id.clone(),
@@ -226,13 +228,6 @@ fn lower_node(element: &Element, source: &str, diagnostics: &mut Vec<Diagnostic>
         children,
         span,
     })
-}
-
-fn node_identity(node: &IrNode) -> &str {
-    match node {
-        IrNode::Element(element) => &element.id,
-        IrNode::Text(text) => &text.id,
-    }
 }
 
 fn validate_kind(kind: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) {

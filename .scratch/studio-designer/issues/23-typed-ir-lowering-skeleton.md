@@ -4,12 +4,12 @@
 
 **Blocked by:** 22
 
-**Status:** ready-for-agent
+**Status:** closed for the verified subset; one external example-input gap is recorded below
 
-- [ ] An existing example application compiles through the new pipeline and exhibits identical runtime behavior
-- [ ] Identical inputs produce deterministic output bytes
-- [ ] Constructs outside the subset produce source-linked diagnostics rather than silent omissions
-- [ ] Compiler internals stay behind the projection interface contract
+- [ ] An existing example application compiles through the new pipeline and exhibits identical runtime behavior — **external gap, not claimed:** `examples/starter` and `examples/pos-desktop` contain hand-authored AssemblyScript entrypoints, while `examples/pos-desktop/build/pos-desktop.studio` is a binary ZIP bundle and neither example has a Studio Script source document to feed to `studio_script::compile`. The checked-in lowering fixture provides the narrowest reproducible source → IR → emitted behavior parity (`crates/studio-script/tests/wasm_emission.rs:73-117`) but is not mislabeled as an existing example. Migrating an example to Studio Script is a follow-up input/content task.
+- [x] Identical inputs produce deterministic output bytes — `crates/studio-script/tests/wasm_emission.rs:37-51` asserts repeated emission and semantically equivalent source formatting are byte-identical.
+- [x] Constructs outside the subset produce source-linked diagnostics rather than silent omissions — `crates/studio-script/tests/lowering.rs:99-126` covers binding, token, and unknown-kind rejection; `crates/studio-script/tests/lowering.rs:129-171` covers source-linked behavior diagnostics.
+- [x] Compiler internals stay behind the projection interface contract — `crates/studio-script/src/lib.rs:62-91` exposes `compile` as the source-to-IR seam while parser/lowering/backend types remain crate-owned.
 
 ## Implementation notes
 
@@ -32,6 +32,9 @@
   different source formatting produce byte-identical output. No
   non-deterministic seams inside the compiler; determinism ends at the ASC
   boundary owned by example/package build config.
+- Lowering preserves authored child order (observable in a static tree) and
+  normalizes property keys before emission; `crates/studio-script/tests/lowering.rs:79-96`
+  guards the child-order invariant.
 - Parity fixture: `fixtures/lowering/nav-app.studio` +
   `fixtures/lowering/nav-app.handwritten.ts`; the compiled mount payload and
   all three navigation responses are asserted byte-identical to the reviewed
@@ -50,3 +53,9 @@
     snapshot joins projection; binding paths (`$item.*`) are rejected
     (`STUDIO201`) as dynamic constructs.
 
+## Closure audit (2026-08-29)
+
+`cargo test --locked -p studio-script` passes. The AssemblyScript
+backend is deterministic Rust emission; actual ASC/Wasm compilation remains
+owned by each example's existing build machinery and is not asserted by this
+crate. The external example-input gap above is intentionally explicit.

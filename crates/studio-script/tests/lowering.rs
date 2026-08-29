@@ -77,6 +77,26 @@ fn lowers_static_screens_and_navigation_into_versioned_ir() {
 }
 
 #[test]
+fn lowering_preserves_authored_child_order() {
+    let module = compile(
+        "studio 1\n<Screen id=\"home\"><Button id=\"first\" /><Text id=\"second\">Second</Text></Screen>\n",
+    )
+    .expect("screen should lower");
+    let IrNode::Element(root) = &module.screens[0].root else {
+        panic!("screen root should be an element");
+    };
+    let ids = root
+        .children
+        .iter()
+        .map(|node| match node {
+            IrNode::Element(element) => element.id.as_str(),
+            IrNode::Text(text) => text.id.as_str(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["first", "home-text-1"]);
+}
+
+#[test]
 fn document_tree_constructs_outside_the_subset_are_rejected_with_stable_codes() {
     let binding_error = compile("studio 1\n<List id=\"items\" items={$item.products} />\n")
         .expect_err("bindings must be rejected");
