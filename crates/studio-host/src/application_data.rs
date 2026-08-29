@@ -1018,6 +1018,121 @@ impl<S: LocalStore> ApplicationDataHandle<'_, S> {
         .await
     }
 
+    /// Apply a merge while the host's collection lock still covers authorization and mutation.
+    ///
+    /// This is restricted to sibling host authorization services. It closes the
+    /// read/project/then-write gap that would otherwise let a concurrent writer move a row out
+    /// of the scope checked by an authorization layer.
+    pub(crate) async fn update_merge_if<F>(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+        fields: Value,
+        authorize: F,
+    ) -> Result<StoredRecord, ApplicationDataError>
+    where
+        F: FnOnce(&StoredRecord, &Value) -> bool + Send,
+    {
+        let _guard = self.host.operation_lock.lock().await;
+        let collection = collection.into();
+        let schema = self.collections.get(&collection).ok_or_else(|| {
+            ApplicationDataError::new(ApplicationDataErrorCode::CollectionUndeclared)
+        })?;
+        let batch_id = collection_batch_id(self.namespace, &collection);
+        let mut records = load_collection(&self.host.store, &batch_id, schema).await?;
+        let fields = fields.as_object().ok_or_else(schema_violation)?;
+        if fields.is_empty() {
+            return Err(ApplicationDataError::new(
+                ApplicationDataErrorCode::RequestInvalid,
+            ));
+        }
+        let current_value = records.get(&id).ok_or_else(record_not_found)?.clone();
+        let mut projected = current_value
+            .as_object()
+            .ok_or_else(stored_data_invalid)?
+            .clone();
+        for (field, value) in fields {
+            projected.insert(field.clone(), value.clone());
+        }
+        let current = StoredRecord {
+            id: id.clone(),
+            value: current_value,
+        };
+        let projected = Value::Object(projected);
+        if !authorize(&current, &projected) {
+            return Err(ApplicationDataError::authorization_denied());
+        }
+        validate_record(schema, &projected)?;
+        records.insert(id.clone(), projected.clone());
+        write_collection(&self.host.store, &batch_id, schema, &records).await?;
+        Ok(StoredRecord {
+            id,
+            value: projected,
+        })
+    }
+
+    /// Apply a patch while the host's collection lock still covers authorization and mutation.
+    pub(crate) async fn update_patch_if<F>(
+        &self,
+        collection: impl Into<String>,
+        id: RecordId,
+        operations: Vec<PatchOperation>,
+        authorize: F,
+    ) -> Result<StoredRecord, ApplicationDataError>
+    where
+        F: FnOnce(&StoredRecord, &Value) -> bool + Send,
+    {
+        let _guard = self.host.operation_lock.lock().await;
+        let collection = collection.into();
+        let schema = self.collections.get(&collection).ok_or_else(|| {
+            ApplicationDataError::new(ApplicationDataErrorCode::CollectionUndeclared)
+        })?;
+        let batch_id = collection_batch_id(self.namespace, &collection);
+        let mut records = load_collection(&self.host.store, &batch_id, schema).await?;
+        if operations.is_empty() || operations.len() > MAX_PATCH_OPERATIONS {
+            return Err(ApplicationDataError::new(
+                ApplicationDataErrorCode::RequestInvalid,
+            ));
+        }
+        let current_value = records.get(&id).ok_or_else(record_not_found)?.clone();
+        let mut projected = current_value
+            .as_object()
+            .ok_or_else(stored_data_invalid)?
+            .clone();
+        for operation in &operations {
+            match operation {
+                PatchOperation::Set { field, value } => {
+                    if !valid_identifier(field, 64) {
+                        return Err(schema_violation());
+                    }
+                    projected.insert(field.clone(), value.clone());
+                }
+                PatchOperation::Remove { field } => {
+                    let declaration = schema.fields().get(field).ok_or_else(schema_violation)?;
+                    if declaration.is_required() {
+                        return Err(schema_violation());
+                    }
+                    projected.remove(field);
+                }
+            }
+        }
+        let current = StoredRecord {
+            id: id.clone(),
+            value: current_value,
+        };
+        let projected = Value::Object(projected);
+        if !authorize(&current, &projected) {
+            return Err(ApplicationDataError::authorization_denied());
+        }
+        validate_record(schema, &projected)?;
+        records.insert(id.clone(), projected.clone());
+        write_collection(&self.host.store, &batch_id, schema, &records).await?;
+        Ok(StoredRecord {
+            id,
+            value: projected,
+        })
+    }
+
     /// Delete one record, returning whether it existed.
     ///
     /// # Errors

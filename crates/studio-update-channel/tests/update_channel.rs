@@ -85,6 +85,14 @@ fn signed_candidate_is_admitted_and_tampering_is_rejected() {
         artifact,
     };
     assert!(VerifiedUpdate::admit(signed.clone(), &trust).is_ok());
+    let mut invalid_rollout = signed.clone();
+    invalid_rollout.document.rollout_percent = 101;
+    assert_eq!(
+        VerifiedUpdate::admit(invalid_rollout, &trust)
+            .expect_err("rollout percentages above 100 are invalid")
+            .code(),
+        studio_update_channel::UpdateErrorCode::DocumentInvalid
+    );
     let mut tampered = signed;
     tampered.artifact.push(0);
     assert!(VerifiedUpdate::admit(tampered, &trust).is_err());
@@ -182,5 +190,71 @@ fn rollout_activates_and_health_failure_rolls_back() {
             .history
             .iter()
             .any(|event| event.kind == InstallationEventKind::RolledBack)
+    );
+}
+
+#[test]
+fn staged_rollout_uses_a_stable_fraction_before_broadening() {
+    let artifact = b"update".to_vec();
+    let document = UpdateDocument {
+        document_version: 1,
+        update_id: "release-canary".to_owned(),
+        version: "2.0.0".to_owned(),
+        channel: "stable".to_owned(),
+        artifact_sha256: artifact_digest(&artifact),
+        rollout_percent: 25,
+        publisher_id: "publisher".to_owned(),
+        key_id: "key".to_owned(),
+        migration_id: None,
+    };
+    let signing = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+    let trust = TrustStore::from_keys([TrustedPublisherKey {
+        publisher_id: "publisher".to_owned(),
+        key_id: "key".to_owned(),
+        verifying_key: signing.verifying_key().to_bytes(),
+        enabled: true,
+    }])
+    .unwrap();
+    let signature = signing
+        .sign(&canonical_document_bytes(&serde_json::to_value(&document).unwrap()).unwrap())
+        .to_bytes()
+        .to_vec();
+    let update = VerifiedUpdate::admit(
+        SignedUpdate {
+            document,
+            signature,
+            artifact,
+        },
+        &trust,
+    )
+    .unwrap();
+    let mut store = MemoryStateStore::default();
+    let installations = (0..100)
+        .map(|index| format!("device-{index}"))
+        .collect::<Vec<_>>();
+    for installation in &installations {
+        baseline(&mut store, installation);
+    }
+    let mut channel = UpdateChannel::new(store, "stable").unwrap();
+    let mut host = Host {
+        fail_health: false,
+        installs: Vec::new(),
+        rollbacks: Vec::new(),
+    };
+    let report = channel
+        .roll_out(&update, &installations, &mut host)
+        .unwrap();
+    let selected = report
+        .outcomes
+        .iter()
+        .filter(|outcome| **outcome == InstallationOutcome::Activated)
+        .count();
+    assert!(selected > 0 && selected < installations.len());
+    assert_eq!(selected, host.installs.len());
+    assert!(
+        report
+            .outcomes
+            .iter()
+            .any(|outcome| **outcome == InstallationOutcome::Skipped)
     );
 }
