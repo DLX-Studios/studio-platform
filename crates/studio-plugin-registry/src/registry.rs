@@ -756,4 +756,163 @@ mod tests {
             crate::error::DescriptorErrorCode::SchemaUnknownField
         );
     }
+
+    #[test]
+    fn installs_uses_revokes_and_removes_first_party_pack_with_artifact_report() {
+        let mut registry = registry();
+        registry
+            .admit(&pos_pack_envelope())
+            .expect("signed pack admits");
+        let descriptor = &registry
+            .plugin("com.studio.pack.pos")
+            .expect("pack exists")
+            .descriptor;
+        assert!(!descriptor.contributions.compositions.is_empty());
+        assert!(!descriptor.contributions.settings_groups.is_empty());
+
+        registry
+            .install("project-a", "com.studio.pack.pos")
+            .expect("pack installs");
+        assert_eq!(
+            registry
+                .activate("project-a", "com.studio.pack.pos")
+                .expect_err("capability consent is required")
+                .code(),
+            crate::error::RegistryErrorCode::ConsentDenied
+        );
+        registry
+            .grant_consent(
+                "project-a",
+                "com.studio.pack.pos",
+                DeclaredCapability::PrinterSimulate,
+            )
+            .expect("explicit project consent records");
+        assert_eq!(
+            registry.consent_decision(
+                "project-a",
+                "com.studio.pack.pos",
+                DeclaredCapability::PrinterSimulate,
+            ),
+            Some(ConsentDecision::Granted)
+        );
+        registry
+            .activate("project-a", "com.studio.pack.pos")
+            .expect("consented pack activates");
+        registry
+            .project_open("project-a", "com.studio.pack.pos")
+            .expect("project-open hook runs");
+        registry
+            .record_usage(
+                "project-a",
+                "com.studio.pack.pos",
+                OwnedArtifact::Composition("pos.product-row".to_owned()),
+            )
+            .expect("declared composition is usable");
+        registry
+            .record_usage(
+                "project-a",
+                "com.studio.pack.pos",
+                OwnedArtifact::SettingsGroup("pos.receipt".to_owned()),
+            )
+            .expect("declared settings group is usable");
+        assert!(
+            registry
+                .revoke_consent(
+                    "project-a",
+                    "com.studio.pack.pos",
+                    DeclaredCapability::PrinterSimulate,
+                )
+                .expect("consent revokes")
+        );
+        assert_eq!(
+            registry.consent_decision(
+                "project-a",
+                "com.studio.pack.pos",
+                DeclaredCapability::PrinterSimulate,
+            ),
+            None
+        );
+
+        // Re-grant for the removal journey; revocation already deactivated the project.
+        registry
+            .grant_consent(
+                "project-a",
+                "com.studio.pack.pos",
+                DeclaredCapability::PrinterSimulate,
+            )
+            .expect("consent re-grants");
+        registry
+            .activate("project-a", "com.studio.pack.pos")
+            .expect("pack reactivates");
+        let report = registry
+            .plan_removal("project-a", "com.studio.pack.pos")
+            .expect("removal reports owned artifacts");
+        assert_eq!(
+            report.remaining_artifacts,
+            vec![
+                OwnedArtifact::Composition("pos.product-row".to_owned()),
+                OwnedArtifact::SettingsGroup("pos.receipt".to_owned()),
+            ]
+        );
+        assert_eq!(
+            registry
+                .complete_removal("project-a", "com.studio.pack.pos", false)
+                .expect_err("removal is blocked until project artifacts are resolved")
+                .code(),
+            crate::error::RegistryErrorCode::RemovalBlocked
+        );
+        assert_eq!(registry.clear_usage("project-a", "com.studio.pack.pos"), 2);
+        registry
+            .plan_removal("project-a", "com.studio.pack.pos")
+            .expect("fresh empty removal plan");
+        registry
+            .complete_removal("project-a", "com.studio.pack.pos", false)
+            .expect("pack removes after report");
+        assert!(registry.plugin("com.studio.pack.pos").is_some());
+        assert_eq!(
+            registry
+                .plugin("com.studio.pack.pos")
+                .expect("pack remains admitted")
+                .state,
+            PluginState::Admitted
+        );
+    }
+
+    #[test]
+    fn lifecycle_output_over_budget_quarantines_extension() {
+        let mut registry = registry();
+        registry
+            .admit(&pos_pack_envelope())
+            .expect("signed pack admits");
+        registry
+            .install("project-a", "com.studio.pack.pos")
+            .expect("pack installs");
+        registry
+            .grant_consent(
+                "project-a",
+                "com.studio.pack.pos",
+                DeclaredCapability::PrinterSimulate,
+            )
+            .expect("consent records");
+        registry.hooks_mut().register(
+            "com.studio.pack.pos",
+            LifecycleHook::Activate,
+            Box::new(|_| Ok(vec![0_u8; 64 * 1024 + 1])),
+        );
+        assert_eq!(
+            registry
+                .activate("project-a", "com.studio.pack.pos")
+                .expect_err("over-budget hook is contained")
+                .code(),
+            crate::error::RegistryErrorCode::HookViolation
+        );
+        assert_eq!(
+            registry
+                .plugin("com.studio.pack.pos")
+                .expect("pack remains visible")
+                .state,
+            PluginState::Quarantined
+        );
+        assert_eq!(registry.violations().len(), 1);
+    }
 }

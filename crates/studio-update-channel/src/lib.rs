@@ -532,6 +532,9 @@ fn validate_document(document: &UpdateDocument) -> Result<(), UpdateError> {
     if document.channel.is_empty() || !is_safe_identifier(&document.channel) {
         return Err(UpdateError::DocumentInvalid("channel"));
     }
+    if document.rollout_percent > 100 {
+        return Err(UpdateError::DocumentInvalid("rolloutPercent"));
+    }
     if document.artifact_sha256.len() != 64
         || !document
             .artifact_sha256

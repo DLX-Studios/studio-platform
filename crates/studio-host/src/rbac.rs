@@ -1191,24 +1191,14 @@ impl<S: LocalStore> AuthorizedApplicationDataHandle<'_, '_, S> {
     ) -> Result<StoredRecord, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Update, &collection).await?;
-        let current = self
-            .rbac
-            .data
-            .select(collection.clone(), id.clone())
-            .await
-            .map_err(map_data_error)?
-            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        let projected = merge_value(&current.value, &fields)
-            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        if !scopes.iter().any(|scope| {
-            row_allowed(scope, &self.session, &current)
-                && row_allowed_value(scope, &self.session, &id, &projected)
-        }) {
-            return Err(RbacError::new(RbacErrorCode::AuthorizationDenied));
-        }
         self.rbac
             .data
-            .update_merge(collection, id, fields)
+            .update_merge_if(collection, id, fields, |current, projected| {
+                scopes.iter().any(|scope| {
+                    row_allowed(scope, &self.session, current)
+                        && row_allowed_value(scope, &self.session, &current.id, projected)
+                })
+            })
             .await
             .map_err(map_data_error)
     }
@@ -1222,24 +1212,14 @@ impl<S: LocalStore> AuthorizedApplicationDataHandle<'_, '_, S> {
     ) -> Result<StoredRecord, RbacError> {
         let collection = collection.into();
         let scopes = self.scopes(DataOperation::Update, &collection).await?;
-        let current = self
-            .rbac
-            .data
-            .select(collection.clone(), id.clone())
-            .await
-            .map_err(map_data_error)?
-            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        let projected = patch_value(&current.value, &operations)
-            .ok_or(RbacError::new(RbacErrorCode::AuthorizationDenied))?;
-        if !scopes.iter().any(|scope| {
-            row_allowed(scope, &self.session, &current)
-                && row_allowed_value(scope, &self.session, &id, &projected)
-        }) {
-            return Err(RbacError::new(RbacErrorCode::AuthorizationDenied));
-        }
         self.rbac
             .data
-            .update_patch(collection, id, operations)
+            .update_patch_if(collection, id, operations, |current, projected| {
+                scopes.iter().any(|scope| {
+                    row_allowed(scope, &self.session, current)
+                        && row_allowed_value(scope, &self.session, &current.id, projected)
+                })
+            })
             .await
             .map_err(map_data_error)
     }
@@ -1622,29 +1602,6 @@ fn row_allowed_value(
     }
 }
 
-fn merge_value(current: &Value, fields: &Value) -> Option<Value> {
-    let mut current = current.as_object()?.clone();
-    for (field, value) in fields.as_object()? {
-        current.insert(field.clone(), value.clone());
-    }
-    Some(Value::Object(current))
-}
-
-fn patch_value(current: &Value, operations: &[PatchOperation]) -> Option<Value> {
-    let mut current = current.as_object()?.clone();
-    for operation in operations {
-        match operation {
-            PatchOperation::Set { field, value } => {
-                current.insert(field.clone(), value.clone());
-            }
-            PatchOperation::Remove { field } => {
-                current.remove(field);
-            }
-        }
-    }
-    Some(Value::Object(current))
-}
-
 fn valid_secret(kind: CredentialKind, secret: &[u8]) -> bool {
     match kind {
         CredentialKind::Pin => {
@@ -1704,7 +1661,8 @@ fn duration_millis(duration: Duration) -> u64 {
 
 fn map_data_error(error: ApplicationDataError) -> RbacError {
     match error.code() {
-        ApplicationDataErrorCode::RecordNotFound => {
+        ApplicationDataErrorCode::RecordNotFound
+        | ApplicationDataErrorCode::AuthorizationDenied => {
             RbacError::new(RbacErrorCode::AuthorizationDenied)
         }
         _ => RbacError::new(RbacErrorCode::StorageUnavailable),
