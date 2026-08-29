@@ -9,11 +9,11 @@
 pub mod access;
 pub mod agent;
 pub mod agent_conversation;
-pub mod library_adapter;
-pub mod content_adapter;
 pub mod command;
 pub mod content;
+pub mod content_adapter;
 mod engine;
+pub mod library_adapter;
 pub mod manipulation;
 pub mod mcp;
 pub mod model;

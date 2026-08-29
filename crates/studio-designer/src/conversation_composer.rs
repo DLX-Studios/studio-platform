@@ -6,7 +6,15 @@ pub struct ConversationComposer {
 }
 
 impl ConversationComposer {
-    pub fn new() -> Self { Self { adapter: AgentAdapter } }
-    pub fn submit_message(&mut self) -> Result<(), String> { Ok(()) }
-    pub fn stream_batch(&self) -> Vec<String> { Vec::new() }
+    pub fn new() -> Self {
+        Self {
+            adapter: AgentAdapter,
+        }
+    }
+    pub fn submit_message(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    pub fn stream_batch(&self) -> Vec<String> {
+        Vec::new()
+    }
 }

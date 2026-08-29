@@ -1,5 +1,5 @@
 //! T50 Live agent adapter — session-backed over agent.rs channel, transport-free.
-use studio_design::{AgentEvent, AgentBatchOutcome};
+use studio_design::{AgentBatchOutcome, AgentEvent};
 
 pub struct AgentAdapter;
 impl AgentAdapter {
@@ -10,5 +10,7 @@ impl AgentAdapter {
     pub fn batch_progress(&self, outcome: &AgentBatchOutcome) -> Vec<String> {
         vec![format!("batch outcome: {:?}", outcome)]
     }
-    pub fn cancel(&self) -> Result<(), String> { Ok(()) }
+    pub fn cancel(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
