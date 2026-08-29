@@ -11,7 +11,7 @@ impl LibraryPanel {
     pub fn admitted_assets(&self) -> Vec<LibraryAssetId> { self.adapter.admitted() }
     pub fn provenance_for(&self, id: &LibraryAssetId) -> Option<String> { self.adapter.provenance(id) }
     pub fn unsupported_format(&self, detail: &str) -> (String, String) { self.adapter.unsupported_format(detail) }
-    pub fn insert_bind(&mut self, id: LibraryAssetId, session: &mut DesignerSession) -> Result<(), String> {
-        session.submit(DesignerCommand::InsertLibraryAsset { asset_id: id }).map_err(|e| format!("{:?}", e))
+    pub fn insert_bind(&mut self, id: LibraryAssetId) -> Result<(), String> {
+        self.adapter.insert_bind(id)
     }
 }

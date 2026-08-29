@@ -8,7 +8,7 @@ impl AgentAdapter {
         Ok(format!("{:?}", event))
     }
     pub fn batch_progress(&self, outcome: &AgentBatchOutcome) -> Vec<String> {
-        vec![format!("batch progress: {} items", outcome.completed.len())]
+        vec![format!("batch outcome: {:?}", outcome)]
     }
     pub fn cancel(&self) -> Result<(), String> { Ok(()) }
 }
