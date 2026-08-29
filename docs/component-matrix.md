@@ -77,41 +77,44 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 | DatePicker | Data display | yes | yes | yes | yes |
 | TimePicker | Data display | yes | yes | no | no |
 | Separator | Container | yes | yes | yes | yes |
-| Accordion | Deferred display | yes | yes | no | no |
-| Collapsible | Deferred display | yes | yes | no | no |
-| HoverCard | Deferred overlay | yes | yes | no | no |
-| MenuBar | Navigation | yes | yes | no | no |
-| StatusBar | Navigation | yes | yes | no | no |
-| KeyboardShortcuts | Deferred display | yes | yes | no | no |
-| Kbd | Deferred display | yes | yes | no | no |
-| ColorPicker | Deferred input | yes | yes | no | no |
-| Rating | Deferred input/display | yes | yes | no | no |
-| Resizable | Deferred display | yes | yes | no | no |
-| Dock | Deferred display | yes | yes | no | no |
-| Chart | Deferred display | yes | yes | no | no |
-| Editor | Deferred input/display | yes | yes | no | no |
-| RichText | Deferred display | yes | yes | no | no |
-| Carousel | Deferred display | yes | yes | no | no |
-| DragDrop | Deferred input/display | yes | yes | no | no |
-| Theme | Deferred display | yes | yes | no | no |
-| AspectRatio | Container | yes | yes | no | no |
-| Alert | Deferred feedback | yes | yes | no | no |
-| Attachment | Deferred data display | yes | yes | no | no |
-| Bubble | Deferred data display | yes | yes | no | no |
-| Command | Deferred input | yes | yes | no | no |
-| NativeSelect | Deferred input | yes | yes | no | no |
-| NavigationMenu | Navigation | yes | yes | no | no |
-| ScrollArea | Container | yes | yes | no | no |
-| Item | Deferred data display | yes | yes | no | no |
-| Message | Deferred data display | yes | yes | no | no |
-| MessageScroller | Deferred data display | yes | yes | no | no |
-| ToggleGroup | Form/input | yes | yes | no | no |
-| Sonner | Deferred feedback | yes | yes | no | no |
+| Accordion | Deferred display | yes | yes | yes | yes |
+| Collapsible | Deferred display | yes | yes | yes | yes |
+| HoverCard | Deferred overlay | yes | yes | yes | yes |
+| MenuBar | Navigation | yes | yes | yes | yes |
+| StatusBar | Navigation | yes | yes | yes | yes |
+| KeyboardShortcuts | Deferred display | yes | yes | yes | yes |
+| Kbd | Deferred display | yes | yes | yes | yes |
+| ColorPicker | Deferred input | yes | yes | yes | yes |
+| Rating | Deferred input/display | yes | yes | yes | yes |
+| Resizable | Deferred display | yes | yes | yes | yes |
+| Dock | Deferred display | yes | yes | yes | yes |
+| Chart | Deferred display | yes | yes | yes | yes |
+| Editor | Deferred input/display | yes | yes | yes | yes |
+| RichText | Deferred display | yes | yes | yes | yes |
+| Carousel | Deferred display | yes | yes | yes | yes |
+| DragDrop | Deferred input/display | yes | yes | yes | yes |
+| Theme | Deferred display | yes | yes | yes | yes |
+| AspectRatio | Container | yes | yes | yes | yes |
+| Alert | Deferred feedback | yes | yes | yes | yes |
+| Attachment | Deferred data display | yes | yes | yes | yes |
+| Bubble | Deferred data display | yes | yes | yes | yes |
+| Command | Deferred input | yes | yes | yes | yes |
+| NativeSelect | Deferred input | yes | yes | yes | yes |
+| NavigationMenu | Navigation | yes | yes | yes | yes |
+| ScrollArea | Container | yes | yes | yes | yes |
+| Item | Deferred data display | yes | yes | yes | yes |
+| Message | Deferred data display | yes | yes | yes | yes |
+| MessageScroller | Deferred data display | yes | yes | yes | yes |
+| ToggleGroup | Form/input | yes | yes | yes | yes |
+| Sonner | Deferred feedback | yes | yes | yes | yes |
 
 ## Notes
 
 - `TimePicker` is protocol-declared and native-mapped but has no native time widget mapping yet;
   production rendering hides it and development rendering emits an explicit fallback diagnostic.
+- The remaining formerly deferred kinds use a schema-driven native GPUI surface. Their labels,
+  content, collection properties, enabled/interactive flags, variants, and children are rendered;
+  they are no longer development fallbacks.
 - Release certification is derived from the readiness table and fails when any approved kind is
   not semantically rendered and verified. Development fallback diagnostics never satisfy it.
 - Data-display kinds express empty and populated states only. Loading/error states are not

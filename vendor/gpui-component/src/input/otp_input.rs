@@ -76,6 +76,17 @@ impl OtpState {
         cx.notify();
     }
 
+    /// Update the length of a retained OTP input without replacing its entity.
+    pub fn set_length(&mut self, length: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.length = length.max(1);
+        let value = self.value.chars().take(self.length).collect::<String>();
+        if value != self.value.as_ref() {
+            self.value = value.into();
+            self.sync_to_input_state(window, cx);
+        }
+        cx.notify();
+    }
+
     fn sync_to_input_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.value.clone();
         self.input_state.update(cx, |state, cx| {

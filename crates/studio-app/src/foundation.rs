@@ -13,13 +13,13 @@ use gpui::{
     div, img, prelude::*, px, rgb, text,
 };
 use gpui_component::{
-    Disableable, IndexPath,
+    Disableable, IndexPath, Selectable,
     badge::Badge,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     date_picker::{DatePicker, DatePickerState},
-    input::{Input, InputEvent, InputState, NumberInput, OtpInput, OtpState},
+    input::{Input, InputEvent, InputState, NumberInput, NumberStep, OtpInput, OtpState},
     popover::Popover,
     progress::{Progress, ProgressCircle},
     radio::Radio,
@@ -125,6 +125,48 @@ fn parse_number_input(raw: &str) -> Option<f64> {
         .filter(|value| value.is_finite())
 }
 
+fn host_value_changed(previous: Option<&str>, declared: &str) -> bool {
+    previous != Some(declared)
+}
+
+fn number_input_spec(
+    props: &BTreeMap<String, serde_json::Value>,
+) -> (Option<f64>, Option<f64>, f64) {
+    (
+        props.get("min").and_then(serde_json::Value::as_f64),
+        props.get("max").and_then(serde_json::Value::as_f64),
+        prop_f64(props, "step", 1.0),
+    )
+}
+
+fn button_variant(variant: &str) -> (bool, bool) {
+    match variant {
+        "secondary" => (true, false),
+        "selected" => (true, true),
+        _ => (false, false),
+    }
+}
+
+fn collect_retained_widget_ids(node: &PluginRenderNode, ids: &mut BTreeSet<String>) {
+    if matches!(
+        node.kind,
+        NodeKind::Select
+            | NodeKind::Combobox
+            | NodeKind::TextInput
+            | NodeKind::TextArea
+            | NodeKind::NumberInput
+            | NodeKind::OtpInput
+            | NodeKind::SecretInput
+            | NodeKind::Slider
+            | NodeKind::RangeSlider
+    ) {
+        ids.insert(node.id.clone());
+    }
+    for child in &node.children {
+        collect_retained_widget_ids(child, ids);
+    }
+}
+
 /// Stable-ID handling for retained form widgets (ticket 32 decision): every stateful widget is
 /// keyed by the stable protocol node ID and kept in a retained map across targeted property
 /// patches, so GPUI focus follows the same entity and mounted state survives re-renders. Entries
@@ -135,6 +177,26 @@ enum InputBinding {
     Multiline,
     Secret,
     Number,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SliderBinding {
+    min: f32,
+    max: f32,
+    step: f32,
+    value: Option<(f32, f32)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SelectBinding {
+    options: Vec<String>,
+    value: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct OtpBinding {
+    length: usize,
+    value: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -410,6 +472,10 @@ pub struct FoundationGallery {
     plugin_sliders: BTreeMap<String, Entity<SliderState>>,
     plugin_otps: BTreeMap<String, Entity<OtpState>>,
     plugin_state_subscriptions: BTreeMap<String, Vec<Subscription>>,
+    plugin_input_values: BTreeMap<String, String>,
+    plugin_select_bindings: BTreeMap<String, SelectBinding>,
+    plugin_slider_bindings: BTreeMap<String, SliderBinding>,
+    plugin_otp_bindings: BTreeMap<String, OtpBinding>,
     visited_input_ids: BTreeSet<String>,
     overlay_depth: usize,
     dismissed_overlays: BTreeSet<String>,
@@ -440,6 +506,10 @@ impl FoundationGallery {
             plugin_sliders: BTreeMap::new(),
             plugin_otps: BTreeMap::new(),
             plugin_state_subscriptions: BTreeMap::new(),
+            plugin_input_values: BTreeMap::new(),
+            plugin_select_bindings: BTreeMap::new(),
+            plugin_slider_bindings: BTreeMap::new(),
+            plugin_otp_bindings: BTreeMap::new(),
             visited_input_ids: BTreeSet::new(),
             overlay_depth: 0,
             dismissed_overlays: BTreeSet::new(),
@@ -483,7 +553,17 @@ impl FoundationGallery {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         self.visited_input_ids.insert(node_id.to_owned());
+        let previous_value = self
+            .plugin_input_values
+            .insert(node_id.to_owned(), initial_value.to_owned());
         if let Some(state) = self.plugin_inputs.get(node_id) {
+            let value_changed = host_value_changed(previous_value.as_deref(), initial_value);
+            state.update(cx, |state, cx| {
+                state.set_placeholder(placeholder, window, cx);
+                if value_changed {
+                    state.set_value(initial_value, window, cx);
+                }
+            });
             return state.clone();
         }
         let placeholder = placeholder.to_owned();
@@ -534,6 +614,24 @@ impl FoundationGallery {
         state
     }
 
+    fn update_number_input(
+        &mut self,
+        node_id: &str,
+        min: Option<f64>,
+        max: Option<f64>,
+        step: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(state) = self.plugin_inputs.get(node_id) {
+            state.update(cx, |state, cx| {
+                state.set_min(min, window, cx);
+                state.set_max(max, window, cx);
+                state.set_step(Some(NumberStep::from(step)), window, cx);
+            });
+        }
+    }
+
     /// Retain (or create) one stable-ID select state for a plugin node.
     fn plugin_select(
         &mut self,
@@ -545,7 +643,24 @@ impl FoundationGallery {
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<Vec<SharedString>>> {
         self.visited_input_ids.insert(node_id.to_owned());
+        let binding = SelectBinding {
+            options: options.iter().map(ToString::to_string).collect(),
+            value: selected
+                .and_then(|index| options.get(index.row))
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        };
+        let binding_changed = self
+            .plugin_select_bindings
+            .insert(node_id.to_owned(), binding.clone())
+            .is_none_or(|previous| previous != binding);
         if let Some(state) = self.plugin_selects.get(node_id) {
+            if binding_changed {
+                state.update(cx, |state, cx| {
+                    state.set_items(options, window, cx);
+                    state.set_selected_index(selected, window, cx);
+                });
+            }
             return state.clone();
         }
         let state =
@@ -592,7 +707,38 @@ impl FoundationGallery {
         cx: &mut Context<Self>,
     ) -> Entity<SliderState> {
         self.visited_input_ids.insert(node_id.to_owned());
+        let binding = SliderBinding {
+            min,
+            max,
+            step,
+            value: value_range.or(Some((single, single))),
+        };
+        let binding_changed = self
+            .plugin_slider_bindings
+            .insert(node_id.to_owned(), binding.clone())
+            .is_none_or(|previous| previous != binding);
         if let Some(state) = self.plugin_sliders.get(node_id) {
+            if binding_changed {
+                state.update(cx, |state, cx| {
+                    // Keep each intermediate range valid while applying an atomic protocol
+                    // patch; SliderState clamps through `f32::clamp`, which rejects min > max.
+                    if min > state.max_value() {
+                        state.set_max(max, window, cx);
+                        state.set_min(min, window, cx);
+                    } else if max < state.min_value() {
+                        state.set_min(min, window, cx);
+                        state.set_max(max, window, cx);
+                    } else {
+                        state.set_min(min, window, cx);
+                        state.set_max(max, window, cx);
+                    }
+                    state.set_step(step, window, cx);
+                    match value_range {
+                        Some(value) => state.set_value(value, window, cx),
+                        None => state.set_value(single, window, cx),
+                    }
+                });
+            }
             return state.clone();
         }
         let state = cx.new(|_| {
@@ -637,7 +783,21 @@ impl FoundationGallery {
         cx: &mut Context<Self>,
     ) -> Entity<OtpState> {
         self.visited_input_ids.insert(node_id.to_owned());
+        let binding = OtpBinding {
+            length,
+            value: value.to_owned(),
+        };
+        let binding_changed = self
+            .plugin_otp_bindings
+            .insert(node_id.to_owned(), binding.clone())
+            .is_none_or(|previous| previous != binding);
         if let Some(state) = self.plugin_otps.get(node_id) {
+            if binding_changed {
+                state.update(cx, |state, cx| {
+                    state.set_length(length, window, cx);
+                    state.set_value(value, window, cx);
+                });
+            }
             return state.clone();
         }
         let value = value.to_owned();
@@ -674,6 +834,16 @@ impl FoundationGallery {
         self.plugin_otps.retain(|id, _| live.contains(id));
         self.plugin_state_subscriptions
             .retain(|id, _| live.contains(id));
+        self.plugin_input_values.retain(|id, _| live.contains(id));
+        self.plugin_select_bindings
+            .retain(|id, _| live.contains(id));
+        self.plugin_slider_bindings
+            .retain(|id, _| live.contains(id));
+        self.plugin_otp_bindings.retain(|id, _| live.contains(id));
+    }
+
+    fn mark_hidden_widget_states(&mut self, node: &PluginRenderNode) {
+        collect_retained_widget_ids(node, &mut self.visited_input_ids);
     }
 
     /// Host-owned overlay gating: returns the stacking depth for a visible overlay, or `None`
@@ -722,6 +892,99 @@ impl FoundationGallery {
             .text_sm()
             .text_color(rgb(COLOR_MUTED))
             .child(label.to_owned())
+            .into_any_element()
+    }
+
+    /// Render a mapped catalog kind that has no specialized GPUI widget with a native,
+    /// schema-driven surface. This is deliberately separate from `development_fallback`:
+    /// declared text, collections, flags, variants, and children are projected into GPUI.
+    fn deferred_native_element(
+        &self,
+        node: &PluginRenderNode,
+        opacity: f32,
+        accessibility_label: Option<String>,
+        children: Vec<AnyElement>,
+    ) -> AnyElement {
+        let heading = prop_str(&node.props, "title")
+            .or_else(|| prop_str(&node.props, "label"))
+            .or_else(|| prop_str(&node.props, "content"))
+            .or_else(|| prop_str(&node.props, "value"))
+            .unwrap_or_default()
+            .to_owned();
+        let variant = prop_str(&node.props, "variant");
+        let enabled = prop_bool(&node.props, "enabled", true);
+        let interactive = prop_bool(&node.props, "interactive", false);
+        let open = prop_bool(&node.props, "open", true);
+        let selected = prop_bool(&node.props, "selected", false);
+        let mut entries = Vec::new();
+        for key in ["items", "options", "keys", "series"] {
+            entries.extend(prop_strings(&node.props, key));
+        }
+        for key in ["min", "max", "step"] {
+            if let Some(value) = node.props.get(key).and_then(serde_json::Value::as_f64) {
+                entries.push(format!("{key}: {value}"));
+            }
+        }
+        let alert = matches!(
+            node.kind,
+            NodeKind::Alert | NodeKind::Message | NodeKind::Sonner
+        );
+        let scrollable = matches!(node.kind, NodeKind::ScrollArea | NodeKind::MessageScroller);
+        let horizontal = node.kind == NodeKind::Carousel;
+        let monospace = matches!(node.kind, NodeKind::Kbd | NodeKind::KeyboardShortcuts);
+        let background = match variant {
+            Some("success") => rgb(COLOR_SUCCESS),
+            Some("warning") => rgb(COLOR_WARNING),
+            Some("destructive") | Some("error") => rgb(COLOR_ERROR),
+            _ => rgb(COLOR_SURFACE),
+        };
+        let children = if open { children } else { Vec::new() };
+
+        div()
+            .id(node.id.clone())
+            .role(if alert {
+                Role::Alert
+            } else {
+                Role::GenericContainer
+            })
+            .opacity(opacity)
+            .when_some(accessibility_label, |element, label| {
+                element.aria_label(label)
+            })
+            .when(!enabled, |element| element.opacity(0.5 * opacity))
+            .when(selected, |element| element.border_color(rgb(COLOR_TEXT)))
+            .when(interactive, |element| element.focusable().tab_stop(true))
+            .when(horizontal, gpui::Styled::flex_row)
+            .when(!horizontal, gpui::Styled::flex_col)
+            .when(scrollable, |element| {
+                element.max_h(px(320.0)).overflow_y_scroll()
+            })
+            .when(monospace, |element| element.font_family("monospace"))
+            .gap_1()
+            .min_w_0()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(COLOR_BORDER_SUBTLE))
+            .bg(background)
+            .when(!heading.is_empty(), |element| {
+                element.child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(heading.clone()),
+                )
+            })
+            .when(entries.is_empty() && children.is_empty(), |element| {
+                element.child(self.empty_state_element("No content"))
+            })
+            .children(entries.into_iter().map(|entry| {
+                div()
+                    .id(format!("{}:entry:{}", node.id, entry))
+                    .text_sm()
+                    .child(entry)
+            }))
+            .children(children)
             .into_any_element()
     }
 
@@ -980,6 +1243,9 @@ impl FoundationGallery {
             .and_then(serde_json::Value::as_bool)
             == Some(false)
         {
+            // Hidden branches are still retained protocol state. Visit their descendants before
+            // pruning so a later visible patch reuses the same native entities and input buffers.
+            self.mark_hidden_widget_states(&node);
             return div().id(node.id).hidden().into_any_element();
         }
         let opacity = node_opacity(&node);
@@ -1620,7 +1886,9 @@ impl FoundationGallery {
             | NodeKind::Command
             | NodeKind::NativeSelect
             | NodeKind::Message
-            | NodeKind::Sonner => self.development_fallback(node.id, node.kind, children),
+            | NodeKind::Sonner => {
+                self.deferred_native_element(&node, opacity, accessibility_label, children)
+            }
             NodeKind::Sidebar => div()
                 .id(node.id)
                 .role(Role::Navigation)
@@ -1996,8 +2264,10 @@ impl FoundationGallery {
             | NodeKind::ScrollArea
             | NodeKind::Item
             | NodeKind::MessageScroller
-            | NodeKind::ToggleGroup
-            | NodeKind::TimePicker => self.development_fallback(node.id, node.kind, children),
+            | NodeKind::ToggleGroup => {
+                self.deferred_native_element(&node, opacity, accessibility_label, children)
+            }
+            NodeKind::TimePicker => self.development_fallback(node.id, node.kind, children),
             NodeKind::Dialog => {
                 let open = prop_bool(&node.props, "open", false);
                 let title = prop_str(&node.props, "title")
@@ -2386,10 +2656,13 @@ impl FoundationGallery {
                     .disabled(!enabled)
                     .opacity(opacity)
                     .when(full_width, gpui::Styled::w_full);
-                let button = match variant {
-                    "secondary" => button.secondary(),
-                    _ => button.primary(),
-                };
+                let (secondary, selected) = button_variant(variant);
+                let button = if secondary {
+                    button.secondary()
+                } else {
+                    button.primary()
+                }
+                .selected(selected);
                 button
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.dispatch_input(&click_id, InputAction::PointerClick, cx);
@@ -2646,6 +2919,8 @@ impl FoundationGallery {
                     window,
                     cx,
                 );
+                let (min, max, step) = number_input_spec(&node.props);
+                self.update_number_input(&node.id, min, max, step, window, cx);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2755,7 +3030,9 @@ impl FoundationGallery {
             NodeKind::ColorPicker => {
                 ColorPicker::new(&self.component_color_picker).into_any_element()
             }
-            _ => self.development_fallback(node.id, node.kind, children),
+            // Defensive handling for an invalid control discriminator. Valid catalog kinds are
+            // covered above; an impossible mismatch is hidden rather than rendered as fallback.
+            _ => div().id(node.id).hidden().into_any_element(),
         };
         match transition {
             Some(transition) if !transition.duration.is_zero() => {
@@ -2913,7 +3190,12 @@ impl Render for FoundationGallery {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, PluginRenderNode, image_format, parse_number_input};
+    use std::collections::BTreeMap;
+
+    use super::{
+        ImageFormat, PluginRenderNode, button_variant, collect_retained_widget_ids, image_format,
+        number_input_spec, parse_number_input,
+    };
     use studio_protocol::NodeKind;
 
     #[test]
@@ -2947,6 +3229,49 @@ mod tests {
         assert_eq!(parse_number_input("abc"), None);
         assert_eq!(parse_number_input("NaN"), None);
         assert_eq!(parse_number_input("inf"), None);
+    }
+
+    #[test]
+    fn retained_control_props_distinguish_host_patches_from_user_state() {
+        assert!(super::host_value_changed(None, "initial"));
+        assert!(!super::host_value_changed(Some("same"), "same"));
+        assert!(super::host_value_changed(Some("old"), "patched"));
+    }
+
+    #[test]
+    fn number_input_renderer_reads_declared_bounds_and_step() {
+        let props = BTreeMap::from([
+            ("min".to_owned(), serde_json::json!(2.0)),
+            ("max".to_owned(), serde_json::json!(18.0)),
+            ("step".to_owned(), serde_json::json!(0.5)),
+        ]);
+        assert_eq!(number_input_spec(&props), (Some(2.0), Some(18.0), 0.5));
+    }
+
+    #[test]
+    fn selected_button_variant_is_not_the_primary_default() {
+        assert_eq!(button_variant("selected"), (true, true));
+        assert_eq!(button_variant("primary"), (false, false));
+    }
+
+    #[test]
+    fn hidden_subtree_collection_visits_retained_controls_before_prune() {
+        let node = PluginRenderNode {
+            id: "hidden".to_owned(),
+            kind: NodeKind::Column,
+            control: None,
+            props: BTreeMap::new(),
+            children: vec![PluginRenderNode {
+                id: "hidden-input".to_owned(),
+                kind: NodeKind::TextInput,
+                control: None,
+                props: BTreeMap::new(),
+                children: Vec::new(),
+            }],
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        collect_retained_widget_ids(&node, &mut ids);
+        assert!(ids.contains("hidden-input"));
     }
 
     #[test]

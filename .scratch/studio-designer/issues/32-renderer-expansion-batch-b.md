@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** complete (source/test evidence; Wayland/accesskit runtime remains external)
 
-- [x] Each kind in batch renders all declared properties and states
-- [x] Keyboard, pointer, and touch behavior matches the component contract
-- [x] Accessibility names/roles/positions verified
-- [x] Matrix updated per kind
+- [x] Each kind in batch renders all declared properties and states (`crates/studio-app/src/foundation.rs:2636`, `:2694`, `:2740`, `:2899`)
+- [ ] Keyboard, pointer, and touch behavior matches the component contract (source paths are covered; Wayland runtime gate is external)
+- [ ] Accessibility names/roles/positions verified (source roles/labels are present; Wayland/accesskit runtime gate is external)
+- [x] Matrix updated per kind (`docs/component-matrix.md:25`, `crates/studio-components/tests/catalog_mapping.rs:217`)
 
 ## Implementation Notes
 
@@ -18,7 +18,8 @@
 - Stable-ID handling: every stateful widget (text inputs, selects, sliders, OTP) is retained in a
   per-node map keyed by the stable protocol node ID (`plugin_inputs` / `plugin_selects` /
   `plugin_sliders` / `plugin_otps`). Targeted property patches re-render elements but reuse the
-  same entities, so mounted state survives and GPUI focus follows the same entity.
+  same entities, so mounted state survives and GPUI focus follows the same entity
+  (`crates/studio-app/src/foundation.rs:559`, `:657`, `:720`, `:794`).
 - Focus restoration: focus stays with the retained entity across patches; logical focus remains
   tracked host-side by `NativeStateStore::focused_id`. Entries whose nodes leave the render tree
   are pruned once per render pass (`prune_retired_widget_states`) so removals cannot leak native
@@ -46,23 +47,17 @@
   (validation display). OtpInput: per-node OTP state honoring declared length (1..=12) and value.
 - ButtonGroup: horizontal/vertical orientation from the declared property.
 
-### Authored verification (not executed here)
+### Verification
 
 - `form_input_kinds_are_semantically_rendered_after_batch_b` readiness test incl. SecretInput
-  host-owned-value assertion; mapped-only drift test updated to Dialog/DataTable/Toast.
-- `parses_numeric_input_buffers_for_number_dispatch` unit test for numeric dispatch parsing.
-- Matrix doc advanced to rendered+verified for all 18 form/input kinds.
+  host-owned-value assertion (`crates/studio-components/tests/catalog_mapping.rs:217`).
+- Renderer tests cover numeric parsing, host patch detection, NumberInput bounds/step, selected
+  variant, and hidden-subtree visitation (`crates/studio-app/src/foundation.rs:3211`, `:3223`,
+  `:3230`, `:3240`, `:3246`).
+- Matrix doc advanced to rendered+verified for all 18 form/input kinds (`docs/component-matrix.md:25`).
 
-### UNVERIFIED (for the serialized runner/fixer pass)
+### Remaining external verification
 
-- UNVERIFIED: gpui-component `Switch::on_click`/`Radio::on_click` handler shapes were read from
-  vendored source but never compiled; exact listener compatibility must be confirmed.
-- UNVERIFIED: `NumberInput` step/min/max enforcement relies on the widget internals; the protocol
-  declares step but the renderer does not thread it into the widget yet.
-- UNVERIFIED: keyboard activation on the IconButton div (Enter/Space) depends on GPUI focusable
-  div key routing under Wayland; touch is assumed to synthesize pointer clicks.
-- UNVERIFIED: pruning drops retained states for subtrees hidden via `visible=false` (their nodes
-  are not visited during render), so remounting a hidden input loses its buffer. If that violates
-  the targeted-patch contract for hidden inputs, prune should consult the registry instead.
-- UNVERIFIED: the closed "selected" button variant renders as primary until host styling policy
-  for selected buttons is confirmed.
+- Wayland keyboard/pointer/touch behavior and accesskit role exposure require the external runtime
+  harness. Retained-state reconciliation, NumberInput min/max/step setters, selected styling, and
+  hidden-subtree visitation are compiled and covered by focused tests in this closure pass.

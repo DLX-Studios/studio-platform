@@ -365,8 +365,9 @@ const fn batch_b_rendered(kind: NodeKind) -> bool {
 }
 
 /// Batch C: overlay kinds with host-owned gating/stacking/dismissal/reduced-motion, navigation
-/// shells, and data-display kinds with empty/populated state handling. `TimePicker` stays out:
-/// no native time widget is mapped yet.
+/// shells, data-display kinds with empty/populated state handling, and schema-driven native
+/// surfaces for the remaining catalog kinds. `TimePicker` stays out: no native time widget is
+/// mapped yet.
 const fn batch_c_rendered(kind: NodeKind) -> bool {
     matches!(
         kind,
@@ -402,6 +403,36 @@ const fn batch_c_rendered(kind: NodeKind) -> bool {
             | NodeKind::DescriptionList
             | NodeKind::Calendar
             | NodeKind::DatePicker
+            | NodeKind::Accordion
+            | NodeKind::Collapsible
+            | NodeKind::HoverCard
+            | NodeKind::MenuBar
+            | NodeKind::StatusBar
+            | NodeKind::KeyboardShortcuts
+            | NodeKind::Kbd
+            | NodeKind::ColorPicker
+            | NodeKind::Rating
+            | NodeKind::Resizable
+            | NodeKind::Dock
+            | NodeKind::Chart
+            | NodeKind::Editor
+            | NodeKind::RichText
+            | NodeKind::Carousel
+            | NodeKind::DragDrop
+            | NodeKind::Theme
+            | NodeKind::AspectRatio
+            | NodeKind::Alert
+            | NodeKind::Attachment
+            | NodeKind::Bubble
+            | NodeKind::Command
+            | NodeKind::NativeSelect
+            | NodeKind::NavigationMenu
+            | NodeKind::ScrollArea
+            | NodeKind::Item
+            | NodeKind::Message
+            | NodeKind::MessageScroller
+            | NodeKind::ToggleGroup
+            | NodeKind::Sonner
     )
 }
 

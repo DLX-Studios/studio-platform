@@ -285,6 +285,28 @@ impl SliderState {
         cx.notify();
     }
 
+    /// Update the minimum value of a retained slider.
+    pub fn set_min(&mut self, min: f32, _: &mut Window, cx: &mut Context<Self>) {
+        self.min = min;
+        self.value = self.value.clamp(self.min, self.max);
+        self.update_thumb_pos();
+        cx.notify();
+    }
+
+    /// Update the maximum value of a retained slider.
+    pub fn set_max(&mut self, max: f32, _: &mut Window, cx: &mut Context<Self>) {
+        self.max = max;
+        self.value = self.value.clamp(self.min, self.max);
+        self.update_thumb_pos();
+        cx.notify();
+    }
+
+    /// Update the step value of a retained slider.
+    pub fn set_step(&mut self, step: f32, _: &mut Window, cx: &mut Context<Self>) {
+        self.step = step;
+        cx.notify();
+    }
+
     /// Get the value of the slider.
     pub fn value(&self) -> SliderValue {
         self.value

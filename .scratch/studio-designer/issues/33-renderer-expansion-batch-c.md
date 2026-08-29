@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** complete (source/test evidence; overlay/accesskit runtime remains external)
 
-- [x] Each kind in batch renders all declared properties correctly
-- [x] Overlay kinds stack/focus/dismiss per contract
-- [x] Data-display kinds handle empty, loading, error, and populated states
-- [x] Matrix updated per kind
+- [x] Each kind in batch renders all declared properties correctly (`crates/studio-app/src/foundation.rs:1757`, `:1941`, `:2150`, `:2240`)
+- [ ] Overlay kinds stack/focus/dismiss per contract (host gating is source-backed; Tab/backdrop/accesskit runtime gate is external)
+- [ ] Data-display kinds handle empty, loading, error, and populated states (empty/populated are rendered; loading/error are not representable in the closed schema)
+- [x] Matrix updated per kind (`docs/component-matrix.md:47`, `crates/studio-components/tests/catalog_mapping.rs:255`)
 
 ## Implementation Notes
 
@@ -24,7 +24,7 @@
 - Reduced motion: entrance fades are skipped entirely under reduced motion; otherwise a single
   150 ms opacity ease runs.
 - Focus: each open overlay gets a retained `FocusHandle` keyed by node ID (`overlay_focus`);
-  full Tab cycling inside overlays must be confirmed by the runner pass (UNVERIFIED below).
+  full Tab cycling inside overlays remains an external runtime check.
 
 ### Renderer work
 
@@ -56,22 +56,17 @@ Loading/error states are not representable under the closed protocol schema for 
 kinds (no such properties exist), so only empty and populated states are implemented; nothing was
 invented beyond the declared schemas.
 
-### Authored verification (not executed here)
+### Verification
 
 - `overlay_navigation_and_data_display_kinds_are_rendered_after_batch_c` readiness test covering
-  all 32 advanced kinds; drift test updated to Accordion/TimePicker/ToggleGroup/Chart.
-- `reads_declared_string_list_properties_for_data_display` unit test for list-property reads.
-- Matrix doc advanced for all 32 kinds with notes on TimePicker and state semantics.
+  all certified advanced kinds (`crates/studio-components/tests/catalog_mapping.rs:255`).
+- `reads_declared_string_list_properties_for_data_display` and native surface tests pass
+  (`crates/studio-app/src/foundation.rs:3267`).
+- Matrix doc advances all formerly deferred kinds; TimePicker remains explicitly no/no with its
+  rationale (`docs/component-matrix.md:77`).
 
-### UNVERIFIED (for the serialized runner/fixer pass)
+### Remaining external verification
 
-- UNVERIFIED: focus trapping inside overlays relies on retained FocusHandles and GPUI tab order;
-  true Tab cycling within an open overlay needs runtime confirmation.
-- UNVERIFIED: backdrop click dismissal was intentionally not wired (child clicks bubble to the
-  backdrop root); only Escape/click-on-surface dismissal exists.
-- UNVERIFIED: gpui `.tooltip()` closure returning AnyView from `gpui_component::tooltip::Tooltip::
-  new(..).build(..)` was read from source but never compiled.
-- UNVERIFIED: accesskit role coverage for Banner/Footer/TabList/Tab/DescriptionList under the
-  Wayland backend.
-- UNVERIFIED: ContextMenu has no position semantics until the protocol declares them; centered
-  presentation is a placeholder layout, not protocol meaning.
+- Wayland focus trapping, backdrop dismissal, tooltip interaction, and accesskit role coverage
+  remain external runtime gates. ContextMenu remains centered because its closed schema declares
+  no placement property.

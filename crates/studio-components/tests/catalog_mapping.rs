@@ -3,7 +3,7 @@
 use serde_json::json;
 use studio_components::{
     COMPONENT_RENDERER_READINESS, ComponentCatalog, DispatchErrorCode, HostEventDispatcher,
-    InputAction, NativeLayer, RuntimeControl, component_readiness,
+    InputAction, NativeLayer, RuntimeControl, certify_renderer_readiness, component_readiness,
 };
 use studio_protocol::{HostEvent, NodeKind, UiNode};
 use studio_ui::InstanceId;
@@ -200,17 +200,20 @@ fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
         assert!(readiness.verified, "{kind:?}");
     }
 
-    for kind in [
-        NodeKind::Accordion,
-        NodeKind::TimePicker,
-        NodeKind::ToggleGroup,
-        NodeKind::Chart,
-    ] {
+    for kind in [NodeKind::TimePicker] {
         let readiness = component_readiness(kind);
         assert!(readiness.native_mapped, "{kind:?}");
         assert!(!readiness.semantically_rendered, "{kind:?}");
         assert!(!readiness.verified, "{kind:?}");
     }
+}
+
+#[test]
+fn renderer_certification_reports_only_the_documented_time_picker_gap() {
+    assert_eq!(
+        certify_renderer_readiness(),
+        Err(vec![NodeKind::TimePicker])
+    );
 }
 
 #[test]
