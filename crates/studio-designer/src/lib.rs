@@ -49,3 +49,8 @@ pub use resilience::{
     ResilienceCenter, ResilienceEntryPoint, ResilienceRoute, ResilienceRouteError,
 };
 pub use settings::*;
+pub mod library_panel;
+pub mod content_editors;
+pub mod agent_adapter;
+pub mod mcp_surface;
+pub mod plugin_template_ux;
