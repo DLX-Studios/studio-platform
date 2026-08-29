@@ -855,6 +855,38 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
         .await
     }
 
+    /// Edit the first token's shared value while retaining its stable identity.
+    pub async fn edit_focus_token(
+        &mut self,
+        operation_id: OperationId,
+        actor: Actor,
+        undo_group_id: UndoGroupId,
+    ) -> CommandOutcome {
+        let tokens = self.tokens();
+        let Some(token) = tokens.first() else {
+            return self.reject_local("FOCUS_TOKEN_REQUIRED", "create a token before editing it");
+        };
+        let value = match token.kind {
+            TokenKind::Length | TokenKind::Spacing | TokenKind::Radius => {
+                TokenValue::Length(studio_design::Length {
+                    value: "10".to_owned(),
+                    unit: studio_design::LengthUnit::Pixels,
+                })
+            }
+            _ => token.value.clone(),
+        };
+        let mut edited = token.clone();
+        edited.value = value;
+        self.submit_command(
+            operation_id,
+            actor,
+            undo_group_id,
+            "Edit token",
+            Command::UpdateToken { token: edited },
+        )
+        .await
+    }
+
     /// Ask the engine to delete the first token with explicit confirmation.
     pub async fn delete_focus_token(
         &mut self,
@@ -1175,12 +1207,14 @@ pub struct FocusView<P> {
     _script_subscription: Option<Subscription>,
     script_editor: Option<ScriptDocumentAdapter>,
     script_source: String,
+    script_syncing: bool,
     script_feedback: Option<String>,
     prototype_feedback: Option<String>,
     prototype: Option<studio_design::PrototypeSession>,
     prototype_mode: bool,
     prototype_screen: Option<studio_design::ScreenId>,
     prototype_interaction: Option<InteractionId>,
+    token_delete_confirmation: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1210,8 +1244,11 @@ enum FocusAction {
     ApplyToken,
     OverrideToken,
     ClearToken,
+    EditToken,
     RenameToken,
     DeleteToken,
+    ConfirmDeleteToken,
+    CancelDeleteToken,
     PrototypeRun,
     PrototypeMode,
     PrototypeRoute,
@@ -1264,12 +1301,14 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             _script_subscription: None,
             script_editor: None,
             script_source: String::new(),
+            script_syncing: false,
             script_feedback: None,
             prototype_feedback: None,
             prototype: None,
             prototype_mode: false,
             prototype_screen: None,
             prototype_interaction: None,
+            token_delete_confirmation: false,
         }
     }
 
@@ -1397,6 +1436,16 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             return;
         }
         match action {
+            FocusAction::DeleteToken => {
+                self.token_delete_confirmation = true;
+                cx.notify();
+                return;
+            }
+            FocusAction::CancelDeleteToken => {
+                self.token_delete_confirmation = false;
+                cx.notify();
+                return;
+            }
             FocusAction::ProfilePhone
             | FocusAction::ProfileTablet
             | FocusAction::ProfileDesktop
@@ -1482,8 +1531,14 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             FocusAction::ApplyToken => ("focus-token-apply", "focus-token-apply"),
             FocusAction::OverrideToken => ("focus-token-override", "focus-token-override"),
             FocusAction::ClearToken => ("focus-token-clear", "focus-token-clear"),
+            FocusAction::EditToken => ("focus-token-edit", "focus-token-edit"),
             FocusAction::RenameToken => ("focus-token-rename", "focus-token-rename"),
-            FocusAction::DeleteToken => ("focus-token-delete", "focus-token-delete"),
+            FocusAction::ConfirmDeleteToken => {
+                ("focus-token-delete-confirm", "focus-token-delete-confirm")
+            }
+            FocusAction::CancelDeleteToken | FocusAction::DeleteToken => {
+                unreachable!("token delete confirmation handled above")
+            }
             FocusAction::ProfilePhone
             | FocusAction::ProfileTablet
             | FocusAction::ProfileDesktop
@@ -1508,7 +1563,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         self.operation_in_flight = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let _outcome = match action {
+            let outcome = match action {
                 FocusAction::EditText => model.edit_text(operation_id, actor, undo_group_id).await,
                 FocusAction::Undo => model.undo(operation_id, actor).await,
                 FocusAction::Drag => {
@@ -1643,15 +1698,23 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                         .clear_focus_token(operation_id, actor, undo_group_id)
                         .await
                 }
+                FocusAction::EditToken => {
+                    model
+                        .edit_focus_token(operation_id, actor, undo_group_id)
+                        .await
+                }
                 FocusAction::RenameToken => {
                     model
                         .rename_focus_token(operation_id, actor, undo_group_id)
                         .await
                 }
-                FocusAction::DeleteToken => {
+                FocusAction::ConfirmDeleteToken => {
                     model
                         .delete_focus_token(operation_id, actor, undo_group_id)
                         .await
+                }
+                FocusAction::CancelDeleteToken | FocusAction::DeleteToken => {
+                    unreachable!("token delete confirmation handled above")
                 }
                 FocusAction::ProfilePhone
                 | FocusAction::ProfileTablet
@@ -1665,6 +1728,9 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             this.update(cx, |this, cx| {
                 this.model = Some(model);
                 this.operation_in_flight = false;
+                if matches!(outcome, CommandOutcome::Accepted(_)) {
+                    this.token_delete_confirmation = false;
+                }
                 cx.notify();
             })
             .ok();
@@ -1863,14 +1929,37 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     if let Some(editor) = this.script_editor.as_mut() {
                         editor.replace_source(this.script_source.clone());
                     }
-                    this.script_feedback =
-                        Some("Unsaved script buffer · press Check & Commit".to_owned());
+                    if !this.script_syncing {
+                        this.script_feedback =
+                            Some("Unsaved script buffer · press Check & Commit".to_owned());
+                    }
                     cx.notify();
                 }
             });
             self.script_source = source;
             self.script_input = Some(input);
             self._script_subscription = Some(subscription);
+        }
+        // Canvas commands commit through the shared session before this view
+        // is rendered again. Rebase a clean editor buffer to that new source
+        // revision so canvas edits appear as a canonical text update. A dirty
+        // buffer is deliberately left alone; overwriting authored text would
+        // violate the editor's invalid-edit isolation guarantee.
+        if let (Some(model), Some(editor)) = (self.model.as_ref(), self.script_editor.as_mut()) {
+            let source_snapshot = model.source_snapshot();
+            if editor.base_revision() != source_snapshot.revision.id && !editor.is_dirty() {
+                if let Ok(editor_snapshot) = editor.refresh_from_snapshot(&source_snapshot) {
+                    let source = editor_snapshot.source.clone();
+                    self.script_source = source.clone();
+                    if let Some(input) = self.script_input.as_ref().cloned()
+                        && input.read(cx).value().to_string() != source
+                    {
+                        self.script_syncing = true;
+                        input.update(cx, |input, cx| input.set_value(source, window, cx));
+                        self.script_syncing = false;
+                    }
+                }
+            }
         }
         let snapshot = self
             .model
@@ -1968,6 +2057,29 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let token_delete_usages = self
+            .model
+            .as_ref()
+            .and_then(|model| model.tokens().into_iter().next())
+            .map(|token| {
+                self.model
+                    .as_ref()
+                    .map(|model| model.token_usages(token.id))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|usage| {
+                format!(
+                    "{} · {} · {}",
+                    usage.owner,
+                    usage.property,
+                    usage
+                        .node_id
+                        .map_or_else(|| "global".to_owned(), |node_id| node_id.to_string())
+                )
+            })
+            .collect::<Vec<_>>();
         let token_provenance = self
             .model
             .as_ref()
@@ -2422,6 +2534,13 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                         cx,
                     ))
                     .child(action_button(
+                        "focus-token-edit",
+                        "Edit token value",
+                        FocusAction::EditToken,
+                        token_count == 0,
+                        cx,
+                    ))
+                    .child(action_button(
                         "focus-token-rename",
                         "Rename token",
                         FocusAction::RenameToken,
@@ -2435,6 +2554,37 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                         token_count == 0,
                         cx,
                     ))
+                    .when(self.token_delete_confirmation, |panel| {
+                        panel
+                            .child(
+                                div()
+                                    .id("focus-token-delete-confirmation")
+                                    .role(Role::Alert)
+                                    .child("Confirm token deletion")
+                                    .children(token_delete_usages.iter().enumerate().map(
+                                        |(index, usage)| {
+                                        div()
+                                            .id(format!("focus-token-delete-usage-{index}"))
+                                            .text_xs()
+                                            .child(format!("Usage to detach · {usage}"))
+                                        },
+                                    )),
+                            )
+                            .child(action_button(
+                                "focus-token-delete-confirm",
+                                "Confirm delete",
+                                FocusAction::ConfirmDeleteToken,
+                                false,
+                                cx,
+                            ))
+                            .child(action_button(
+                                "focus-token-delete-cancel",
+                                "Cancel delete",
+                                FocusAction::CancelDeleteToken,
+                                false,
+                                cx,
+                            ))
+                    })
                     .child(div().text_sm().child("Token values are session-backed; edits show shared/local provenance and usage."))
                     .child(
                         div()

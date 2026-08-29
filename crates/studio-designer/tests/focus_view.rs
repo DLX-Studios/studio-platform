@@ -244,8 +244,11 @@ fn ticket_40_controls_submit_through_the_session_authority() {
         "focus-token-apply",
         "focus-token-override",
         "focus-token-clear",
+        "focus-token-edit",
         "focus-token-rename",
         "focus-token-delete",
+        "focus-token-delete-confirm",
+        "focus-token-delete-cancel",
         "focus-prototype-run",
         "focus-prototype-mode",
         "focus-prototype-route",
@@ -299,6 +302,19 @@ fn native_editor_depth_actions_use_typed_session_commands_and_preserve_context()
         studio_design::CommandOutcome::Accepted(_)
     ));
     assert_eq!(model.tokens().len(), 1);
+    let edited = block_on(model.edit_focus_token(
+        OperationId::new("token-edit").unwrap(),
+        actor(),
+        UndoGroupId::new("tokens").unwrap(),
+    ));
+    assert!(matches!(edited, studio_design::CommandOutcome::Accepted(_)));
+    assert_eq!(
+        model.tokens()[0].value,
+        studio_design::TokenValue::Length(studio_design::Length {
+            value: "10".to_owned(),
+            unit: studio_design::LengthUnit::Pixels,
+        })
+    );
     let applied = block_on(model.apply_focus_token(
         OperationId::new("token-apply").unwrap(),
         actor(),

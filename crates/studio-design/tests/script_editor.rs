@@ -7,10 +7,11 @@ use std::{
 };
 
 use studio_design::{
-    Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, DesignerQuery,
-    DesignerQueryResult, InMemoryDesignerPersistence, NodeId, NodeParent, OperationId, ProjectId,
-    RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, ScriptCommitMetadata,
-    ScriptCommitOutcome, ScriptDocumentAdapter, ScriptEdit, StudioDesign, UndoGroupId,
+    Actor, ActorId, ActorKind, Command, CommandBatch, CommandOutcome, DefaultDesignerSession,
+    DesignNode, DesignerQuery, DesignerQueryResult, DesignerSession, InMemoryDesignerPersistence,
+    NodeId, NodeParent, OperationId, ProjectId, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, Screen,
+    ScreenId, ScriptCommitMetadata, ScriptCommitOutcome, ScriptDocumentAdapter, ScriptEdit,
+    StudioDesign, UndoGroupId,
 };
 use studio_protocol::NodeKind;
 
@@ -172,5 +173,41 @@ fn canvas_refresh_keeps_comments_and_rebuilds_outline() {
         assert!(editor.source().contains("<!-- keep this -->"));
         assert_eq!(editor.outline()[0].id, "home");
         assert_eq!(editor.outline()[0].children[0].id, "title");
+    });
+}
+
+#[test]
+fn canvas_commit_refreshes_script_buffer_to_the_new_revision() {
+    block_on(async {
+        let mut session = session().await;
+        let initial = snapshot(&session);
+        let mut editor = ScriptDocumentAdapter::from_snapshot(&initial).unwrap();
+        let outcome = session
+            .submit(CommandBatch {
+                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                operation_id: OperationId::new("canvas-text-edit").unwrap(),
+                actor: actor(),
+                project_id: project_id(),
+                base_revision: RevisionId::INITIAL,
+                undo_group_id: UndoGroupId::new("canvas-edit").unwrap(),
+                undo_group_name: "Canvas edit".to_owned(),
+                preconditions: Vec::new(),
+                commands: vec![Command::SetProperty {
+                    node_id: NodeId::new("title").unwrap(),
+                    property: "text".to_owned(),
+                    value: Some(studio_design::PropertyValue::String(
+                        "Canvas edit".to_owned(),
+                    )),
+                }],
+            })
+            .await;
+        assert!(matches!(outcome, CommandOutcome::Accepted(_)));
+
+        let updated = snapshot(&session);
+        let refreshed = editor.refresh_from_snapshot(&updated).unwrap();
+        assert_eq!(refreshed.base_revision, updated.revision.id);
+        assert!(!refreshed.dirty);
+        assert!(refreshed.source.contains("Canvas edit"));
+        assert_eq!(editor.base_revision(), updated.revision.id);
     });
 }
