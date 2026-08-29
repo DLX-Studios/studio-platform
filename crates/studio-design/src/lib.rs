@@ -8,6 +8,7 @@
 
 pub mod access;
 pub mod agent;
+pub mod agent_conversation;
 pub mod command;
 pub mod content;
 mod engine;
