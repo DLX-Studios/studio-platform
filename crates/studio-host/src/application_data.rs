@@ -75,14 +75,19 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use studio_security::PluginPrincipal;
+use studio_security::{ApplicationEnvironment, PluginPrincipal};
 use tokio::sync::Mutex;
 
 use crate::{LocalStore, LocalStoreDiagnosticCode, StoreBatch, StoreBatchEntry, SurrealQueryStore};
 
 /// Current derivation version for application data namespaces.
-pub const APPLICATION_DATA_NAMESPACE_VERSION: u16 = 1;
-const NAMESPACE_DOMAIN: &[u8] = b"studio.application-data.namespace.v1";
+///
+/// Version 2 adds the active deployment environment to the domain-separated input. Existing
+/// version-1 batches are intentionally not read: hosts must start with a fresh store (or perform
+/// an explicit, reviewed migration) rather than risk merging legacy all-environment data.
+pub const APPLICATION_DATA_NAMESPACE_VERSION: u16 = 2;
+const NAMESPACE_DOMAIN: &[u8] = b"studio.application-data.namespace.v2";
+const LEGACY_NAMESPACE_DOMAIN: &[u8] = b"studio.application-data.namespace.v1";
 const COLLECTION_FORMAT_VERSION: u16 = 1;
 const MAX_COLLECTIONS: usize = 128;
 const MAX_RECORDS_PER_COLLECTION: usize = 10_000;
@@ -94,7 +99,7 @@ const HOST_MAX_QUERY_BYTES: usize = 64 * 1024;
 const HOST_MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
 const HOST_MAX_QUERY_DURATION: Duration = Duration::from_secs(10);
 
-/// Opaque host-derived partition for one verified publisher/application pair.
+    /// Opaque host-derived partition for one verified publisher/application/environment tuple.
 ///
 /// The digest is deliberately not exposed. Guest requests are bound to a namespace by the host
 /// after package verification and contain no namespace or database selector.
@@ -105,19 +110,37 @@ pub struct ApplicationDataNamespace {
 }
 
 impl ApplicationDataNamespace {
-    /// Derive a stable partition from a host-verified publisher and application identity.
+    /// Derive a stable partition from a host-verified publisher, application, and environment.
     ///
     /// Publisher signing-key rotation, bundle updates, and runtime restarts do not move data.
     /// The derivation is length-delimited and domain/version separated.
     #[must_use]
-    pub fn derive(principal: &PluginPrincipal) -> Self {
+    pub fn derive(principal: &PluginPrincipal, environment: ApplicationEnvironment) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(NAMESPACE_DOMAIN);
         hasher.update(APPLICATION_DATA_NAMESPACE_VERSION.to_be_bytes());
         update_identity(&mut hasher, principal.publisher_id());
         update_identity(&mut hasher, principal.plugin_id());
+        update_identity(&mut hasher, environment.label());
         Self {
             version: APPLICATION_DATA_NAMESPACE_VERSION,
+            digest: hasher.finalize().into(),
+        }
+    }
+
+    /// Derive the retired version-1 partition for an explicit migration reader.
+    ///
+    /// This is deliberately not used by normal host binding; version-1 data was shared by all
+    /// environments and cannot be safely exposed as an environment-specific namespace.
+    #[must_use]
+    pub fn derive_legacy(principal: &PluginPrincipal) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(LEGACY_NAMESPACE_DOMAIN);
+        hasher.update(1u16.to_be_bytes());
+        update_identity(&mut hasher, principal.publisher_id());
+        update_identity(&mut hasher, principal.plugin_id());
+        Self {
+            version: 1,
             digest: hasher.finalize().into(),
         }
     }
@@ -748,6 +771,7 @@ impl Error for ApplicationDataError {}
 /// shared by every application handle, and never crosses a guest boundary.
 pub struct ApplicationDataHost<S> {
     store: S,
+    environment: ApplicationEnvironment,
     operation_lock: Mutex<()>,
 }
 
@@ -755,10 +779,23 @@ impl<S> ApplicationDataHost<S> {
     /// Wrap a LocalStore in the application-data mediation layer.
     #[must_use]
     pub const fn new(store: S) -> Self {
+        Self::new_for_environment(store, ApplicationEnvironment::Production)
+    }
+
+    /// Wrap a `LocalStore` with an explicitly selected active environment.
+    #[must_use]
+    pub const fn new_for_environment(store: S, environment: ApplicationEnvironment) -> Self {
         Self {
             store,
+            environment,
             operation_lock: Mutex::const_new(()),
         }
+    }
+
+    /// Active environment used by [`Self::bind`].
+    #[must_use]
+    pub const fn environment(&self) -> ApplicationEnvironment {
+        self.environment
     }
 
     /// Recover the underlying store after all bound handles have been dropped.
@@ -781,6 +818,16 @@ impl<S: LocalStore> ApplicationDataHost<S> {
         principal: &PluginPrincipal,
         declarations: impl IntoIterator<Item = CollectionDeclaration>,
     ) -> Result<ApplicationDataHandle<'a, S>, ApplicationDataError> {
+        self.bind_for_environment(principal, self.environment, declarations)
+    }
+
+    /// Bind a guest interface to an explicitly selected environment.
+    pub fn bind_for_environment<'a>(
+        &'a self,
+        principal: &PluginPrincipal,
+        environment: ApplicationEnvironment,
+        declarations: impl IntoIterator<Item = CollectionDeclaration>,
+    ) -> Result<ApplicationDataHandle<'a, S>, ApplicationDataError> {
         let mut collections = BTreeMap::new();
         for declaration in declarations {
             if collections.len() >= MAX_COLLECTIONS
@@ -800,7 +847,7 @@ impl<S: LocalStore> ApplicationDataHost<S> {
         }
         Ok(ApplicationDataHandle {
             host: self,
-            namespace: ApplicationDataNamespace::derive(principal),
+            namespace: ApplicationDataNamespace::derive(principal, environment),
             collections,
             query: None,
         })

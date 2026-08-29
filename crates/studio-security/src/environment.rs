@@ -264,6 +264,11 @@ impl EnvironmentDataStore {
         principal: &PluginPrincipal,
         requested: ApplicationEnvironment,
     ) -> Result<EnvironmentDataScope<'_>, EnvironmentError> {
+        if principal.plugin_id() != self.application {
+            return Err(EnvironmentError::new(
+                EnvironmentErrorCode::CrossEnvironmentDenied,
+            ));
+        }
         if principal.trust_mode() == TrustMode::Development
             && requested != ApplicationEnvironment::Development
         {
