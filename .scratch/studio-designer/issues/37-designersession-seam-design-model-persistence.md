@@ -77,3 +77,15 @@ explicit release-checkpoint gate rather than a ticket-closure gate. The v1 persi
 still atomically replaces the complete per-project revision/history envelope on each accepted
 batch. Measure large-project histories before selecting a later append/checkpoint compaction
 scheme; this is a scale follow-up, not a correctness gap in the verified ticket scope.
+
+## Closure audit at `3a05109`
+
+All acceptance boxes remain accurate on the integrated tip:
+
+- Seam create/edit/undo/redo/reopen: `crates/studio-design/tests/designer_session_seam.rs:185-239`.
+- Atomic rollback and immutable identity: `crates/studio-design/tests/designer_session_seam.rs:242-345`.
+- Tombstone restore/reference diagnostics and grouped history: `crates/studio-design/tests/designer_session_seam.rs:422-633`.
+- Closed-schema rejection: `crates/studio-design/tests/designer_session_seam.rs:635-670`.
+- Real LocalStore reopen and forced-termination recovery: `crates/studio-host/tests/designer_persistence.rs:112-250`.
+
+Verdict: closed. The focused package and persistence evidence are reproducible; no code gap was found.

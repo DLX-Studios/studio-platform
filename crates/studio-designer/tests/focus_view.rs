@@ -8,8 +8,9 @@ use std::{
 
 use studio_design::{
     Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, InMemoryDesignerPersistence,
-    OperationId, ProjectId, PropertyValue, Screen, ScreenId, ScriptCommitMetadata,
-    ScriptCommitOutcome, StudioDesign, UndoGroupId,
+    InputEnvironment, OperationId, ProjectId, PropertyValue, ResponsiveNodeOverride,
+    ResponsiveVariant, ResponsiveVariantId, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId,
+    ScriptCommitMetadata, ScriptCommitOutcome, StudioDesign, StyleProperties, UndoGroupId,
 };
 use studio_designer::{FocusSelectionError, FocusViewModel, FocusViewState};
 use studio_protocol::NodeKind;
@@ -63,6 +64,18 @@ fn seed() -> StudioDesign {
             .to_property_value()
             .unwrap(),
     );
+    let phone_variant = ResponsiveVariantId::new("phone").unwrap();
+    node.responsive_overrides.insert(
+        phone_variant.clone(),
+        ResponsiveNodeOverride {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            properties: [("text".to_owned(), PropertyValue::String("Phone".to_owned()))]
+                .into_iter()
+                .collect(),
+            layout: studio_design::LayoutProperties::default(),
+            style: StyleProperties::default(),
+        },
+    );
     let mut design = StudioDesign::empty(project_id, "Focus project");
     design
         .nodes
@@ -90,6 +103,17 @@ fn seed() -> StudioDesign {
         },
     );
     design.screen_order.push(ScreenId::new("canvas").unwrap());
+    design.responsive_variants.insert(
+        phone_variant.clone(),
+        ResponsiveVariant {
+            schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+            id: phone_variant,
+            name: "Phone".to_owned(),
+            minimum_width: None,
+            maximum_width: Some(500),
+            input: InputEnvironment::Any,
+        },
+    );
     design
 }
 
@@ -320,6 +344,29 @@ fn native_editor_depth_actions_use_typed_session_commands_and_preserve_context()
     );
     assert_eq!(script_model.snapshot().revision_id.get(), 1);
     assert_eq!(model.snapshot().selected_node_id, Some(node_id));
+}
+
+#[test]
+fn focus_profile_switch_projects_the_selected_responsive_variant() {
+    let mut model = make_model();
+    let node_id = studio_design::NodeId::new("headline").unwrap();
+    model.select(&node_id).unwrap();
+    assert_eq!(
+        model.snapshot().canvas.unwrap().children[0].props["text"],
+        "Before"
+    );
+
+    model.set_profile(Some("phone-portrait".to_owned()));
+    assert_eq!(
+        model.snapshot().canvas.unwrap().children[0].props["text"],
+        "Phone"
+    );
+
+    model.set_profile(None);
+    assert_eq!(
+        model.snapshot().canvas.unwrap().children[0].props["text"],
+        "Before"
+    );
 }
 
 #[test]

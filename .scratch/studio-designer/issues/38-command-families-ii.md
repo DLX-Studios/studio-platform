@@ -32,3 +32,14 @@ cache and the required low-footprint Cargo settings:
 The CLI replay path is `studio replay <json-file>` (or stdin) and accepts a
 closed `{ design, batches }` envelope. It executes through `DesignerSession`
 and reports outcomes, current/reopened snapshots, and a deterministic flag.
+
+## Closure audit at `3a05109`
+
+All acceptance boxes remain accurate on the integrated tip:
+
+- Public command-family round trips, stale conflicts, and schema rejection: `crates/studio-design/tests/designer_session_seam.rs:635-849`.
+- Composition identity propagation and override contract: `crates/studio-design/tests/designer_session_seam.rs:779-849`.
+- Responsive/token/binding family fixtures: `crates/studio-design/tests/responsive_profiles.rs:60-274`, `crates/studio-design/tests/tokens.rs:1-260`, and `crates/studio-design/tests/content_collections.rs:268-318`.
+- Deterministic CLI replay evidence is retained by the `studio-cli` replay test named in the verification section above.
+
+Verdict: closed. The focused command-family suites and CLI replay evidence are reproducible; no code gap was found.

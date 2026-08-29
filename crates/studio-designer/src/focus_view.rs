@@ -25,15 +25,16 @@ use gpui_component::{
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
     DefaultDesignerSession, DesignToken, DesignerDiagnostic, DesignerPersistence, DesignerQuery,
-    DesignerQueryResult, DesignerSession, EditorSnapshot, HierarchyEdit, HistoryOperation,
-    InteractionId, LayoutProperties, LibrarySnapshot, NodeId, NodeParent, OperationId,
-    ParentPlacement, ProjectionDiagnostic, ProjectionOptions, ProjectionReport, PropertyValue,
-    ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION, ScriptCommitMetadata, ScriptCommitOutcome,
-    ScriptDocumentAdapter, SelectionSnapshot, SessionContextUpdate, SessionError, SnapConfig,
-    StudioDesign, TokenId, TokenKind, TokenValue, UndoGroupId, WORKSPACE_STATE_SCHEMA_VERSION,
-    WorkspaceCommand, WorkspaceController, WorkspacePersistence, WorkspaceRecord, WorkspaceState,
-    delete_batch, drag_batch, duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch,
-    nudge_batch, reparent_batch, restore_batch,
+    DesignerQueryResult, DesignerSession, DeviceProfileId, DeviceProfileMatrix, EditorSnapshot,
+    HierarchyEdit, HistoryOperation, InteractionId, LayoutProperties, LibrarySnapshot, NodeId,
+    NodeParent, OperationId, ParentPlacement, ProjectionDiagnostic, ProjectionOptions,
+    ProjectionReport, PropertyValue, ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION,
+    ScriptCommitMetadata, ScriptCommitOutcome, ScriptDocumentAdapter, SelectionSnapshot,
+    SessionContextUpdate, SessionError, SnapConfig, StudioDesign, TokenId, TokenKind, TokenValue,
+    UndoGroupId, WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceCommand, WorkspaceController,
+    WorkspacePersistence, WorkspaceRecord, WorkspaceState, delete_batch, drag_batch,
+    duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch, nudge_batch, reparent_batch,
+    restore_batch, select_variant,
 };
 use studio_protocol::{NodeKind, UiNode};
 use thiserror::Error;
@@ -165,13 +166,20 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
             DesignerQueryResult::Snapshot(snapshot) => snapshot,
             _ => unreachable!("DesignerSession returned the wrong query result"),
         };
-        let active_screen_id = match self.session.query(DesignerQuery::SessionState) {
-            DesignerQueryResult::SessionState(state) => state.active_screen_id,
+        let session_state = match self.session.query(DesignerQuery::SessionState) {
+            DesignerQueryResult::SessionState(state) => state,
             _ => unreachable!("DesignerSession returned the wrong query result"),
         };
         let mut options = self.projection_options.clone();
         if options.screen_id.is_none() {
-            options.screen_id = active_screen_id;
+            options.screen_id = session_state.active_screen_id;
+        }
+        if options.responsive_variant_id.is_none()
+            && let Some(profile_id) = session_state.device_profile.as_deref()
+            && let Ok(profile_id) = DeviceProfileId::new(profile_id.to_owned())
+            && let Some(profile) = DeviceProfileMatrix::standard().profiles.get(&profile_id)
+        {
+            options.responsive_variant_id = select_variant(&snapshot.design, profile);
         }
         self.projection = studio_design::project_report(&snapshot, self.library.as_ref(), options);
         self.state = if self.projection.is_valid() {
