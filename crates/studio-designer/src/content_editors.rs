@@ -8,8 +8,8 @@ pub struct ContentEditor {
 
 impl ContentEditor {
     pub fn new(a: Box<dyn ContentAdapter>) -> Self { Self { adapter: a } }
-    pub fn edit_collection(&mut self, id: CollectionId, session: &mut DesignerSession) -> Result<(), String> {
-        session.submit(DesignerCommand::EditCollection { id }).map_err(|e| format!("{:?}", e))
+    pub fn edit_collection(&mut self, id: CollectionId, _session: &mut DesignerSession) -> Result<(), String> {
+        self.adapter.edit_collection(id, "schema")
     }
     pub fn validate_form(&self) -> Vec<String> { self.adapter.validate_form(self.adapter.collections().first().cloned().unwrap_or(CollectionId::new(""))) }
 }
