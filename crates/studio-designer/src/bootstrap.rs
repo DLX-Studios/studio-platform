@@ -8,23 +8,29 @@
 #![allow(missing_docs)]
 #![allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::Arc,
+    task::{Context as TaskContext, Poll, Wake, Waker},
+};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, div,
+    StatefulInteractiveElement, Styled, Subscription, Window, div,
 };
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::input::{Input, InputEvent, InputState};
 use serde::{Serialize, de::DeserializeOwned};
 use studio_design::{
     Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, NodeId, NodeKind, NodeParent,
     OperationId, ProjectId, PropertyValue, Screen, ScreenId, StudioDesign, UndoGroupId,
 };
 use studio_host::{
-    Durability, EmbeddedLocalStore, IdentityError, IdentityService, IdentitySession,
-    IdentitySnapshot, IdentityState, LocalStoreDesignerPersistence, LocalStoreDiagnosticCode,
-    LocalStoreError,
+    CreateIdentityRequest, Durability, EmbeddedLocalStore, IdentityError, IdentityService,
+    IdentitySession, IdentitySnapshot, IdentityState, IdentitySummary,
+    LocalStoreDesignerPersistence, LocalStoreDiagnosticCode, LocalStoreError,
 };
 use studio_security::OsSessionCredentialStore;
 
@@ -35,9 +41,10 @@ use crate::connection::{
 use crate::focus_view::{FocusOpenError, FocusView, FocusViewModel};
 use crate::project_dashboard::{
     DashboardError, DashboardPersistence as DashboardPersistenceTrait, DashboardPersistenceError,
-    DashboardPersistenceErrorCode, DashboardState, ProjectDashboard,
+    DashboardPersistenceErrorCode, DashboardState, DeleteConfirmation, ProjectAuthority,
+    ProjectDashboard, ProjectRecord,
 };
-use crate::settings::{GlobalSettings, ProjectSettings};
+use crate::settings::{GlobalSettingChange, GlobalSettings, ProjectSettings};
 use crate::{
     IdentityShellRoute, IdentityShellState, SettingsController, SettingsError, SettingsErrorCode,
     SettingsPersistence,
@@ -415,7 +422,7 @@ impl NativeProductState {
 /// Host-owned production services composed before GPUI starts.
 pub struct NativeProductBootstrap {
     store: Arc<EmbeddedLocalStore>,
-    identity_service: IdentityService<EmbeddedLocalStore, OsSessionCredentialStore>,
+    identity_service: Arc<IdentityService<EmbeddedLocalStore, OsSessionCredentialStore>>,
     sync: SyncCoordinator<OfflineSyncWorker>,
     state: NativeProductState,
 }
@@ -427,8 +434,10 @@ impl NativeProductBootstrap {
             directory,
             Durability::Every,
         )?);
-        let identity_service =
-            IdentityService::with_credentials(Arc::clone(&store), OsSessionCredentialStore);
+        let identity_service = Arc::new(IdentityService::with_credentials(
+            Arc::clone(&store),
+            OsSessionCredentialStore,
+        ));
         let snapshot = identity_service.snapshot_blocking()?;
         let session = snapshot
             .sessions
@@ -532,6 +541,97 @@ impl NativeProductBootstrap {
         self.state.sign_out();
         Ok(())
     }
+
+    /// Create a local identity from a renderer-facing form submission.
+    ///
+    /// Validation is intentionally repeated at this boundary so deterministic
+    /// callers and native UI share the same fail-closed behavior. The host
+    /// remains the source of truth for password policy and persistence.
+    pub fn create_identity_blocking(
+        &mut self,
+        display_name: impl Into<String>,
+        password: impl Into<Vec<u8>>,
+        confirmation: impl Into<Vec<u8>>,
+    ) -> Result<IdentitySummary, IdentityError> {
+        let display_name = display_name.into();
+        let password = password.into();
+        let confirmation = confirmation.into();
+        if display_name.trim().is_empty() || password != confirmation {
+            return Err(IdentityError::InvalidInput);
+        }
+        let service = Arc::clone(&self.identity_service);
+        let request = CreateIdentityRequest {
+            display_name,
+            email: None,
+            avatar: None,
+            password,
+        };
+        let summary = block_on_native(service.create_identity(request))?;
+        let snapshot = block_on_native(service.snapshot())?;
+        self.state.identity.refresh(snapshot);
+        self.state.route = ProductRoute::IdentityChooser;
+        Ok(summary)
+    }
+
+    /// Authenticate an available identity and enter the dashboard.
+    pub fn sign_in_blocking(
+        &mut self,
+        identity_id: &str,
+        password: impl AsRef<[u8]>,
+        remember: bool,
+    ) -> Result<(), IdentityError> {
+        let service = Arc::clone(&self.identity_service);
+        let result = block_on_native(service.sign_in(identity_id, password.as_ref(), remember));
+        self.refresh_identity_snapshot()?;
+        let session = result?;
+        self.install_session(session);
+        Ok(())
+    }
+
+    /// Authenticate a locked identity through the explicit unlock gate.
+    pub fn unlock_blocking(
+        &mut self,
+        identity_id: &str,
+        password: impl AsRef<[u8]>,
+        remember: bool,
+    ) -> Result<(), IdentityError> {
+        let service = Arc::clone(&self.identity_service);
+        let result = block_on_native(service.unlock(identity_id, password.as_ref(), remember));
+        self.refresh_identity_snapshot()?;
+        let session = result?;
+        self.install_session(session);
+        Ok(())
+    }
+
+    fn refresh_identity_snapshot(&mut self) -> Result<(), IdentityError> {
+        let snapshot = block_on_native(self.identity_service.snapshot())?;
+        self.state.identity.refresh(snapshot);
+        Ok(())
+    }
+
+    fn install_session(&mut self, session: IdentitySession) {
+        self.sync.set_connected(false);
+        let _ = self.state.set_authenticated_session(session);
+        self.state.indicator = self.sync.indicator().clone();
+    }
+}
+
+struct NativeWake;
+
+impl Wake for NativeWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on_native<F: Future>(future: F) -> F::Output {
+    let waker = Waker::from(Arc::new(NativeWake));
+    let mut context = TaskContext::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
 }
 
 /// Safe native bootstrap failure.
@@ -552,6 +652,20 @@ pub struct NativeProductShell {
     focus_project_id: Option<String>,
     focus_loading: bool,
     focus_error: Option<String>,
+    create_name: Option<Entity<InputState>>,
+    create_password: Option<Entity<InputState>>,
+    create_confirmation: Option<Entity<InputState>>,
+    gate_password: Option<Entity<InputState>>,
+    input_subscriptions: Vec<Subscription>,
+    input_route: Option<ProductRoute>,
+    remember_session: bool,
+    identity_error: Option<String>,
+    dashboard: Option<ProjectDashboard<LocalStoreDashboardPersistence>>,
+    dashboard_error: Option<String>,
+    next_project_number: u32,
+    pending_delete: Option<(String, crate::project_dashboard::DeleteConsequences)>,
+    settings: Option<SettingsController<LocalStoreSettingsPersistence>>,
+    settings_error: Option<String>,
 }
 
 impl NativeProductShell {
@@ -563,7 +677,198 @@ impl NativeProductShell {
             focus_project_id: None,
             focus_loading: false,
             focus_error: None,
+            create_name: None,
+            create_password: None,
+            create_confirmation: None,
+            gate_password: None,
+            input_subscriptions: Vec::new(),
+            input_route: None,
+            remember_session: true,
+            identity_error: None,
+            dashboard: None,
+            dashboard_error: None,
+            next_project_number: 1,
+            pending_delete: None,
+            settings: None,
+            settings_error: None,
         }
+    }
+
+    fn ensure_identity_inputs(
+        &mut self,
+        route: &ProductRoute,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.input_route.as_ref() == Some(route) {
+            return;
+        }
+        self.input_route = Some(route.clone());
+        self.input_subscriptions.clear();
+        self.identity_error = None;
+        self.create_name = None;
+        self.create_password = None;
+        self.create_confirmation = None;
+        self.gate_password = None;
+        match route {
+            ProductRoute::CreateIdentity => {
+                let name = cx.new(|cx| InputState::new(window, cx).placeholder("Display name"));
+                let password = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Password")
+                        .masked(true)
+                });
+                let confirmation = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Confirm password")
+                        .masked(true)
+                });
+                self.create_name = Some(name.clone());
+                self.create_password = Some(password.clone());
+                self.create_confirmation = Some(confirmation.clone());
+                for input in [name, password, confirmation] {
+                    self.input_subscriptions.push(cx.subscribe(
+                        &input,
+                        |this, _, event: &InputEvent, cx| {
+                            if matches!(event, InputEvent::Change) {
+                                this.identity_error = None;
+                                cx.notify();
+                            }
+                        },
+                    ));
+                }
+            }
+            ProductRoute::SignIn { .. } | ProductRoute::Unlock { .. } => {
+                let password = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Password")
+                        .masked(true)
+                });
+                self.gate_password = Some(password.clone());
+                self.input_subscriptions.push(cx.subscribe(
+                    &password,
+                    |this, _, event: &InputEvent, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            this.identity_error = None;
+                            cx.notify();
+                        }
+                    },
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    fn ensure_dashboard(&mut self) {
+        if self.dashboard.is_some() || self.dashboard_error.is_some() {
+            return;
+        }
+        match self.bootstrap.dashboard() {
+            Ok(dashboard) => self.dashboard = Some(dashboard),
+            Err(error) => self.dashboard_error = Some(error.to_string()),
+        }
+    }
+
+    fn ensure_settings(&mut self) {
+        if self.settings.is_some() || self.settings_error.is_some() {
+            return;
+        }
+        match self.bootstrap.settings() {
+            Ok(settings) => self.settings = Some(settings),
+            Err(error) => self.settings_error = Some(error.to_string()),
+        }
+    }
+
+    fn create_project(&mut self) -> Option<String> {
+        let dashboard = self.dashboard.as_mut()?;
+        let number = self.next_project_number;
+        self.next_project_number = self.next_project_number.saturating_add(1);
+        let id = format!("local-project-{number}");
+        let project = ProjectRecord::new(
+            &id,
+            format!("Untitled project {number}"),
+            ProjectAuthority::Local,
+            number as u64,
+        );
+        dashboard.add_project(project).ok()?;
+        Some(id)
+    }
+
+    fn submit_create(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self
+            .create_name
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+        else {
+            return;
+        };
+        let Some(password) = self
+            .create_password
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+        else {
+            return;
+        };
+        let Some(confirmation) = self
+            .create_confirmation
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+        else {
+            return;
+        };
+        match self.bootstrap.create_identity_blocking(
+            name,
+            password.into_bytes(),
+            confirmation.into_bytes(),
+        ) {
+            Ok(_) => {
+                self.identity_error = None;
+                self.input_route = None;
+                cx.notify();
+            }
+            Err(error) => {
+                self.identity_error = Some(safe_identity_error(&error));
+                cx.notify();
+            }
+        }
+    }
+
+    fn submit_gate(&mut self, identity_id: String, unlock: bool, cx: &mut Context<Self>) {
+        let Some(password) = self
+            .gate_password
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+        else {
+            return;
+        };
+        let result = if unlock {
+            self.bootstrap
+                .unlock_blocking(&identity_id, password.as_bytes(), self.remember_session)
+        } else {
+            self.bootstrap.sign_in_blocking(
+                &identity_id,
+                password.as_bytes(),
+                self.remember_session,
+            )
+        };
+        match result {
+            Ok(()) => {
+                self.identity_error = None;
+                self.input_route = None;
+                self.dashboard = None;
+                self.dashboard_error = None;
+            }
+            Err(error) => {
+                self.identity_error = Some(safe_identity_error(&error));
+                if !unlock && error.code() == studio_host::IdentityErrorCode::WrongPassword {
+                    self.bootstrap
+                        .state_mut()
+                        .navigate(ProductRoute::Unlock { identity_id });
+                    self.input_route = None;
+                }
+            }
+        }
+        cx.notify();
     }
 
     fn start_focus_open(&mut self, project_id: String, cx: &mut Context<Self>) {
@@ -761,10 +1066,38 @@ fn safe_focus_error(error: &FocusOpenError) -> String {
     }
 }
 
+fn safe_identity_error(error: &IdentityError) -> String {
+    match error.code() {
+        studio_host::IdentityErrorCode::InvalidInput => {
+            "Enter a display name and a non-empty matching password.".to_owned()
+        }
+        studio_host::IdentityErrorCode::WrongPassword => {
+            "That password was not accepted. This identity is now locked; use Unlock to try again."
+                .to_owned()
+        }
+        studio_host::IdentityErrorCode::Locked => {
+            "This identity is locked. Enter its password to unlock it.".to_owned()
+        }
+        studio_host::IdentityErrorCode::NotFound => {
+            "That identity is no longer available.".to_owned()
+        }
+        studio_host::IdentityErrorCode::CredentialUnavailable => {
+            "The protected session could not be accessed. Try again.".to_owned()
+        }
+        studio_host::IdentityErrorCode::StoreUnavailable
+        | studio_host::IdentityErrorCode::CatalogCorrupt
+        | studio_host::IdentityErrorCode::EntropyUnavailable => {
+            "Studio could not complete this identity operation. Try again later.".to_owned()
+        }
+    }
+}
+
 impl Render for NativeProductShell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let route = self.bootstrap.state().route().clone();
         let indicator = self.bootstrap.state().indicator().clone();
+        let route_is_unlock = matches!(&route, ProductRoute::Unlock { .. });
+        self.ensure_identity_inputs(&route, window, cx);
         let mut content = div()
             .id("native-product-content")
             .flex()
@@ -793,18 +1126,31 @@ impl Render for NativeProductShell {
             }
             ProductRoute::IdentityChooser => {
                 content = content.child("Choose a remembered identity or create a local identity.");
-                if let Some(identity) = self.bootstrap.state().identity().identities().first() {
+                let identities = self.bootstrap.state().identity().identities().to_vec();
+                if identities.is_empty() {
+                    content = content.child("No identities yet — create one to begin.");
+                }
+                for identity in identities {
                     let identity_id = identity.identity_id.clone();
-                    let route = match identity.state {
+                    let identity_route = match identity.state {
                         IdentityState::Available => ProductRoute::SignIn { identity_id },
                         IdentityState::Locked => ProductRoute::Unlock { identity_id },
                     };
-                    content = content.child(self.route_button(
-                        "choose-identity",
-                        "Continue with this identity",
-                        route,
-                        cx,
-                    ));
+                    content = content.child(
+                        div()
+                            .id(format!("identity-{}", identity.identity_id))
+                            .child(div().text_lg().child(identity.display_name))
+                            .child(div().text_sm().child(match identity.state {
+                                IdentityState::Available => "Available",
+                                IdentityState::Locked => "Locked — unlock required",
+                            }))
+                            .child(self.route_button(
+                                "choose-identity",
+                                "Continue",
+                                identity_route,
+                                cx,
+                            )),
+                    );
                 }
                 content = content.child(self.route_button(
                     "create-identity",
@@ -814,8 +1160,34 @@ impl Render for NativeProductShell {
                 ));
             }
             ProductRoute::CreateIdentity => {
+                if let (Some(name), Some(password), Some(confirmation)) = (
+                    self.create_name.clone(),
+                    self.create_password.clone(),
+                    self.create_confirmation.clone(),
+                ) {
+                    content = content
+                        .child(
+                            "Create a local identity. Passwords stay in the host identity service.",
+                        )
+                        .child(Input::new(&name))
+                        .child(Input::new(&password))
+                        .child(Input::new(&confirmation));
+                }
+                if let Some(error) = self.identity_error.clone() {
+                    content = content.child(
+                        div()
+                            .id("identity-error")
+                            .role(gpui::Role::Alert)
+                            .child(error),
+                    );
+                }
                 content = content
-                    .child("Identity creation is handled by the host-owned secure form.")
+                    .child(
+                        Button::new("submit-create-identity")
+                            .label("Create identity")
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| this.submit_create(cx))),
+                    )
                     .child(self.route_button(
                         "back-identity",
                         "Back to identities",
@@ -823,9 +1195,47 @@ impl Render for NativeProductShell {
                         cx,
                     ));
             }
-            ProductRoute::SignIn { .. } | ProductRoute::Unlock { .. } => {
+            ProductRoute::SignIn { identity_id } | ProductRoute::Unlock { identity_id } => {
+                let is_unlock = route_is_unlock;
+                if let Some(password) = self.gate_password.clone() {
+                    content = content
+                        .child(if is_unlock {
+                            "Unlock this identity."
+                        } else {
+                            "Sign in with your password."
+                        })
+                        .child(Input::new(&password));
+                }
+                content = content.child(
+                    Button::new("remember-session")
+                        .label(if self.remember_session {
+                            "Remember this session: on"
+                        } else {
+                            "Remember this session: off"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.remember_session = !this.remember_session;
+                            cx.notify();
+                        })),
+                );
+                if let Some(error) = self.identity_error.clone() {
+                    content = content.child(
+                        div()
+                            .id("identity-error")
+                            .role(gpui::Role::Alert)
+                            .child(error),
+                    );
+                }
+                let identity_id_for_submit = identity_id.clone();
                 content = content
-                    .child("Credentials stay inside the host-owned secure input path.")
+                    .child(
+                        Button::new("submit-identity-gate")
+                            .label(if is_unlock { "Unlock" } else { "Sign in" })
+                            .primary()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.submit_gate(identity_id_for_submit.clone(), is_unlock, cx)
+                            })),
+                    )
                     .child(self.route_button(
                         "back-identity",
                         "Back to identities",
@@ -871,21 +1281,127 @@ impl Render for NativeProductShell {
                                 })),
                         );
                 }
-                content = content.child(self.route_button(
-                    "back-dashboard",
-                    "Back to dashboard",
-                    ProductRoute::Dashboard,
-                    cx,
-                ));
+                content = content
+                    .child(self.route_button(
+                        "back-dashboard",
+                        "Back to dashboard",
+                        ProductRoute::Dashboard,
+                        cx,
+                    ))
+                    .child(self.route_button(
+                        "back-identity-from-project",
+                        "Back to identity chooser",
+                        ProductRoute::IdentityChooser,
+                        cx,
+                    ));
             }
             ProductRoute::Dashboard => {
+                self.ensure_dashboard();
+                let dashboard_snapshot = self.dashboard.as_ref().map(ProjectDashboard::snapshot);
                 content = content
-                    .child("Local and cached projects remain available when Cloud is offline.")
+                    .child("Local and cached projects remain available when Cloud is offline.");
+                if let Some(error) = self.dashboard_error.clone() {
+                    content = content.child(
+                        div()
+                            .id("dashboard-error")
+                            .role(gpui::Role::Alert)
+                            .child(error),
+                    );
+                } else if let Some(snapshot) = dashboard_snapshot {
+                    if snapshot.is_empty {
+                        content = content.child("Your projects will appear here. Create your first project to get started.");
+                    }
+                    for project in snapshot.projects {
+                        let project_id = project.id.clone();
+                        let open_project_id = project_id.clone();
+                        let delete_id = project.id.clone();
+                        let project_name = project.name.clone();
+                        let mut card = div()
+                            .id(format!("project-{}", project.id))
+                            .child(div().text_lg().child(project.name))
+                            .child(div().text_sm().child(format!(
+                                "{:?} · {:?}",
+                                project.authority, project.sync_state
+                            )))
+                            .child(
+                                Button::new(format!("open-{}", project_id))
+                                    .label("Open project")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this.dashboard.as_mut().is_some_and(|dashboard| {
+                                            dashboard
+                                                .state()
+                                                .projects
+                                                .contains_key(&open_project_id)
+                                        }) {
+                                            let _ = this
+                                                .bootstrap
+                                                .state_mut()
+                                                .open_project(open_project_id.clone());
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new(format!("delete-{}", delete_id))
+                                    .label("Delete…")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(dashboard) = this.dashboard.as_ref() {
+                                            if let Ok(preview) =
+                                                dashboard.delete_preview(&delete_id)
+                                            {
+                                                this.pending_delete =
+                                                    Some((delete_id.clone(), preview));
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            );
+                        if let Some((pending_id, consequences)) = &self.pending_delete {
+                            if pending_id == &project_id {
+                                let lines = consequences.lines();
+                                card = card
+                                    .child(
+                                        div()
+                                            .id(format!("delete-preview-{}", pending_id))
+                                            .role(gpui::Role::Alert)
+                                            .child(lines.join(" ")),
+                                    )
+                                    .child(
+                                        Button::new(format!("confirm-delete-{}", pending_id))
+                                            .label(format!("Confirm delete {}", project_name))
+                                            .primary()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if let Some((id, consequences)) =
+                                                    this.pending_delete.take()
+                                                {
+                                                    if let Some(dashboard) = this.dashboard.as_mut()
+                                                    {
+                                                        let confirmation =
+                                                            DeleteConfirmation::acknowledge(
+                                                                id.clone(),
+                                                                consequences,
+                                                            );
+                                                        let _ = dashboard.delete_project(
+                                                            &id,
+                                                            Some(confirmation),
+                                                        );
+                                                    }
+                                                }
+                                                cx.notify();
+                                            })),
+                                    );
+                            }
+                        }
+                        content = content.child(card);
+                    }
+                }
+                content = content
                     .child(
-                        Button::new("open-project")
-                            .label("Open project")
+                        Button::new("create-project")
+                            .label("Create project")
+                            .primary()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                let _ = this.bootstrap.state_mut().open_project("local-project");
+                                let _ = this.create_project();
                                 cx.notify();
                             })),
                     )
@@ -899,9 +1415,41 @@ impl Render for NativeProductShell {
                             .label("Sign out")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let _ = this.bootstrap.sign_out();
+                                this.dashboard = None;
+                                this.input_route = None;
                                 cx.notify();
                             })),
                     );
+            }
+            ProductRoute::Settings => {
+                self.ensure_settings();
+                content = content.child("Global settings are persisted locally on this device.");
+                if let Some(error) = self.settings_error.clone() {
+                    content = content.child(
+                        div()
+                            .id("settings-error")
+                            .role(gpui::Role::Alert)
+                            .child(error),
+                    );
+                } else if let Some(settings) = self.settings.as_ref() {
+                    let global = settings.global().clone();
+                    content = content
+                        .child(format!("Theme: {:?} · Language: {:?}", global.theme, global.language))
+                        .child(Button::new("toggle-reduced-motion").label(format!("Reduced motion: {}", if global.reduced_motion { "on" } else { "off" })).on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(settings) = this.settings.as_mut() {
+                                let value = !settings.global().reduced_motion;
+                                let _ = settings.update_global(GlobalSettingChange::ReducedMotion(value));
+                            }
+                            cx.notify();
+                        })))
+                        .child("Theme, language, and transport-specific settings are available through their owning adapters.");
+                }
+                content = content.child(self.route_button(
+                    "back-dashboard",
+                    "Back to dashboard",
+                    ProductRoute::Dashboard,
+                    cx,
+                ));
             }
             _ => {
                 content = content

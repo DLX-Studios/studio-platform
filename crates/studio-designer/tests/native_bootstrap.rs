@@ -1,7 +1,9 @@
 #![allow(missing_docs)]
 
-use studio_designer::{NativeProductState, ProductRoute};
-use studio_host::{IdentityKind, IdentitySnapshot, IdentityState, IdentitySummary};
+use studio_designer::{NativeProductBootstrap, NativeProductState, ProductRoute};
+use studio_host::{
+    IdentityErrorCode, IdentityKind, IdentitySnapshot, IdentityState, IdentitySummary,
+};
 
 fn first_launch() -> NativeProductState {
     NativeProductState::new(
@@ -80,4 +82,61 @@ fn designer_binary_owns_the_product_shell_without_runtime_bundle_admission() {
     assert!(bootstrap.contains("LocalStoreDesignerPersistence"));
     assert!(!main.contains("LaunchRequest"));
     assert!(!bootstrap.contains("FoundationGallery"));
+}
+
+#[test]
+fn native_identity_forms_and_dashboard_route_use_host_services() {
+    let directory = tempfile::tempdir().expect("temporary Studio data directory");
+    let mut bootstrap = NativeProductBootstrap::open(directory.path()).expect("bootstrap opens");
+    assert_eq!(bootstrap.state().route(), &ProductRoute::Welcome);
+
+    bootstrap
+        .dismiss_welcome()
+        .expect("welcome dismissal persists");
+    assert_eq!(bootstrap.state().route(), &ProductRoute::IdentityChooser);
+    assert_eq!(
+        bootstrap
+            .create_identity_blocking("", b"password".to_vec(), b"password".to_vec())
+            .expect_err("empty display name is rejected")
+            .code(),
+        IdentityErrorCode::InvalidInput
+    );
+    bootstrap
+        .create_identity_blocking("Local Designer", b"password".to_vec(), b"password".to_vec())
+        .expect("identity is created");
+    assert_eq!(bootstrap.state().route(), &ProductRoute::IdentityChooser);
+
+    let identity_id = bootstrap.state().identity().identities()[0]
+        .identity_id
+        .clone();
+    let wrong = bootstrap
+        .sign_in_blocking(&identity_id, b"wrong", false)
+        .expect_err("wrong password is rejected and locks");
+    assert_eq!(wrong.code(), IdentityErrorCode::WrongPassword);
+    assert_eq!(
+        bootstrap.state().identity().identities()[0].state,
+        IdentityState::Locked
+    );
+    bootstrap
+        .unlock_blocking(&identity_id, b"password", false)
+        .expect("locked identity unlocks");
+    assert_eq!(bootstrap.state().route(), &ProductRoute::Dashboard);
+
+    let mut dashboard = bootstrap.dashboard().expect("dashboard opens");
+    dashboard
+        .add_project(studio_designer::project_dashboard::ProjectRecord::new(
+            "native-project",
+            "Native project",
+            studio_designer::project_dashboard::ProjectAuthority::Local,
+            1,
+        ))
+        .expect("project persists");
+    assert_eq!(dashboard.snapshot().projects.len(), 1);
+    assert!(bootstrap.state_mut().open_project("native-project"));
+    assert_eq!(
+        bootstrap.state().route(),
+        &ProductRoute::Project {
+            project_id: "native-project".to_owned()
+        }
+    );
 }
