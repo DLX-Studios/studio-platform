@@ -628,11 +628,26 @@ impl Validator<'_> {
     /// Record shapes must agree between literal initializers and push
     /// operands (scalar fields only); dynamic blocks need bare state
     /// collections, static row structure, and covered item reads.
+    #[allow(clippy::too_many_lines)]
     fn validate_list_shapes(&mut self, module: &SourceModule) {
+        enum PushEvidence {
+            Literal {
+                slot: String,
+                keys: Vec<String>,
+                start: u32,
+                end: u32,
+            },
+            NotLiteral {
+                slot: String,
+                start: u32,
+                end: u32,
+            },
+        }
         let mutated = self.mutated_slots();
         // Snapshot array shapes first: reporting borrows the validator
         // mutably while the script model is borrowed immutably.
-        let mut shapes: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        let mut shapes: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         let mut initial_shapes: Vec<(String, Vec<String>, bool, u32, u32)> = Vec::new();
         for slot in &self.script.state {
             let StudioValue::Array(elements) = &slot.value else {
@@ -649,9 +664,11 @@ impl Validator<'_> {
                 let scalar = names.iter().all(|name| {
                     matches!(
                         fields.get(name),
-                        Some(StudioValue::String(_)
-                            | StudioValue::Number(_)
-                            | StudioValue::Boolean(_))
+                        Some(
+                            StudioValue::String(_)
+                                | StudioValue::Number(_)
+                                | StudioValue::Boolean(_)
+                        )
                     )
                 });
                 if !scalar {
@@ -694,27 +711,13 @@ impl Validator<'_> {
         }
         // Push operands join the shape evidence; all must agree.
         // Snapshot first: reporting borrows mutably mid-iteration.
-        enum PushEvidence {
-            Literal {
-                slot: String,
-                keys: Vec<String>,
-                start: u32,
-                end: u32,
-            },
-            NotLiteral {
-                slot: String,
-                start: u32,
-                end: u32,
-            },
-        }
         let mut pushes = Vec::new();
         for function in &self.script.functions {
             for mutation in &function.mutations {
                 if mutation.op != MutationOp::Push {
                     continue;
                 }
-                let start =
-                    u32::try_from(mutation.span.start.offset).unwrap_or(u32::MAX);
+                let start = u32::try_from(mutation.span.start.offset).unwrap_or(u32::MAX);
                 let end = u32::try_from(mutation.span.end.offset).unwrap_or(u32::MAX);
                 match record_keys(&mutation.operand_text) {
                     Some(keys) => pushes.push(PushEvidence::Literal {
@@ -831,8 +834,8 @@ impl Validator<'_> {
                     self.validate_each_block(
                         collection,
                         item,
-                        index,
-                        key,
+                        index.as_ref(),
+                        key.as_ref(),
                         body,
                         fallback,
                         *span,
@@ -840,9 +843,11 @@ impl Validator<'_> {
                         shapes,
                     );
                     let nested = outer_dynamic || dynamic;
-                    stack.extend(body.iter().chain(fallback.iter()).map(|child| {
-                        (child, in_branch, nested)
-                    }));
+                    stack.extend(
+                        body.iter()
+                            .chain(fallback.iter())
+                            .map(|child| (child, in_branch, nested)),
+                    );
                 }
                 SourceNode::Component { children, .. } => {
                     stack.extend(
@@ -878,8 +883,8 @@ impl Validator<'_> {
         &mut self,
         collection: &SourceExpression,
         item: &str,
-        index: &Option<String>,
-        key: &Option<SourceExpression>,
+        index: Option<&String>,
+        key: Option<&SourceExpression>,
         body: &[SourceNode],
         fallback: &[SourceNode],
         span: SourceSpan,
@@ -890,32 +895,28 @@ impl Validator<'_> {
         // Duplicate static keys fail fast when the key is a simple field.
         // Snapshot first: reporting borrows mutably mid-iteration.
         let mut duplicates = Vec::new();
-        if let Some(key) = key {
-            if let Some(field) = simple_key_field(&key.text, item) {
-                if let Some(slot) = self
-                    .script
-                    .state
-                    .iter()
-                    .find(|slot| slot.name == collection_text)
+        if let Some(key) = key
+            && let Some(field) = simple_key_field(&key.text, item)
+            && let Some(slot) = self
+                .script
+                .state
+                .iter()
+                .find(|slot| slot.name == collection_text)
+            && let StudioValue::Array(elements) = &slot.value
+        {
+            let mut seen = std::collections::BTreeSet::new();
+            for element in elements {
+                if let StudioValue::Record(fields) = element
+                    && let Some(value) = fields.get(&field)
                 {
-                    if let StudioValue::Array(elements) = &slot.value {
-                        let mut seen = std::collections::BTreeSet::new();
-                        for element in elements {
-                            if let StudioValue::Record(fields) = element {
-                                if let Some(value) = fields.get(&field) {
-                                    let key_text = match value {
-                                        StudioValue::String(text) => text.clone(),
-                                        StudioValue::Number(literal) => literal.text.clone(),
-                                        StudioValue::Boolean(value) => value.to_string(),
-                                        StudioValue::Array(_)
-                                        | StudioValue::Record(_) => continue,
-                                    };
-                                    if !seen.insert(key_text.clone()) {
-                                        duplicates.push((slot.name.clone(), key_text));
-                                    }
-                                }
-                            }
-                        }
+                    let key_text = match value {
+                        StudioValue::String(text) => text.clone(),
+                        StudioValue::Number(literal) => literal.text.clone(),
+                        StudioValue::Boolean(value) => value.to_string(),
+                        StudioValue::Array(_) | StudioValue::Record(_) => continue,
+                    };
+                    if !seen.insert(key_text.clone()) {
+                        duplicates.push((slot.name.clone(), key_text));
                     }
                 }
             }
@@ -956,8 +957,8 @@ impl Validator<'_> {
             );
         }
         // Fallbacks never see item or index locals.
-        let index_name = index.clone().unwrap_or_else(|| "index".to_owned());
-        if reads_any(fallback, item, &index_name) {
+        let index_name = index.map_or("index", |name| name.as_str());
+        if reads_any(fallback, item, index_name) {
             self.error(
                 CODE_NO_LOWERING_RULE,
                 "fallbacks cannot read item or index locals".to_owned(),
@@ -970,8 +971,10 @@ impl Validator<'_> {
         if !reads.is_empty() {
             match shapes.get(&collection_text) {
                 Some(fields) => {
-                    let mut missing: Vec<&String> =
-                        reads.iter().filter(|field| !fields.contains(field)).collect();
+                    let mut missing: Vec<&String> = reads
+                        .iter()
+                        .filter(|field| !fields.contains(field))
+                        .collect();
                     missing.sort();
                     if let Some(field) = missing.first() {
                         self.error(
@@ -1844,9 +1847,7 @@ fn collect_item_reads_in_text(
         if boundary {
             let rest = &text[absolute + prefix.len()..];
             let end = rest
-                .find(|character: char| {
-                    !(character.is_ascii_alphanumeric() || character == '_')
-                })
+                .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
                 .unwrap_or(rest.len());
             if end > 0 {
                 reads.insert(rest[..end].to_owned());

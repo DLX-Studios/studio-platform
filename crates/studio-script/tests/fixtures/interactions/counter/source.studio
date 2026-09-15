@@ -1,0 +1,21 @@
+<script lang="ts">
+  let count = $state(0);
+  let total = $derived(count * 2999);
+  function increment() {
+    count += 1;
+  }
+  function decrement() {
+    count -= 1;
+  }
+</script>
+
+<Card id="counter">
+  <Column id="counter-col">
+    <Text id="counter-value">{count}</Text>
+    <Text id="counter-total">Total ${total}</Text>
+    <Row id="counter-actions">
+      <Button id="counter-inc" label="+" onclick={increment} />
+      <Button id="counter-dec" label="-" onclick={decrement} />
+    </Row>
+  </Column>
+</Card>

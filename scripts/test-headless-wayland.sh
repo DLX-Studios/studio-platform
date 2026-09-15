@@ -29,6 +29,18 @@ if [[ ! -x "${studio_binary}" ]]; then
   cargo build --locked -p studio-app
 fi
 
+# The native host requires a launch target; the starter bundle built by the
+# tooling suite (`bun run build:starter`) is the documented launch fixture.
+bundle="${STUDIO_BUNDLE:-${repository_root}/examples/starter/build/starter.studio}"
+if [[ ! -f "${bundle}" ]]; then
+  bun run "${repository_root}/scripts/build-example.ts" starter
+fi
+if [[ ! -f "${bundle}" ]]; then
+  echo "Studio launch bundle missing: ${bundle}" >&2
+  echo "build it with: bun run build:starter" >&2
+  exit 1
+fi
+
 set +e
 unsupported_output="$(
   env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET \
@@ -73,7 +85,9 @@ trap cleanup EXIT INT TERM
 
 export XDG_RUNTIME_DIR="${runtime_dir}"
 export WLR_BACKENDS="headless"
+export WLR_RENDERER="pixman"
 export WLR_LIBINPUT_NO_DEVICES="1"
+export LIBGL_ALWAYS_SOFTWARE="1"
 unset DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET
 xwayland_before="$(pgrep -x Xwayland 2>/dev/null || true)"
 
@@ -105,7 +119,7 @@ fi
 
 export WAYLAND_DISPLAY="${wayland_socket##*/}"
 
-"${studio_binary}" >"${runtime_dir}/studio.log" 2>&1 &
+"${studio_binary}" --dev "${bundle}" >"${runtime_dir}/studio.log" 2>&1 &
 studio_pid=$!
 
 for _ in {1..20}; do

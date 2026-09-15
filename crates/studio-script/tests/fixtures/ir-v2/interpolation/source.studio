@@ -1,0 +1,11 @@
+<script lang="ts">
+  let { name = "Studio", tagline = "build native" } = $props();
+  let shout = $state(false);
+</script>
+<Box id="interp-box">
+  <Column id="interp-col">
+    <Text id="interp-name">Hello, {name}!</Text>
+    <Text id="interp-flag">{shout}</Text>
+    <Empty id="interp-tag" title={tagline} description="static" />
+  </Column>
+</Box>

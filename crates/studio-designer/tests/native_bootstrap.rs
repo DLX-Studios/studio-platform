@@ -4,6 +4,7 @@ use studio_designer::{NativeProductBootstrap, NativeProductState, ProductRoute};
 use studio_host::{
     IdentityErrorCode, IdentityKind, IdentitySnapshot, IdentityState, IdentitySummary,
 };
+use studio_security::OsCredentialBackend;
 
 fn first_launch() -> NativeProductState {
     NativeProductState::new(
@@ -185,6 +186,30 @@ fn fresh_directory_identity_creation_enters_the_dashboard() {
     bootstrap
         .dismiss_welcome()
         .expect("welcome dismissal persists");
+
+    // Remembering a session persists its token in the OS credential
+    // facility (freedesktop Secret Service on Linux). That facility does
+    // not exist on headless runners, so gate the persistence leg on the
+    // shipped probe and still prove the deterministic first-launch path:
+    // creation plus sign-in enters the dashboard without persistence.
+    if !OsCredentialBackend::is_available() {
+        eprintln!(
+            "external gap: OS credential facility unavailable — proving dashboard entry without session persistence"
+        );
+        bootstrap
+            .create_identity_and_sign_in_blocking(
+                "Local Designer",
+                b"password".to_vec(),
+                b"password".to_vec(),
+                false,
+            )
+            .expect("identity creation signs in without the credential facility");
+
+        assert!(bootstrap.state().is_authenticated());
+        assert_eq!(bootstrap.state().route(), &ProductRoute::Dashboard);
+        assert_eq!(bootstrap.state().identity().identities().len(), 1);
+        return;
+    }
 
     bootstrap
         .create_identity_and_sign_in_blocking(

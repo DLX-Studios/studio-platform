@@ -562,8 +562,7 @@ fn apply_list_mutation(
 /// A non-negative integer position for list removal.
 fn as_index(value: &StudioValue) -> Result<usize, EvalError> {
     match value {
-        StudioValue::Number(literal)
-            if literal.value >= 0.0 && literal.value.fract() == 0.0 =>
+        StudioValue::Number(literal) if literal.value >= 0.0 && literal.value.fract() == 0.0 =>
         {
             #[allow(
                 clippy::cast_possible_truncation,
@@ -652,9 +651,7 @@ fn collect_structural_ops(
     let mut stack: Vec<&crate::ir::TemplateNode> = component.template.iter().collect();
     while let Some(node) = stack.pop() {
         match node {
-            TemplateNode::Each {
-                id, collection, ..
-            } => {
+            TemplateNode::Each { id, collection, .. } => {
                 // Dynamic blocks iterate a bare mutated state slot; anything
                 // else is static (the validator rejects dynamic complexity).
                 // This narrow rule mirrors the compiled backend exactly.

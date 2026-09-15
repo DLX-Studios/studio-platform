@@ -1,0 +1,11 @@
+<script lang="ts">
+  let { price = 0 } = $props();
+  let quantity = $state(1);
+  let total = $derived(quantity * price);
+</script>
+<Card id="derived-card">
+  <Column id="derived-col">
+    <Text id="derived-total">{total}</Text>
+    <Text id="derived-quantity">{quantity}</Text>
+  </Column>
+</Card>

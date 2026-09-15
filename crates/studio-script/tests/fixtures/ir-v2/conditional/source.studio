@@ -1,0 +1,10 @@
+<script lang="ts">
+  let { available = true } = $props();
+</script>
+<Card id="conditional-card">
+  {#if available}
+    <Text id="conditional-yes">In stock</Text>
+  {:else}
+    <Text id="conditional-no">Unavailable</Text>
+  {/if}
+</Card>

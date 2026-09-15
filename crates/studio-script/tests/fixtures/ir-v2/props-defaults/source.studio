@@ -1,0 +1,10 @@
+<script lang="ts">
+  let { title = "Hello", count = 3, open = true } = $props();
+</script>
+<Card id="props-card">
+  <Column id="props-col">
+    <Text id="props-title">{title}</Text>
+    <Text id="props-count">{count}</Text>
+    <Text id="props-open">{open}</Text>
+  </Column>
+</Card>

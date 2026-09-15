@@ -442,7 +442,7 @@ impl RowCtx<'_> {
     fn resolve(&self, path: &str) -> Result<(String, ContentTy), StudioEmitError> {
         if path == self.item {
             // Matches `as_text` on records: renders empty.
-            return Ok(("".to_owned(), ContentTy::String));
+            return Ok((String::new(), ContentTy::String));
         }
         if path == self.index_name {
             return Ok((self.index_expr.clone(), ContentTy::Number));
@@ -457,7 +457,10 @@ impl RowCtx<'_> {
             let Some(ty) = self.fields.get(field) else {
                 return Err(emit_failed("unknown item fields"));
             };
-            return Ok((format!("{}_{}[{}]", self.prefix, field, self.index_expr), *ty));
+            return Ok((
+                format!("{}_{}[{}]", self.prefix, field, self.index_expr),
+                *ty,
+            ));
         }
         Err(emit_failed("unbound locals in rows"))
     }
@@ -987,6 +990,9 @@ fn ts_default(ty: ContentTy) -> &'static str {
 }
 
 /// One dynamic row list: everything row code generation needs.
+///
+/// WIP planner for patched-row emission; not yet consumed by an emit path.
+#[allow(dead_code)]
 struct BlockPlan<'a> {
     /// Template `Each` node id.
     id: String,
@@ -1011,6 +1017,7 @@ struct BlockPlan<'a> {
 }
 
 /// Sanitize a node id into an ASC identifier fragment.
+#[allow(dead_code)]
 fn sanitize_id(id: &str) -> String {
     id.chars()
         .map(|character| {
@@ -1025,6 +1032,7 @@ fn sanitize_id(id: &str) -> String {
 
 /// Collect dynamic row lists: `Each` blocks iterating a state slot that
 /// any handler mutates with a list operation.
+#[allow(dead_code)]
 fn collect_blocks<'a>(
     component: &'a ComponentDefinition,
 ) -> Result<Vec<BlockPlan<'a>>, StudioEmitError> {
@@ -1065,7 +1073,7 @@ fn collect_blocks<'a>(
                 }
                 let mut fields: Vec<(String, ContentTy)> = Vec::new();
                 collect_row_reads(body, item, &mut fields, component)?;
-                collect_row_reads(std::slice::from_ref(key), item, &mut fields, component)?;
+                collect_expression_reads(key, item, &mut fields, component)?;
                 blocks.push(BlockPlan {
                     wrapper: format!("{id}#items"),
                     prefix: format!("each_{}", sanitize_id(id)),
@@ -1089,112 +1097,24 @@ fn collect_blocks<'a>(
             } => {
                 stack.extend(consequent.iter().chain(alternate.iter()));
             }
-            crate::ir::TemplateNode::Text { .. } | crate::ir::TemplateNode::Interpolation { .. } => {
-            }
+            crate::ir::TemplateNode::Text { .. }
+            | crate::ir::TemplateNode::Interpolation { .. } => {}
         }
     }
     blocks.sort_by(|left, right| left.wrapper.cmp(&right.wrapper));
     Ok(blocks)
 }
 
-/// Collect `item.<field>` read names for parallel arrays.
-fn collect_row_reads(
-    nodes: &[crate::ir::TemplateNode],
-    item: &str,
-    fields: &mut Vec<String>,
-) {
-    let mut stack: Vec<&crate::ir::TemplateNode> = nodes.iter().collect();
-    while let Some(node) = stack.pop() {
-        match node {
-            crate::ir::TemplateNode::Component {
-                props, children, ..
-            } => {
-                for binding in props {
-                    if let crate::ir::PropValue::Expression(expression) = &binding.value {
-                        collect_expression_reads(expression, item, fields);
-                    }
-                }
-                stack.extend(children.iter());
-            }
-            crate::ir::TemplateNode::Text { .. } => {}
-            crate::ir::TemplateNode::Interpolation { expression, .. } => {
-                collect_expression_reads(std::slice::from_ref(expression), item, fields);
-            }
-            crate::ir::TemplateNode::If { .. } | crate::ir::TemplateNode::Each { .. } => {}
-        }
-    }
-}
-
-/// Collect `item.<field>` read names from one expression.
-fn collect_expression_reads(
-    expression: &StudioExpression,
-    item: &str,
-    fields: &mut Vec<String>,
-) {
-    match expression {
-        StudioExpression::ReadLocal(path) => {
-            if path == item {
-                return;
-            }
-            if let Some(field) = path
-                .strip_prefix(item)
-                .and_then(|rest| rest.strip_prefix('.'))
-            {
-                if !field.is_empty()
-                    && !field.contains('.')
-                    && !fields.iter().any(|known| known == field)
-                {
-                    fields.push(field.to_owned());
-                }
-            }
-        }
-        StudioExpression::Literal(_)
-        | StudioExpression::ReadState(_)
-        | StudioExpression::ReadDerived(_)
-        | StudioExpression::ReadProp(_) => {}
-        StudioExpression::Unary { operand, .. } => {
-            collect_expression_reads(operand, item, fields);
-        }
-        StudioExpression::Binary { left, right, .. } => {
-            collect_expression_reads(left, item, fields);
-            collect_expression_reads(right, item, fields);
-        }
-        StudioExpression::Conditional {
-            condition,
-            consequent,
-            alternate,
-        } => {
-            collect_expression_reads(condition, item, fields);
-            collect_expression_reads(consequent, item, fields);
-            collect_expression_reads(alternate, item, fields);
-        }
-        StudioExpression::Array(elements) => {
-            for element in elements {
-                collect_expression_reads(element, item, fields);
-            }
-        }
-        StudioExpression::Record(entries) => {
-            for (_, value) in entries {
-                collect_expression_reads(value, item, fields);
-            }
-        }
-        StudioExpression::CallApprovedFunction { arguments, .. } => {
-            for argument in arguments {
-                collect_expression_reads(argument, item, fields);
-            }
-        }
-    }
-}
-
 /// Resolve field families from literal evidence: initial elements plus
 /// push record literals across all handlers. Every read field needs a
 /// literal type, and all evidence must agree.
+#[allow(dead_code)]
 fn resolve_field_types(
     component: &ComponentDefinition,
     slot: &str,
     reads: &[String],
 ) -> Result<std::collections::BTreeMap<String, ContentTy>, StudioEmitError> {
-    let mut types: std::collections::BTreeMap<String, ContentTy> = Default::default();
+    let mut types: std::collections::BTreeMap<String, ContentTy> = BTreeMap::default();
     let mut observe = |field: &str, ty: ContentTy| -> Result<(), StudioEmitError> {
         match types.get(field) {
             Some(known) if *known != ty => Err(emit_failed("item fields changing type")),
@@ -1205,27 +1125,23 @@ fn resolve_field_types(
             }
         }
     };
-    if let Some(state) = component
-        .state
-        .iter()
-        .find(|state| state.name == *slot)
+    if let Some(state) = component.state.iter().find(|state| state.name == *slot)
+        && let StudioExpression::Literal(StudioValue::Array(elements)) = &state.initial
     {
-        if let StudioExpression::Literal(StudioValue::Array(elements)) = &state.initial {
-            for element in elements {
-                if let StudioValue::Record(fields) = element {
-                    for (field, value) in fields {
-                        observe(
-                            field,
-                            match value {
-                                StudioValue::String(_) => ContentTy::String,
-                                StudioValue::Number(_) => ContentTy::Number,
-                                StudioValue::Boolean(_) => ContentTy::Boolean,
-                                StudioValue::Array(_) | StudioValue::Record(_) => {
-                                    return Err(emit_failed("nested item fields"));
-                                }
-                            },
-                        )?;
-                    }
+        for element in elements {
+            if let StudioValue::Record(fields) = element {
+                for (field, value) in fields {
+                    observe(
+                        field,
+                        match value {
+                            StudioValue::String(_) => ContentTy::String,
+                            StudioValue::Number(_) => ContentTy::Number,
+                            StudioValue::Boolean(_) => ContentTy::Boolean,
+                            StudioValue::Array(_) | StudioValue::Record(_) => {
+                                return Err(emit_failed("nested item fields"));
+                            }
+                        },
+                    )?;
                 }
             }
         }
@@ -1263,6 +1179,7 @@ fn resolve_field_types(
 }
 
 /// Family of a literal value expression, if it is one.
+#[allow(dead_code)]
 fn literal_family(expression: &StudioExpression) -> Result<ContentTy, StudioEmitError> {
     match expression {
         StudioExpression::Literal(StudioValue::String(_)) => Ok(ContentTy::String),
@@ -1272,94 +1189,8 @@ fn literal_family(expression: &StudioExpression) -> Result<ContentTy, StudioEmit
     }
 }
 
-/// Sanitize a node id into an ASC identifier fragment.
-fn sanitize_id(id: &str) -> String {
-    id.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Collect dynamic row lists: `Each` blocks iterating a state slot that
-/// any handler mutates with a list operation.
-fn collect_blocks<'a>(
-    component: &'a ComponentDefinition,
-) -> Result<Vec<BlockPlan<'a>>, StudioEmitError> {
-    let mut mutated: Vec<&str> = Vec::new();
-    for handler in &component.handlers {
-        for mutation in &handler.mutations {
-            if matches!(
-                mutation.op,
-                crate::ir::MutationOp::Push
-                    | crate::ir::MutationOp::Pop
-                    | crate::ir::MutationOp::Remove
-                    | crate::ir::MutationOp::Clear
-            ) && !mutated.contains(&mutation.slot.as_str())
-            {
-                mutated.push(mutation.slot.as_str());
-            }
-        }
-    }
-    let mut blocks = Vec::new();
-    let mut stack: Vec<&'a crate::ir::TemplateNode> = component.template.iter().collect();
-    while let Some(node) = stack.pop() {
-        match node {
-            crate::ir::TemplateNode::Each {
-                id,
-                collection,
-                item,
-                index,
-                key,
-                body,
-                fallback,
-                ..
-            } => {
-                let StudioExpression::ReadState(slot) = collection else {
-                    continue;
-                };
-                if !mutated.contains(&slot.as_str()) {
-                    continue;
-                }
-                let mut fields: Vec<(String, ContentTy)> = Vec::new();
-                collect_row_reads(body, item, &mut fields, component)?;
-                collect_row_reads(std::slice::from_ref(key), item, &mut fields, component)?;
-                blocks.push(BlockPlan {
-                    wrapper: format!("{id}#items"),
-                    prefix: format!("each_{}", sanitize_id(id)),
-                    slot: slot.clone(),
-                    item: item.clone(),
-                    index_name: index.clone().unwrap_or_else(|| "index".to_owned()),
-                    key,
-                    body,
-                    fallback,
-                    fields,
-                    id: id.clone(),
-                });
-            }
-            crate::ir::TemplateNode::Component { children, .. } => {
-                stack.extend(children.iter());
-            }
-            crate::ir::TemplateNode::If {
-                consequent,
-                alternate,
-                ..
-            } => {
-                stack.extend(consequent.iter().chain(alternate.iter()));
-            }
-            crate::ir::TemplateNode::Text { .. } | crate::ir::TemplateNode::Interpolation { .. } => {
-            }
-        }
-    }
-    blocks.sort_by(|left, right| left.wrapper.cmp(&right.wrapper));
-    Ok(blocks)
-}
-
 /// Collect `item.<field>` reads with families for parallel arrays.
+#[allow(dead_code)]
 fn collect_row_reads(
     nodes: &[crate::ir::TemplateNode],
     item: &str,
@@ -1381,7 +1212,7 @@ fn collect_row_reads(
             }
             crate::ir::TemplateNode::Text { .. } => {}
             crate::ir::TemplateNode::Interpolation { expression, .. } => {
-                collect_expression_reads(std::slice::from_ref(expression), item, fields, component)?;
+                collect_expression_reads(expression, item, fields, component)?;
             }
             crate::ir::TemplateNode::If { .. } | crate::ir::TemplateNode::Each { .. } => {
                 return Err(emit_failed("nested blocks in patched rows"));
@@ -1392,6 +1223,7 @@ fn collect_row_reads(
 }
 
 /// Collect `item.<field>` reads from one expression.
+#[allow(dead_code)]
 fn collect_expression_reads(
     expression: &StudioExpression,
     item: &str,
@@ -1425,7 +1257,7 @@ fn collect_expression_reads(
                 }
                 return Ok(());
             }
-            return Err(emit_failed("unbound locals in rows"));
+            Err(emit_failed("unbound locals in rows"))
         }
         StudioExpression::Literal(_)
         | StudioExpression::ReadState(_)

@@ -293,22 +293,22 @@ impl Lowerer<'_> {
             } else {
                 self.classify_text(&mutation.operand_text, locals, mutation.span)
             };
-                    mutations.push(crate::ir::Mutation {
-                        slot: mutation.slot.clone(),
-                        op: match mutation.op {
-                            crate::validate::MutationOp::Assign => crate::ir::MutationOp::Assign,
-                            crate::validate::MutationOp::Add => crate::ir::MutationOp::Add,
-                            crate::validate::MutationOp::Sub => crate::ir::MutationOp::Sub,
-                            crate::validate::MutationOp::Inc => crate::ir::MutationOp::Inc,
-                            crate::validate::MutationOp::Dec => crate::ir::MutationOp::Dec,
-                            crate::validate::MutationOp::Push => crate::ir::MutationOp::Push,
-                            crate::validate::MutationOp::Pop => crate::ir::MutationOp::Pop,
-                            crate::validate::MutationOp::Remove => crate::ir::MutationOp::Remove,
-                            crate::validate::MutationOp::Clear => crate::ir::MutationOp::Clear,
-                        },
-                        operand,
-                        span: mutation.span,
-                    });
+            mutations.push(crate::ir::Mutation {
+                slot: mutation.slot.clone(),
+                op: match mutation.op {
+                    crate::validate::MutationOp::Assign => crate::ir::MutationOp::Assign,
+                    crate::validate::MutationOp::Add => crate::ir::MutationOp::Add,
+                    crate::validate::MutationOp::Sub => crate::ir::MutationOp::Sub,
+                    crate::validate::MutationOp::Inc => crate::ir::MutationOp::Inc,
+                    crate::validate::MutationOp::Dec => crate::ir::MutationOp::Dec,
+                    crate::validate::MutationOp::Push => crate::ir::MutationOp::Push,
+                    crate::validate::MutationOp::Pop => crate::ir::MutationOp::Pop,
+                    crate::validate::MutationOp::Remove => crate::ir::MutationOp::Remove,
+                    crate::validate::MutationOp::Clear => crate::ir::MutationOp::Clear,
+                },
+                operand,
+                span: mutation.span,
+            });
         }
         Some((trigger.to_owned(), emit, payload, mutations))
     }

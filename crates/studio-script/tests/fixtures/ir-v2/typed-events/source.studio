@@ -1,0 +1,13 @@
+<script lang="ts">
+  let { name = "Latte", price = 0 } = $props();
+  let quantity = $state(1);
+  function addToOrder() {
+    emit("add-to-order", { productId: name, quantity });
+  }
+</script>
+<Card id="events-card">
+  <Column id="events-col">
+    <Text id="events-name">{name}</Text>
+    <Button id="events-add" onclick={addToOrder}>Add ({quantity})</Button>
+  </Column>
+</Card>

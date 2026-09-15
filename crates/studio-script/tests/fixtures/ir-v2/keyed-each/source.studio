@@ -1,0 +1,8 @@
+<script lang="ts">
+  let { items = [{ id: "a", name: "A" }] } = $props();
+</script>
+<Card id="each-card">
+  {#each items as item, index (item.id)}
+    <Text id="each-row">{item.name}</Text>
+  {/each}
+</Card>
