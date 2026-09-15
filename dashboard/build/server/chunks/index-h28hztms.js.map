@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/chunks/OptionCard.js"],
+  "sourcesContent": [
+    "import { c as stringify, f as attr, h as escape_html, t as attr_class } from \"./server2.js\";\n//#region src/lib/components/OptionCard.svelte\nfunction OptionCard($$renderer, $$props) {\n\t$$renderer.component(($$renderer) => {\n\t\tlet { selected = false, disabled = false, compact = false, onclick, badge, children } = $$props;\n\t\t$$renderer.push(`<button type=\"button\"${attr_class(\"option-card svelte-1a44k3d\", void 0, {\n\t\t\t\"selected\": selected,\n\t\t\t\"compact\": compact\n\t\t})}${attr(\"disabled\", disabled, true)}>`);\n\t\tif (badge) $$renderer.push(`<!--[0--><span${attr_class(`p-badge ${stringify(badge.kind)}`, \"svelte-1a44k3d\")}>${escape_html(badge.label)}</span>`);\n\t\telse $$renderer.push(\"<!--[-1-->\");\n\t\t$$renderer.push(`<!--]--> `);\n\t\tchildren($$renderer);\n\t\t$$renderer.push(`<!----></button>`);\n\t});\n}\n//#endregion\nexport { OptionCard as t };\n\n//# sourceMappingURL=OptionCard.js.map"
+  ],
+  "mappings": ";;;;;;;;;AAEA,SAAS,UAAU,CAAC,YAAY,SAAS;AAAA,EACxC,WAAW,UAAU,CAAC,gBAAe;AAAA,IACpC,MAAM,WAAW,OAAO,WAAW,OAAO,UAAU,OAAO,SAAS,OAAO,aAAa;AAAA,IACxF,YAAW,KAAK,wBAAwB,WAAW,8BAAmC,WAAG;AAAA,MACxF;AAAA,MACA;AAAA,IACD,CAAC,IAAI,KAAK,YAAY,UAAU,IAAI,IAAI;AAAA,IACxC,IAAI;AAAA,MAAO,YAAW,KAAK,iBAAiB,WAAW,WAAW,UAAU,MAAM,IAAI,KAAK,gBAAgB,KAAK,YAAY,MAAM,KAAK,UAAU;AAAA,IAC5I;AAAA,kBAAW,KAAK,YAAY;AAAA,IACjC,YAAW,KAAK,WAAW;AAAA,IAC3B,SAAS,WAAU;AAAA,IACnB,YAAW,KAAK,kBAAkB;AAAA,GAClC;AAAA;",
+  "debugId": "DC8E2735306AE6EB64756E2164756E21",
+  "names": []
+}

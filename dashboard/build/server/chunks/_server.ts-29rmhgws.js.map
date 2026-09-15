@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/entries/endpoints/api/auth/logout/_server.ts.js"],
+  "sourcesContent": [
+    "import { t as SESSION_COOKIE } from \"../../../../../chunks/auth.js\";\nimport { json } from \"@sveltejs/kit\";\n//#region src/routes/api/auth/logout/+server.ts\nvar POST = async ({ cookies }) => {\n\tcookies.delete(SESSION_COOKIE, { path: \"/\" });\n\treturn json({ ok: true });\n};\n//#endregion\nexport { POST };\n\n//# sourceMappingURL=_server.ts.js.map"
+  ],
+  "mappings": ";;;;;;;;;;;AAGA,IAAI,OAAO,SAAS,cAAc;AAAA,EACjC,QAAQ,OAAO,gBAAgB,EAAE,MAAM,IAAI,CAAC;AAAA,EAC5C,OAAO,KAAK,EAAE,IAAI,KAAK,CAAC;AAAA;",
+  "debugId": "8A0B3836282A710664756E2164756E21",
+  "names": []
+}

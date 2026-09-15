@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/entries/endpoints/api/machines/_server.ts.js"],
+  "sourcesContent": [
+    "import { c as getSetting, n as createMachine, t as addEvent } from \"../../../../chunks/db.js\";\nimport \"../../../../chunks/doClient.js\";\nimport { n as machinesWithStatus } from \"../../../../chunks/machinesStatus.js\";\nimport { json } from \"@sveltejs/kit\";\n//#region src/routes/api/machines/+server.ts\nvar GET = async () => {\n\treturn json({ machines: await machinesWithStatus() });\n};\nvar POST = async ({ request }) => {\n\tconst body = await request.json();\n\tif (!body.name?.trim()) return json({ error: \"Name required\" }, { status: 400 });\n\tconst machine = createMachine({\n\t\tname: body.name.trim(),\n\t\tsize: body.size || getSetting(\"size\") || \"c-8\",\n\t\tregion: body.region || getSetting(\"region\") || \"nyc3\",\n\t\tsnapshot_id: body.snapshotId || \"\",\n\t\timage: body.imageSlug || \"\",\n\t\trepo: body.repo || null,\n\t\tidle_timeout_min: body.idleTimeoutMin ?? 0,\n\t\tdedicated: body.dedicated ?? false,\n\t\tvolume_gb: body.volumeGb ?? 0,\n\t\tssh_key_ids: body.sshKeyIds ?? \"\"\n\t});\n\taddEvent(machine.id, \"machine\", `Profile \"${machine.name}\" created`);\n\treturn json({ machine }, { status: 201 });\n};\n//#endregion\nexport { GET, POST };\n\n//# sourceMappingURL=_server.ts.js.map"
+  ],
+  "mappings": ";;;;;;;;;;;;;;;;AAKA,IAAI,MAAM,YAAY;AAAA,EACrB,OAAO,KAAK,EAAE,UAAU,MAAM,mBAAmB,EAAE,CAAC;AAAA;AAErD,IAAI,OAAO,SAAS,cAAc;AAAA,EACjC,MAAM,OAAO,MAAM,QAAQ,KAAK;AAAA,EAChC,IAAI,CAAC,KAAK,MAAM,KAAK;AAAA,IAAG,OAAO,KAAK,EAAE,OAAO,gBAAgB,GAAG,EAAE,QAAQ,IAAI,CAAC;AAAA,EAC/E,MAAM,UAAU,cAAc;AAAA,IAC7B,MAAM,KAAK,KAAK,KAAK;AAAA,IACrB,MAAM,KAAK,QAAQ,WAAW,MAAM,KAAK;AAAA,IACzC,QAAQ,KAAK,UAAU,WAAW,QAAQ,KAAK;AAAA,IAC/C,aAAa,KAAK,cAAc;AAAA,IAChC,OAAO,KAAK,aAAa;AAAA,IACzB,MAAM,KAAK,QAAQ;AAAA,IACnB,kBAAkB,KAAK,kBAAkB;AAAA,IACzC,WAAW,KAAK,aAAa;AAAA,IAC7B,WAAW,KAAK,YAAY;AAAA,IAC5B,aAAa,KAAK,aAAa;AAAA,EAChC,CAAC;AAAA,EACD,SAAS,QAAQ,IAAI,WAAW,YAAY,QAAQ,eAAe;AAAA,EACnE,OAAO,KAAK,EAAE,QAAQ,GAAG,EAAE,QAAQ,IAAI,CAAC;AAAA;",
+  "debugId": "1F22B01EC29568CD64756E2164756E21",
+  "names": []
+}

@@ -1,0 +1,1 @@
+import{C as e,O as t,U as n,k as r}from"../chunks/DPBx5xTx.js";function i(i,a){var o=r(),s=n(o);e(s,()=>a.children),t(i,o)}export{i as component};

@@ -1,0 +1,4 @@
+{
+  "extends": "$app/tsconfig",
+  "exclude": ["node_modules", "build", ".svelte-kit", "dist"]
+}

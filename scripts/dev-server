@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -e
+
+TAG="studio-builder"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../.env"
+
+# Load .env if present
+if [ -f "$ENV_FILE" ]; then
+  set -a          # export everything in .env
+  source "$ENV_FILE"
+  set +a
+fi
+
+SNAPSHOT_ID=${DO_SNAPSHOT_ID:-""}
+SSH_KEY_IDS=${DO_SSH_KEY_IDS:-""}
+REGION=${DO_REGION:-nyc3}
+SIZE=${DO_SIZE:-c-8}
+
+command=$1
+
+# Env guard for commands that need DO config
+require_env() {
+  if [ -z "$SNAPSHOT_ID" ] || [ -z "$SSH_KEY_IDS" ]; then
+    echo "Error: DO_SNAPSHOT_ID or DO_SSH_KEY_IDS not set."
+    echo "Create studio-builder/.env from .env.example, then re-run."
+    exit 1
+  fi
+}
+
+case $command in
+  up)
+    require_env
+    echo "Creating studio-builder from snapshot $SNAPSHOT_ID..."
+    doctl compute droplet create studio-builder \
+      --image "$SNAPSHOT_ID" \
+      --size "$SIZE" \
+      --region "$REGION" \
+      --ssh-keys "$SSH_KEY_IDS" \
+      --tag-name "$TAG" \
+      --wait \
+      --format ID,Name,PublicIPv4,Status
+    echo ""
+    echo "SSH in with: $0 ssh"
+    ;;
+  ssh)
+    IP=$(doctl compute droplet list --tag-name "$TAG" --format PublicIPv4 --no-header | head -n1 | awk '{$1=$1};1')
+    if [ -z "$IP" ]; then echo "No running builder found."; exit 1; fi
+    echo "Connecting to root@$IP ..."
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$IP"
+    ;;
+  down)
+    ID=$(doctl compute droplet list --tag-name "$TAG" --format ID --no-header | head -n1 | awk '{$1=$1};1')
+    if [ -z "$ID" ]; then echo "No running builder found."; exit 1; fi
+    echo "Destroying droplet $ID ..."
+    doctl compute droplet delete "$ID" --force
+    echo "Destroyed."
+    ;;
+  status)
+    doctl compute droplet list --tag-name "$TAG" --format ID,Name,Status,PublicIPv4,SizeSlug,RegionSlug,CreatedAt
+    ;;
+  *)
+    echo "Usage: $0 {up|down|ssh|status}"
+    exit 1
+    ;;
+esac

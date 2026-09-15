@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/chunks/analytics.js"],
+  "sourcesContent": [
+    "import { d as listSessions, u as listMachines } from \"./db.js\";\n//#region src/lib/server/analytics.ts\n/** Shared analytics summary — used by GET /api/analytics and the page load. */\nfunction analyticsSummary() {\n\tconst machines = new Map(listMachines().map((m) => [m.id, m.name]));\n\tconst completed = listSessions().filter((s) => s.stopped_at).map((s) => {\n\t\tconst start = (/* @__PURE__ */ new Date(s.started_at.replace(\" \", \"T\") + \"Z\")).getTime();\n\t\tconst end = (/* @__PURE__ */ new Date(s.stopped_at.replace(\" \", \"T\") + \"Z\")).getTime();\n\t\tconst hours = Math.max(0, (end - start) / 36e5);\n\t\tconst cost = hours * (s.cost_per_hour ?? 0);\n\t\treturn {\n\t\t\t...s,\n\t\t\tmachine_name: machines.get(s.machine_id) ?? `machine ${s.machine_id}`,\n\t\t\thours: +hours.toFixed(2),\n\t\t\tcost: +cost.toFixed(3)\n\t\t};\n\t});\n\treturn {\n\t\tsessions: completed,\n\t\ttotalHours: +completed.reduce((a, s) => a + s.hours, 0).toFixed(2),\n\t\ttotalCost: +completed.reduce((a, s) => a + s.cost, 0).toFixed(3)\n\t};\n}\n//#endregion\nexport { analyticsSummary as t };\n\n//# sourceMappingURL=analytics.js.map"
+  ],
+  "mappings": ";;;;;;;AAGA,SAAS,gBAAgB,GAAG;AAAA,EAC3B,MAAM,WAAW,IAAI,IAAI,aAAa,EAAE,IAAI,CAAC,MAAM,CAAC,EAAE,IAAI,EAAE,IAAI,CAAC,CAAC;AAAA,EAClE,MAAM,YAAY,aAAa,EAAE,OAAO,CAAC,MAAM,EAAE,UAAU,EAAE,IAAI,CAAC,MAAM;AAAA,IACvE,MAAM,yBAAyB,IAAI,KAAK,EAAE,WAAW,QAAQ,KAAK,GAAG,IAAI,GAAG,GAAG,QAAQ;AAAA,IACvF,MAAM,uBAAuB,IAAI,KAAK,EAAE,WAAW,QAAQ,KAAK,GAAG,IAAI,GAAG,GAAG,QAAQ;AAAA,IACrF,MAAM,QAAQ,KAAK,IAAI,IAAI,MAAM,SAAS,OAAI;AAAA,IAC9C,MAAM,OAAO,SAAS,EAAE,iBAAiB;AAAA,IACzC,OAAO;AAAA,SACH;AAAA,MACH,cAAc,SAAS,IAAI,EAAE,UAAU,KAAK,WAAW,EAAE;AAAA,MACzD,OAAO,CAAC,MAAM,QAAQ,CAAC;AAAA,MACvB,MAAM,CAAC,KAAK,QAAQ,CAAC;AAAA,IACtB;AAAA,GACA;AAAA,EACD,OAAO;AAAA,IACN,UAAU;AAAA,IACV,YAAY,CAAC,UAAU,OAAO,CAAC,GAAG,MAAM,IAAI,EAAE,OAAO,CAAC,EAAE,QAAQ,CAAC;AAAA,IACjE,WAAW,CAAC,UAAU,OAAO,CAAC,GAAG,MAAM,IAAI,EAAE,MAAM,CAAC,EAAE,QAAQ,CAAC;AAAA,EAChE;AAAA;",
+  "debugId": "CBD98F7B1A41432764756E2164756E21",
+  "names": []
+}

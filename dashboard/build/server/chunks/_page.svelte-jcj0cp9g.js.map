@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/entries/pages/providers/_page.svelte.js"],
+  "sourcesContent": [
+    "import { h as escape_html } from \"../../../chunks/server2.js\";\nimport { E as Cloud } from \"../../../chunks/lib.js\";\nimport { t as AppShell } from \"../../../chunks/AppShell.js\";\n//#region src/routes/providers/+page.svelte\nfunction _page($$renderer, $$props) {\n\t$$renderer.component(($$renderer) => {\n\t\tlet { data } = $$props;\n\t\tAppShell($$renderer, {\n\t\t\tchildren: ($$renderer) => {\n\t\t\t\t$$renderer.push(`<main class=\"container\"><h1>`);\n\t\t\t\tCloud($$renderer, {\n\t\t\t\t\tsize: 24,\n\t\t\t\t\tweight: \"duotone\"\n\t\t\t\t});\n\t\t\t\t$$renderer.push(`<!----> Providers</h1> <p class=\"hint\">Cloud providers your builder machines can run on.</p> <div class=\"card machine-card\"><div class=\"card-head\" style=\"cursor: default;\">`);\n\t\t\t\tCloud($$renderer, {\n\t\t\t\t\tsize: 22,\n\t\t\t\t\tweight: \"duotone\"\n\t\t\t\t});\n\t\t\t\t$$renderer.push(`<!----> <strong>DigitalOcean</strong></div> <p class=\"meta\">Droplets · Spaces</p> <p class=\"meta\">${escape_html(data.doConnected ? \"✅ Connected — token configured during setup.\" : \"❌ Not connected — run the setup wizard.\")}</p></div> <div class=\"card placeholder\"><p class=\"hint\">AWS, Hetzner, Vultr and Google Cloud support is coming.</p></div></main>`);\n\t\t\t},\n\t\t\t$$slots: { default: true }\n\t\t});\n\t});\n}\n//#endregion\nexport { _page as default };\n\n//# sourceMappingURL=_page.svelte.js.map"
+  ],
+  "mappings": ";;;;;;;;;;;;;;;;;AAIA,SAAS,KAAK,CAAC,YAAY,SAAS;AAAA,EACnC,WAAW,UAAU,CAAC,gBAAe;AAAA,IACpC,MAAM,SAAS;AAAA,IACf,SAAS,aAAY;AAAA,MACpB,UAAU,CAAC,gBAAe;AAAA,QACzB,YAAW,KAAK,8BAA8B;AAAA,QAC9C,MAAM,aAAY;AAAA,UACjB,MAAM;AAAA,UACN,QAAQ;AAAA,QACT,CAAC;AAAA,QACD,YAAW,KAAK,8KAA8K;AAAA,QAC9L,MAAM,aAAY;AAAA,UACjB,MAAM;AAAA,UACN,QAAQ;AAAA,QACT,CAAC;AAAA,QACD,YAAW,KAAK,wGAAqG,YAAY,KAAK,cAAc,2DAAiD,mDAAyC,oIAAoI;AAAA;AAAA,MAEnX,SAAS,EAAE,SAAS,KAAK;AAAA,IAC1B,CAAC;AAAA,GACD;AAAA;",
+  "debugId": "7B2D28F72402474364756E2164756E21",
+  "names": []
+}

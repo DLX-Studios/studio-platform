@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/chunks/state.js"],
+  "sourcesContent": [
+    "import { l as getContext } from \"./server2.js\";\nimport \"./index-server.js\";\n//#region node_modules/@sveltejs/kit/src/runtime/app/state/server.js\nfunction context() {\n\treturn getContext(\"__request__\");\n}\nvar page = {\n\tget data() {\n\t\treturn context().page.data;\n\t},\n\tget error() {\n\t\treturn context().page.error;\n\t},\n\tget form() {\n\t\treturn context().page.form;\n\t},\n\tget params() {\n\t\treturn context().page.params;\n\t},\n\tget route() {\n\t\treturn context().page.route;\n\t},\n\tget shallow() {\n\t\treturn context().page.shallow;\n\t},\n\tget state() {\n\t\treturn context().page.state;\n\t},\n\tget status() {\n\t\treturn context().page.status;\n\t},\n\tget url() {\n\t\treturn context().page.url;\n\t}\n};\n//#endregion\nexport { page as t };\n\n//# sourceMappingURL=state.js.map"
+  ],
+  "mappings": ";;;;;;AAGA,SAAS,OAAO,GAAG;AAAA,EAClB,OAAO,WAAW,aAAa;AAAA;AAEhC,IAAI,OAAO;AAAA,MACN,IAAI,GAAG;AAAA,IACV,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,KAAK,GAAG;AAAA,IACX,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,IAAI,GAAG;AAAA,IACV,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,MAAM,GAAG;AAAA,IACZ,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,KAAK,GAAG;AAAA,IACX,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,OAAO,GAAG;AAAA,IACb,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,KAAK,GAAG;AAAA,IACX,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,MAAM,GAAG;AAAA,IACZ,OAAO,QAAQ,EAAE,KAAK;AAAA;AAAA,MAEnB,GAAG,GAAG;AAAA,IACT,OAAO,QAAQ,EAAE,KAAK;AAAA;AAExB;",
+  "debugId": "92D9AB38FB1D7F5264756E2164756E21",
+  "names": []
+}

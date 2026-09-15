@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/nodes/9.js"],
+  "sourcesContent": [
+    "\n\nexport const index = 9;\nlet component_cache;\nexport const component = async () => component_cache ??= (await import('../entries/pages/setup/_page.svelte.js')).default;\nexport const imports = [\"_app/immutable/nodes/9.BEW2YkBE.js\",\"_app/immutable/chunks/DPBx5xTx.js\",\"_app/immutable/chunks/DjAkF-xo.js\",\"_app/immutable/entry/payload.DSmR2FwN.js\",\"_app/immutable/chunks/D4UQy-ZY.js\",\"_app/immutable/chunks/CV8VO5Jt.js\",\"_app/immutable/chunks/Cene61J5.js\",\"_app/immutable/chunks/BTmxmbKa.js\",\"_app/immutable/chunks/StsqyyfY.js\"];\nexport const stylesheets = [\"_app/immutable/assets/OptionCard.I4OQdEuu.css\"];\nexport const fonts = [];\n"
+  ],
+  "mappings": ";;;;;;AAEO,IAAM,QAAQ;AACrB,IAAI;AACG,IAAM,YAAY,YAAY,qBAAqB,MAAa,sCAA2C;AAC3G,IAAM,UAAU,CAAC,sCAAqC,qCAAoC,qCAAoC,4CAA2C,qCAAoC,qCAAoC,qCAAoC,qCAAoC,mCAAmC;AAC5V,IAAM,cAAc,CAAC,+CAA+C;AACpE,IAAM,QAAQ,CAAC;",
+  "debugId": "9B38C99B48ACC5FC64756E2164756E21",
+  "names": []
+}

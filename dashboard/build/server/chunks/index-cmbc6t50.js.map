@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/chunks/index-server.js"],
+  "sourcesContent": [
+    "import { d as ssr_context } from \"./server2.js\";\n//#region node_modules/svelte/src/index-server.js\n/** @import { SSRContext } from '#server' */\n/** @import { Renderer } from './internal/server/renderer.js' */\n/** @param {() => void} fn */\nfunction onDestroy(fn) {\n\t/** @type {Renderer} */ ssr_context.r.on_destroy(fn);\n}\nasync function tick() {}\n//#endregion\nexport { tick as n, onDestroy as t };\n\n//# sourceMappingURL=index-server.js.map"
+  ],
+  "mappings": ";;;;;;AAKA,SAAS,SAAS,CAAC,IAAI;AAAA,EACE,YAAY,EAAE,WAAW,EAAE;AAAA;",
+  "debugId": "D6D23362D01E44BA64756E2164756E21",
+  "names": []
+}

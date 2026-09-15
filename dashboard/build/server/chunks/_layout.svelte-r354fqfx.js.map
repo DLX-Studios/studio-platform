@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "sources": ["../.svelte-kit/output/server/entries/pages/_layout.svelte.js"],
+  "sourcesContent": [
+    "import \"../../chunks/server2.js\";\n//#region src/routes/+layout.svelte\nfunction _layout($$renderer, $$props) {\n\tlet { children } = $$props;\n\tchildren($$renderer);\n\t$$renderer.push(`<!---->`);\n}\n//#endregion\nexport { _layout as default };\n\n//# sourceMappingURL=_layout.svelte.js.map"
+  ],
+  "mappings": ";;;;;AAEA,SAAS,OAAO,CAAC,YAAY,SAAS;AAAA,EACrC,MAAM,aAAa;AAAA,EACnB,SAAS,UAAU;AAAA,EACnB,WAAW,KAAK,SAAS;AAAA;",
+  "debugId": "D1C60865A15C75EB64756E2164756E21",
+  "names": []
+}
