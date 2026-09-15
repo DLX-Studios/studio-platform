@@ -1,0 +1,1 @@
+{"type":"mount","payload":{"protocol_version":1,"route":"/conditional","root":{"id":"conditional#root","kind":"box","props":{},"children":[{"id":"conditional-card","kind":"card","props":{},"children":[{"id":"conditional#1.1#branch","kind":"box","props":{},"children":[{"id":"conditional-yes","kind":"text","props":{"text":"In stock"},"children":[]}]}]}]}}}

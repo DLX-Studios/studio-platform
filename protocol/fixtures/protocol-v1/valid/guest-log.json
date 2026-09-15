@@ -1,0 +1,7 @@
+{
+  "type": "log",
+  "payload": {
+    "level": "info",
+    "message": "Catalog mounted"
+  }
+}

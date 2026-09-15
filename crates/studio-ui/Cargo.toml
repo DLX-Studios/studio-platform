@@ -1,0 +1,20 @@
+[package]
+name = "studio-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+studio-protocol = { path = "../studio-protocol" }
+thiserror.workspace = true
+
+[dev-dependencies]
+
+[[bench]]
+name = "patches"
+harness = false
+
+[lints]
+workspace = true

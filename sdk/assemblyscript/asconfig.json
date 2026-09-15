@@ -1,0 +1,23 @@
+{
+  "targets": {
+    "debug": {
+      "debug": true,
+      "sourceMap": true
+    },
+    "release": {
+      "optimizeLevel": 3,
+      "shrinkLevel": 1,
+      "converge": true,
+      "noAssert": true
+    }
+  },
+  "options": {
+    "bindings": "esm",
+    "exportRuntime": true,
+    "importMemory": false,
+    "runtime": "stub",
+    "outFile": "build/studio-sdk.wasm",
+    "textFile": "build/studio-sdk.wat"
+  }
+}
+

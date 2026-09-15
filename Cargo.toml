@@ -1,0 +1,94 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/studio-actions",
+    "crates/studio-app",
+    "crates/studio-designer",
+    "crates/studio-cli",
+    "crates/studio-components",
+    "crates/studio-design",
+    "crates/studio-flagship",
+    "crates/studio-github",
+    "crates/studio-host",
+    "crates/studio-navigation",
+    "crates/studio-net",
+    "crates/studio-oauth",
+    "crates/studio-package",
+    "crates/studio-plugin-registry",
+    "crates/studio-protocol",
+    "crates/studio-security",
+    "crates/studio-script",
+    "crates/studio-ai",
+    "crates/studio-language-server",
+    "crates/studio-testkit",
+    "crates/studio-ui",
+    "crates/studio-update-channel",
+    "crates/studio-wasm",
+]
+exclude = [
+    "vendor/gpui-component",
+    "vendor/gpui-component-assets",
+    "vendor/gpui-component-macros",
+    "vendor/rsvelte/rsvelte",
+    "vendor/rsvelte/rsvelte_core",
+    "vendor/rsvelte/rsvelte_esrap",
+    "vendor/rsvelte/rsvelte_ast_equiv",
+    "vendor/rsvelte/rsvelte_projection",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.93"
+
+[workspace.dependencies]
+libc = "0.2.189"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+schemars = "1.2.2"
+thiserror = "2.0.17"
+wat = "1.255.0"
+wasmtime = { version = "=47.0.3", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmparser = "=0.255.0"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate", "unreserved"] }
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+serde_jcs = "=0.2.0"
+regex = "1.11"
+sha2 = "=0.11.0"
+getrandom = "=0.3.4"
+zeroize = "=1.9.0"
+pbkdf2 = "=0.12.2"
+sha2_10 = { package = "sha2", version = "=0.10.9" }
+semver = "=1.0.28"
+keyring = "=4.1.6"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "381953d44897c53c4d252ae30620bafaa7d060b7", default-features = false, features = ["wayland"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "381953d44897c53c4d252ae30620bafaa7d060b7", default-features = false, features = ["wayland"] }
+gpui-component = { path = "vendor/gpui-component", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Pinned oxc revision shared with the vendored rsvelte workspace (see
+# vendor/rsvelte/UPSTREAM.md): unifies oxc_* types across crates.io and git
+# dependents so AST types from different source units never diverge.
+[patch.crates-io]
+oxc_allocator = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_parser = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_ast = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_ast_macros = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_ast_visit = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_span = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_diagnostics = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_codegen = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_syntax = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_semantic = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_regular_expression = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_ecmascript = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_str = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }
+oxc_data_structures = { git = "https://github.com/oxc-project/oxc", rev = "0389c4010ef8298728f3e47fff8e2a9106d10045" }

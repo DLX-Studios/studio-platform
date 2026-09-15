@@ -1,0 +1,1 @@
+{"type":"mount","payload":{"protocol_version":1,"route":"/keyed-each","root":{"id":"keyed-each#root","kind":"box","props":{},"children":[{"id":"each-card","kind":"card","props":{},"children":[{"id":"keyed-each#1.1#items","kind":"box","props":{},"children":[{"id":"each-row#a","kind":"text","props":{"text":"A"},"children":[]}]}]}]}}}

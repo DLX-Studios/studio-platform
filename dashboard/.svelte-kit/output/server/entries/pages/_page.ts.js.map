@@ -1,1 +1,0 @@
-{"version":3,"file":"_page.ts.js","names":[],"sources":["../../../../../src/routes/+page.ts"],"sourcesContent":["import { redirect } from \"@sveltejs/kit\";\nimport type { PageLoad } from \"./$types\";\n\nexport const load: PageLoad = () => {\n  redirect(302, \"/machines\");\n};\n"],"mappings":";;AAGA,IAAa,aAAuB;CAClC,SAAS,KAAK,WAAW;AAC3B"}

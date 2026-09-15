@@ -1,0 +1,255 @@
+{
+  "version": 2,
+  "id": "keyed-each",
+  "imports": [],
+  "exports": [
+    "keyed-each"
+  ],
+  "components": [
+    {
+      "id": "keyed-each",
+      "name": "keyed-each",
+      "props": [
+        {
+          "name": "items",
+          "ty": {
+            "Array": {
+              "Record": {
+                "id": "String",
+                "name": "String"
+              }
+            }
+          },
+          "required": false,
+          "default": {
+            "Array": [
+              {
+                "Record": {
+                  "id": {
+                    "String": "a"
+                  },
+                  "name": {
+                    "String": "A"
+                  }
+                }
+              }
+            ]
+          },
+          "span": {
+            "start": {
+              "line": 2,
+              "column": 9,
+              "offset": 27
+            },
+            "end": {
+              "line": 2,
+              "column": 14,
+              "offset": 32
+            }
+          }
+        }
+      ],
+      "state": [],
+      "derived": [],
+      "handlers": [],
+      "content": [],
+      "template": [
+        {
+          "Text": {
+            "id": "keyed-each#0",
+            "value": "\n",
+            "span": {
+              "start": {
+                "line": 3,
+                "column": 10,
+                "offset": 83
+              },
+              "end": {
+                "line": 4,
+                "column": 1,
+                "offset": 84
+              }
+            }
+          }
+        },
+        {
+          "Component": {
+            "id": "each-card",
+            "kind": "Card",
+            "explicit_key": null,
+            "props": [],
+            "children": [
+              {
+                "Text": {
+                  "id": "keyed-each#1.0",
+                  "value": "\n  ",
+                  "span": {
+                    "start": {
+                      "line": 4,
+                      "column": 22,
+                      "offset": 105
+                    },
+                    "end": {
+                      "line": 5,
+                      "column": 3,
+                      "offset": 108
+                    }
+                  }
+                }
+              },
+              {
+                "Each": {
+                  "id": "keyed-each#1.1",
+                  "collection": {
+                    "ReadProp": "items"
+                  },
+                  "item": "item",
+                  "index": "index",
+                  "key": {
+                    "ReadLocal": "item.id"
+                  },
+                  "body": [
+                    {
+                      "Text": {
+                        "id": "keyed-each#1.1.0",
+                        "value": "\n    ",
+                        "span": {
+                          "start": {
+                            "line": 5,
+                            "column": 41,
+                            "offset": 146
+                          },
+                          "end": {
+                            "line": 6,
+                            "column": 5,
+                            "offset": 151
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Component": {
+                        "id": "each-row",
+                        "kind": "Text",
+                        "explicit_key": null,
+                        "props": [],
+                        "children": [
+                          {
+                            "Interpolation": {
+                              "id": "keyed-each#1.1.1.0",
+                              "expression": {
+                                "ReadLocal": "item.name"
+                              },
+                              "span": {
+                                "start": {
+                                  "line": 6,
+                                  "column": 26,
+                                  "offset": 172
+                                },
+                                "end": {
+                                  "line": 6,
+                                  "column": 35,
+                                  "offset": 181
+                                }
+                              }
+                            }
+                          }
+                        ],
+                        "span": {
+                          "start": {
+                            "line": 6,
+                            "column": 5,
+                            "offset": 151
+                          },
+                          "end": {
+                            "line": 6,
+                            "column": 43,
+                            "offset": 189
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Text": {
+                        "id": "keyed-each#1.1.2",
+                        "value": "\n  ",
+                        "span": {
+                          "start": {
+                            "line": 6,
+                            "column": 43,
+                            "offset": 189
+                          },
+                          "end": {
+                            "line": 7,
+                            "column": 3,
+                            "offset": 192
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "fallback": [],
+                  "span": {
+                    "start": {
+                      "line": 5,
+                      "column": 3,
+                      "offset": 108
+                    },
+                    "end": {
+                      "line": 7,
+                      "column": 10,
+                      "offset": 199
+                    }
+                  }
+                }
+              },
+              {
+                "Text": {
+                  "id": "keyed-each#1.2",
+                  "value": "\n",
+                  "span": {
+                    "start": {
+                      "line": 7,
+                      "column": 10,
+                      "offset": 199
+                    },
+                    "end": {
+                      "line": 8,
+                      "column": 1,
+                      "offset": 200
+                    }
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start": {
+                "line": 4,
+                "column": 1,
+                "offset": 84
+              },
+              "end": {
+                "line": 8,
+                "column": 8,
+                "offset": 207
+              }
+            }
+          }
+        }
+      ],
+      "span": {
+        "start": {
+          "line": 1,
+          "column": 1,
+          "offset": 0
+        },
+        "end": {
+          "line": 9,
+          "column": 1,
+          "offset": 208
+        }
+      }
+    }
+  ],
+  "dependencies": []
+}

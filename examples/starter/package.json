@@ -1,0 +1,11 @@
+{
+  "name": "@studio/example-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "asc assembly/index.ts --config asconfig.json --target release",
+    "check": "asc assembly/index.ts --config asconfig.json --target debug --noEmit"
+  },
+  "devDependencies": { "assemblyscript": "^0.28.20" }
+}

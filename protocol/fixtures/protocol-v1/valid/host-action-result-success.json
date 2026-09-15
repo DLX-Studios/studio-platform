@@ -1,0 +1,10 @@
+{
+  "type": "action_result",
+  "payload": {
+    "status": "success",
+    "request_id": "req-1",
+    "payload": {
+      "result_ref": "result-1"
+    }
+  }
+}

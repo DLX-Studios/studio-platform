@@ -1,0 +1,26 @@
+<script lang="ts">
+  // Blank: the smallest stateful app. Taps patch the screen.
+  // $state slots live in the guest and survive across events.
+  let count = $state(0);
+  // $derived recomputes after every mutation, before the patch.
+  let total = $derived(count * 2999);
+  // Handlers with no emit() return patches; the host applies them.
+  function increment() {
+    count += 1;
+  }
+  function decrement() {
+    count -= 1;
+  }
+</script>
+
+<Card id="counter">
+  <Column id="counter-col">
+    <Text id="title" typography_role="headline" text="Counter" />
+    <Text id="value">{count}</Text>
+    <Text id="total">Total ${total}</Text>
+    <Row id="actions" gap={8}>
+      <Button id="dec" label="-" variant="secondary" onclick={decrement} />
+      <Button id="inc" label="+" variant="secondary" onclick={increment} />
+    </Row>
+  </Column>
+</Card>

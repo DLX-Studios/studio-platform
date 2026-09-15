@@ -1,0 +1,6 @@
+{
+  "id": "blank",
+  "name": "Blank",
+  "description": "Minimal stateful app: a counter with a derived total. Start here.",
+  "kind": "playground"
+}

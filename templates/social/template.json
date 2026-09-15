@@ -1,0 +1,6 @@
+{
+  "id": "social",
+  "name": "Social",
+  "description": "Reddit-type feed: post cards with votes, comment threads, community sidebar.",
+  "kind": "layout"
+}

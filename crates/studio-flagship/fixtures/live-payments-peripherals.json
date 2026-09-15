@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "stripe": {
+    "origin": "https://api.stripe.com",
+    "route": { "method": "POST", "path": "/v1/payment_intents" },
+    "currency": "usd",
+    "amount_minor": 10800,
+    "idempotency_key": "check-12-payment",
+    "expected_status": "succeeded",
+    "retryable_failures": ["timeout", "provider_unavailable"]
+  },
+  "peripherals": {
+    "allowlisted": [
+      { "device_id": "receipt-printer-1", "kind": "receipt_printer", "model": "approved-receipt-printer" },
+      { "device_id": "kitchen-display-1", "kind": "kitchen_display", "model": "approved-kitchen-display" }
+    ],
+    "job_states": ["accepted", "printing", "succeeded", "failed", "cancelled"],
+    "retryable_failures": ["device_offline", "timeout"]
+  },
+  "security": {
+    "credential_owner": "host_broker",
+    "guest_fields": ["payment_intent_id", "status", "job_id", "job_state"],
+    "forbidden_fields": ["secret", "authorization", "device_path", "raw_handle"]
+  }
+}

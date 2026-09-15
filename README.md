@@ -1,122 +1,244 @@
-# Studio Builder
+# Studio Platform
 
-One-click DigitalOcean build machine for Studio Canvas. Start a powerful Rust builder from a snapshot, work, then nuke it. All compilation state persists in Spaces via `sccache`.
+This workspace follows the modular Studio Platform layout. The current Rust implementation remains
+available at the compatibility crate paths under `crates/`; the target ownership boundaries are
+represented by `apps/`, `crates/studio-core/`, `crates/studio-host/`, `crates/studio-components/`,
+`protocol/`, and the gallery example directories.
 
-## Directory Layout
+The complete migration map is [docs/architecture/MIGRATION_INVENTORY.md](docs/architecture/MIGRATION_INVENTORY.md).
 
-```
-studio-builder/
-├── .env                 # Secrets (not committed)
-├── scripts/
-│   ├── setup-builder.sh # Run once inside a DO droplet to create your golden snapshot
-│   └── dev-server       # Optional CLI (uses doctl)
-└── dashboard/           # SvelteKit controller UI
-    └── ...
-```
+The root of this repository is the canonical public platform workspace. The private website is
+intentionally absent and remains a separate repository.
 
-## Step 1: Create Your Golden Snapshot
+---
 
-1. Create a vanilla Ubuntu 22.04 droplet on DigitalOcean (smallest size is fine for this).
-2. SSH in and copy `scripts/setup-builder.sh`:
+# Studio Runtime
 
-   ```bash
-   scp scripts/setup-builder.sh root@<ip>:/root/
-   ssh root@<ip>
-   chmod +x setup-builder.sh && ./setup-builder.sh
-   ```
+**A sandboxed, native business-app runtime — build desktop, mobile, and web products with Rust + AssemblyScript, or let AI agents build them for you.**
 
-The setup script installs the Rust toolchain, sccache, Vulkan/lib stuff — plus **Bun** (no Node/npm anywhere) and the **Vite+ (`vp`) unified toolchain** for running the SvelteKit dashboard. It then configures cargo's sparse registry + rustc-wrapper through sccache.
-4. **Power off** the droplet: `poweroff`
-5. In the DigitalOcean dashboard, **Take a Snapshot** of the powered-off droplet.
-6. Note the **Snapshot ID** (visible in Images > Snapshots, or via `doctl compute image list --public false`).
+Studio ships one host for many plugins. A POS checkout is just the first example. The same protocol powers a streaming studio that multicasts and merges chats, a social post manager that publishes and aggregates comments across platforms, an e-com storefront with Stripe, and any workflow where isolated plugins compose through typed host capabilities.
 
-## Step 2: Create a Spaces Bucket for sccache
+> **Plugins are the product.** `x-auth`, `stripe`, `printer-simulate`, `payment-simulate` — small, signed, capability-scoped modules that any other plugin can depend on without sharing secrets or filesystem access.
 
-1. In DO, create a **Spaces** bucket (e.g. `studio-cache`).
-2. Create Spaces access keys.
-3. The droplet will export these as `AWS_ACCESS_KEY_ID` / etc. so `sccache` treats Spaces like S3.
+---
 
-## Step 3: Add Your SSH Key to DO
+## Why Studio
 
-1. Add your laptop's SSH key in DO account settings.
-2. Note the **Key ID** number (visible in the URL or via `doctl compute ssh-key list`).
+- **Host-owned everything.** Navigation, secrets, filesystem, networking, and rendering live in Rust. Guest Wasm (Wasmtime, no WASI) only emits a declarative UI tree and targeted patches.
+- **Retained native UI.** Flutter-like primitives (`Card`, `Text`, `Button`, `Select`, `SecretInput`, 40+ more) map to real GPUI widgets. No canvas, no HTML — `cargo fmt` and `cargo clippy -D warnings` stay green.
+- **Versioned, closed contracts.** `studio-protocol` is the single source of truth; JSON Schema and AssemblyScript bindings are generated from it. Unknown fields, capabilities, or imports are rejected.
+- **Wayland-only, deterministic.** No X11/XCB linkage (verified by `check-no-x11.sh`), 16 MiB guest memory, 15M initialization fuel, 10M event fuel / 50 ms epoch per call, atomic patch batches, and an in-memory host for checkout/receipt/print simulation.
+- **Test-first.** Every slice starts red: `cargo test --workspace` + `bun test` must stay green before a task is marked done.
 
-## Step 4: Configure Environment
+---
+
+## Current status
+
+**Milestones 001 and 002 — Secure Plugin Runtime and Unified Native Component Platform — are
+implementation-complete.**
+
+Host, sandbox, protocol, retained renderer, SDK, navigation (`CheckoutRouter`/`NativeCheckoutShell` wired into the live GPUI window with route bar + trusted confirmation overlay), packaging, and the `pos-desktop` reference flow (catalog → cart → checkout → receipt → print preview) are integrated. Gates that pass:
 
 ```bash
-cp .env.example .env
-# Edit .env with your tokens, snapshot ID, key IDs, Spaces creds, GitHub PAT
+cargo fmt --all -- --check          # 0 diff
+cargo clippy --workspace -- -D warnings # 0 warnings
+cargo test --locked --workspace     # ~120 tests, incl. native_shell_checkout / accessibility / manifest
+bun run check && bun test           # use the pinned Bun 1.3.9 (a local canary rejects bun.lock)
+./scripts/check-no-x11-features.sh && ./scripts/check-no-x11.sh
 ```
 
-**GitHub Token:** Use a fine-grained PAT with **Contents (read)** on your private repo.
+The 2026-09-03 integration checkpoint passed formatting, workspace Clippy with all targets, the
+full workspace test suite, and the JavaScript gates with the pinned Bun 1.3.9 (frozen install,
+`bun run check`, Bun suites, generated-artifact drift check); the only Bun failure is the
+platform test that requires the headless Sway harness, which this host does not have installed.
+See the [component-platform validation report](specs/002-component-platform/validation-report.md).
 
-**Cost per hour:** Adjust `COST_PER_HOUR` to match your default DO size pricing (used only for dashboard analytics).
+Formal `STUDIO-BENCH-1` (N100, 8 GiB, 1920×1080 Weston) and human a11y/legal sign-off in [validation-report.md](specs/001-secure-plugin-runtime/validation-report.md) remain before publication. Live phase status: [docs/ROADMAP.md](docs/ROADMAP.md).
 
-## Step 5: Run the Dashboard (Bun + Vite+)
+---
 
-Install Bun once (it also powers the **SvelteKit** server, via the `adapter-bun` adapter):
+## Stats at a glance
+
+| Area | Value |
+|------|-------|
+| Rust workspace | 12 crates (`studio-app`, `studio-cli`, `studio-protocol`, `studio-components`, `studio-actions`, `studio-wasm`, `studio-security`, `studio-package`, `studio-ui`, `studio-navigation`, `studio-testkit`, `studio-script`) + vendor `gpui` |
+| Rust LOC | ~30k (12,464 lib + 17,211 app/cli) |
+| JS/SDK tests | 55 pass, 11 files |
+| Reference bundle | `pos-desktop.wasm` 33 KB, `pos-desktop.studio` 876 KB (signed zip, deterministic) |
+| Guest limits | 16 MiB, 15M initialization fuel, 10M event fuel, 5k nodes, depth 64, 512 ops/batch, 16 pending actions |
+| Performance goals | Warm launch <150 ms, interaction p95 <100 ms, property patch p95 <2 ms, 60 FPS transitions |
+
+`target/release/studio-app` builds Wayland-only (`-D warnings` clean) and runs headless under `sway`/`weston` for CI.
+
+---
+
+## The ecosystem — more than POS
+
+POS proves the trust model. The same host runs:
+
+- **Stream Studio** — one plugin captures, one multicasts to YouTube/Twitch/TikTok, one merges chats, one overlays alerts. Each capability (`camera`, `rtmp`, `chat-aggregate`) is a separate signed plugin.
+- **Post Manager** — compose `x-auth` + `tiktok-auth` + `scheduler` to draft once, publish everywhere, and aggregate comments into one inbox.
+- **E-com** — `catalog` + `cart` + `stripe` (host-owned `payment-simulate` today, real Stripe capability tomorrow) + `printer-simulate` for receipts.
+- **Your idea** — any business workflow where UI, secrets, and hardware must stay isolated but composable.
+
+Developers can write plugins by hand, generate them with an LLM, or mix both. Studio Script (below) makes the authoring feel like Svelte; production still ships as signed Wasm.
+
+---
+
+## Quick start
 
 ```bash
-curl -fsSL https://bun.sh/install | bash
-curl -fsSL https://viteplus.dev/install.sh | bash
-cd dashboard
-bun install
-bun dev   # runs `vp dev`
+bun install --frozen-lockfile
+cargo build --locked --release -p studio-app   # Wayland-only binary
+bun run ./scripts/build-example.ts pos-desktop  # asc → wasm → .studio (deterministic)
+./target/release/studio-app --dev examples/pos-desktop/build/pos-desktop.studio
+
+# launch the standalone native Designer
+cargo run --locked -p studio-designer
+
+# verify
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+bun run check
+bun test
+bun run test:all   # = cargo fmt + clippy + cargo test + bun check + bun test + no-X11 + headless wayland
 ```
 
-Open http://localhost:3000
+Headless CI: `STUDIO_APP_BINARY=./target/release/studio-app ./scripts/test-headless-wayland.sh`
 
-### Build and run permanently (single-file Bun server)
+If the checkout is on VFAT/exFAT or another mount that does not support symlinks, use Bun's
+filesystem-safe layout instead (without rewriting the lockfile):
 
 ```bash
-cd dashboard
-bun install
-bun run node_modules/.bin/svelte-kit sync   # warm SvelteKit's $app/tsconfig once
-bun --bun run build                         # adapter-bun output
-bun run start                               # adapter-bun runtime
+bun install --no-save --backend=copyfile --linker=hoisted
 ```
 
-The `adapter-bun` runtime serves your client assets/prerendered output through Bun's native route/File system, with automatic ETag-based 304s and pre-compressed (`.br`/`.gz`) files — **production-hardened**, no nginx.
+### Cargo targets on vfat/exfat checkouts
 
-## Usage
-
-### From the Svelte Dashboard
-
-1. Click **Start Builder** → DO creates droplet from snapshot, cloud-init clones repo & starts sccache.
-2. Wait ~60s for provisioning.
-3. Copy the **SSH command** shown on the dashboard.
-4. Work on your project. Because sccache writes to Spaces, you can destroy the machine without losing build artifacts.
-5. Click **Stop & Destroy** when done. Analytics are saved locally.
-
-### From CLI (optional)
-
-If you also install `doctl` locally:
+The source tree may live on a vfat or exfat drive, but Cargo's `target` directory must be on a
+Linux filesystem that preserves executable permissions. Otherwise generated build scripts fail
+with `Permission denied`. Point Cargo at a per-commit cache on ext4, btrfs, or another Unix
+filesystem before building or running Studio:
 
 ```bash
-export DO_SNAPSHOT_ID=12345678
-export DO_SSH_KEY_IDS=12345678
-./scripts/dev-server up
-./scripts/dev-server ssh
-./scripts/dev-server down
+export PATH="$HOME/.cargo/bin:$PATH"
+export CARGO_TARGET_DIR="$HOME/.cache/studio-cargo/<commit>-verify"
+cargo run --locked -p studio-designer
 ```
 
-## How It Works
+The standalone Designer is the `studio-designer` binary; `studio-app` is the runtime host for
+`.studio` bundles. A successful test run may have already built the Designer in the configured
+target directory, in which case it can be launched directly from its `debug` subdirectory.
 
-| Component | Purpose |
-|-----------|---------|
-| **Snapshot** | Fast boots with all toolchains pre-installed |
-| **cloud-init** | Clones/pulls repo + configures sccache env on every boot |
-| **Spaces + sccache** | Persistent distributed cache; survive droplet destruction |
-| **Dashboard** | Local SvelteKit app proxies DO API, tracks cost/session history, and streams agent chat |
-| **sb-daemon** | Authenticated probe and persistent Pi RPC/SSE bridge on each builder |
+---
 
-The machine workspace includes a persistent, streamed Pi chat. The daemon
-keeps one RPC-mode Pi process alive, resumes its saved session after restart,
-and relays structured message/tool events through the authenticated dashboard.
-See [the agent chat architecture](docs/Plan-02-pi-agent-chat.md).
+## Architecture
 
-## Security Notes
+```
+Plugin (AssemblyScript → wasm) ──emit──► Studio Protocol (JSON) ──validate──► Rust Host
+   mount / patch / action                                                    ├─ wasmtime (no WASI)
+   opaque secret refs                                                        ├─ GPUI retained widgets
+                                                                             ├─ CheckoutRouter / NativeCheckoutShell
+                                                                             └─ TrustStore + simulators
+```
 
-- The GitHub token is passed via cloud-init `user_data`. It is visible inside the droplet at `/var/lib/cloud/instance/user-data.txt`. This is acceptable because the droplet is **ephemeral** and the token should be a restricted PAT.
-- Your DO token stays on your local machine; the dashboard server-side routes keep it secret from the browser.
-- The dashboard stores a local `data/ledger.jsonl` file for analytics.
+- `studio-protocol` — closed schemas, `PROTOCOL_VERSION = 1`
+- `studio-ui` / `studio-components` — retained registry, focus, scroll, a11y labels
+- `studio-wasm` / `studio-security` — sandbox, fuel, opaque `authorization_ref`
+- `studio-package` — deterministic zip, Ed25519, `ManifestPolicy { 16 MiB, 10M event fuel }`
+- `studio-app` — `FoundationGallery` + `NativeCheckoutShell` (host-owned `Route: /cart` bar, `Trusted Studio confirmation` dialog on `/checkout/payment`)
+
+The compatibility-preserving modularization map, dependency graph, generated-file ownership, and
+public/private repository boundary are recorded in
+[MIGRATION_INVENTORY.md](docs/architecture/MIGRATION_INVENTORY.md).
+
+---
+
+## Studio Script — Svelte-like authoring, native result
+
+**Coming in `004` — Rust development IR, production Wasm.** Author `.studio` files like Svelte, but tags are Studio components:
+
+```svelte
+<script lang="ts">
+  let { name, price, available = true } = $props();
+  let quantity = $state(1);
+  function addToOrder() { emit("add-to-order", { productId: name, quantity }); }
+</script>
+
+<Card id="product-card" padding={12}>
+  <Text id="product-name" typographyRole="label">{name}</Text>
+  <Text id="product-price">{formatMoney(price)}</Text>
+  <Button id="add-button" disabled={!available} onclick={addToOrder}>
+    {available ? "Add to cart" : "Unavailable"}
+  </Button>
+</Card>
+```
+
+Dev: `studio dev` watches source inputs, `studio-script` adapts a pinned `rsvelte` AST into typed
+Studio IR, and the Rust development runtime atomically swaps compatible IR while preserving retained
+GPUI identity. Production lowers the same validated IR to AssemblyScript and compiles it with ASC.
+QuickJS is not part of the architecture. Full pipeline:
+[docs/STUDIO_SCRIPT_TRANSFORM_PIPELINE.md](docs/STUDIO_SCRIPT_TRANSFORM_PIPELINE.md).
+
+File convention (planned): `app.studio.ts`, `components/*.studio`, `routes/*.studio`, generated `assembly/routes.generated.ts` (`declaredRoutes`).
+
+---
+
+## Roadmap
+
+Ordered in [docs/ROADMAP.md](docs/ROADMAP.md) — one Spec Kit feature at a time:
+
+1. **001 Secure Plugin Runtime** — done (checkpoint + T104 convergence)
+2. **002 Unified Native Component Platform** — protocol/catalog, `Scaffold/AppBar/Sidebar/NavigationBar/Rail/Drawer`, `Tabs/Breadcrumb/Stepper/Pagination`, keyboard/a11y/reduced-motion demo
+3. **003 Studio Toolchain and Development Workflow** — `studio` CLI owns build, `studio-app` owns runtime, debounced watcher (fix `assembly/routes.generated.ts` self-trigger), deterministic outputs
+4. **004 Studio Script and Embedded Development Host** — `rsvelte` frontend, typed Studio IR, Rust IR hot swap, ASC lowering; `studio dev` reuses shared host/rendering libraries
+5. **005 Runtime Reload and Preview Protocol** — atomic Wasm reload without window restart
+6. **006 File-Based Routing** — `routes/` static/nested/param/not-found, deterministic registry
+7. **007 Asset Imports and Lucide Icons** — tree-shaken `lucide-static`, user overrides, size tests
+
+Each feature follows `specify → clarify → plan → tasks → implement (red-green) → analyze → converge`.
+
+---
+
+## Examples
+
+- `examples/pos-desktop` — 12-dish `pos-desktop` with `lucide` + `routes/` experiment (reference flow: catalog → cart → checkout → receipt → print preview).
+- `examples/starter` — minimal mount/patch loop.
+- `examples/starter` — minimal mount/patch loop.
+
+---
+
+## Specification workflow
+
+`v0.15.2` Codex skills under `.agents/skills`, constitution under `.specify/memory/constitution.md`:
+
+```text
+$speckit-constitution
+$speckit-specify
+$speckit-clarify       # required for security-sensitive features
+$speckit-plan
+$speckit-tasks
+$speckit-analyze       # required before security-sensitive implementation
+# implement each task test-first
+$speckit-converge
+```
+
+`$speckit-implement` respects `[P]` parallelism and `Phase` dependencies in `tasks.md`.
+
+---
+
+## Contributing
+
+Studio is built for contributors — human or agent:
+
+- Small, traceable slices (≤5 files except vendored `gpui-component` deltas)
+- `cargo fmt`, `clippy -D warnings`, `cargo test`, `bun test` must pass before PR
+- No `unsafe`, no X11, no WASI; every guest message is validated
+- See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and [.specify/memory/constitution.md](.specify/memory/constitution.md)
+
+---
+
+## License
+
+Apache-2.0 — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for `gpui`/`gpui-component` pins.

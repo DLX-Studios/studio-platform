@@ -1,0 +1,29 @@
+[package]
+name = "studio-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+studio-security = { path = "../studio-security" }
+studio-design = { path = "../studio-design" }
+studio-package = { path = "../studio-package" }
+studio-protocol = { path = "../studio-protocol" }
+surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-rocksdb"] }
+thiserror.workspace = true
+tokio = { version = "=1.52.1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-mem"] }
+tempfile = "=3.27.0"
+
+[lints]
+workspace = true

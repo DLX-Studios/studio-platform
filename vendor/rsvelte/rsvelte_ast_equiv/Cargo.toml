@@ -1,0 +1,28 @@
+[package]
+name = "rsvelte_ast_equiv"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Semantic-equivalence comparison for generated JavaScript (OXC parse → canonical print)"
+license = "MIT"
+repository = "https://github.com/baseballyama/rsvelte"
+publish = false
+
+[dependencies]
+oxc_allocator = "0.146"
+oxc_ast = "0.146"
+oxc_ast_visit = "0.146"
+oxc_codegen = "0.146"
+oxc_parser = "0.146"
+oxc_span = "0.146"
+oxc_syntax = "0.146"
+
+[lints.rust]
+# Vendored upstream lint contract (rsvelte workspace root at the pinned rev).
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+format_push_string = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"

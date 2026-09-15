@@ -1,0 +1,8 @@
+{
+  "type": "navigation",
+  "payload": {
+    "route": "/checkout",
+    "accepted": true,
+    "error_code": null
+  }
+}

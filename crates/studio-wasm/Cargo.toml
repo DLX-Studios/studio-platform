@@ -1,0 +1,19 @@
+[package]
+name = "studio-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+studio-security = { path = "../studio-security" }
+thiserror.workspace = true
+wasmparser.workspace = true
+wasmtime.workspace = true
+
+[dev-dependencies]
+studio-testkit = { path = "../studio-testkit" }
+wat.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+{
+  "id": "ecommerce",
+  "name": "Ecommerce",
+  "description": "Transaction layout: product grid, detail panel, live cart state.",
+  "kind": "layout"
+}

@@ -1,0 +1,66 @@
+[package]
+name = "studio-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Unified Rust CLI for Studio — dev/build/preview/generate, replacing scripts/build-example.ts vite-like"
+license = "Apache-2.0"
+
+[[bin]]
+name = "studio"
+path = "src/main.rs"
+
+[lib]
+name = "studio_cli"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.6.6", features = ["derive"] }
+libc.workspace = true
+zip.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2.workspace = true
+studio-package = { path = "../studio-package" }
+studio-protocol = { path = "../studio-protocol" }
+studio-design = { path = "../studio-design" }
+walkdir = "2.5"
+regex = "1.11"
+oxc_allocator = "=0.146.0"
+oxc_ast = "=0.146.0"
+oxc_ast_visit = "=0.146.0"
+oxc_parser = "=0.146.0"
+oxc_span = "=0.146.0"
+studio-script = { path = "../studio-script" }
+
+[dev-dependencies]
+tempfile = "3.23"
+zip.workspace = true
+
+[[test]]
+name = "new_project"
+path = "tests/new_project.rs"
+
+[[test]]
+name = "build_pipeline"
+path = "tests/build_pipeline.rs"
+
+[[test]]
+name = "watch_session"
+path = "tests/watch_session.rs"
+
+[[test]]
+name = "shim_parity"
+path = "tests/shim_parity.rs"
+
+[[test]]
+name = "reload_e2e"
+path = "tests/reload_e2e.rs"
+
+[[test]]
+name = "route_registry"
+path = "tests/route_registry.rs"
+
+[[test]]
+name = "asset_icons"
+path = "tests/asset_icons.rs"

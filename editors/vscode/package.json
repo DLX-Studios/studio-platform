@@ -1,0 +1,83 @@
+{
+  "name": "studio-script",
+  "displayName": "Studio Script",
+  "description": "Language support for Studio Script (.studio): highlighting plus format, check, build, dev, and restart commands backed by the Rust language server. This package contains no compiler logic.",
+  "version": "0.1.0",
+  "publisher": "studio",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:studio",
+    "onCommand:studio.format",
+    "onCommand:studio.check",
+    "onCommand:studio.build",
+    "onCommand:studio.dev",
+    "onCommand:studio.restartSession",
+    "onCommand:studio.newProject"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "studio",
+        "aliases": [
+          "Studio Script",
+          "studio"
+        ],
+        "extensions": [
+          ".studio"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "studio",
+        "scopeName": "source.studio",
+        "path": "./syntaxes/studio.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "studio.format",
+        "title": "Studio: Format Document"
+      },
+      {
+        "command": "studio.check",
+        "title": "Studio: Check Workspace"
+      },
+      {
+        "command": "studio.build",
+        "title": "Studio: Build Project"
+      },
+      {
+        "command": "studio.dev",
+        "title": "Studio: Start Dev Session"
+      },
+      {
+        "command": "studio.restartSession",
+        "title": "Studio: Restart Dev Session"
+      },
+      {
+        "command": "studio.newProject",
+        "title": "Studio: New Project…"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "bun test src/"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/vscode": "^1.90.0",
+    "bun-types": "^1.4.2",
+    "typescript": "^5.4.0"
+  }
+}

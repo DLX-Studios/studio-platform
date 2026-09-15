@@ -1,0 +1,9 @@
+{
+  "type": "action",
+  "payload": {
+    "request_id": "req-1",
+    "capability": "payment.simulate",
+    "operation": "charge",
+    "payload": {}
+  }
+}

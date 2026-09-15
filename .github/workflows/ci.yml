@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-04
+          components: clippy,rustfmt
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            sway
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate Spec Kit integration
+        run: >-
+          uvx --from git+https://github.com/github/spec-kit.git@v0.15.2
+          specify integration status
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Rust
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --locked --workspace
+
+      - name: Validate AssemblyScript and tooling
+        run: bun run check
+
+      - name: Test tooling
+        run: bun test
+
+      - name: Reject generated artifact drift
+        run: git diff --exit-code -- protocol sdk/assemblyscript/assembly/generated
+
+      - name: Reject X11 features
+        run: ./scripts/check-no-x11-features.sh
+
+      - name: Build Wayland-only native probe
+        env:
+          DISPLAY: ""
+        run: env -u DISPLAY cargo build --locked --release -p studio-app
+
+      - name: Reject X11 dynamic linkage
+        run: ./scripts/check-no-x11.sh target/release/studio-app
+
+      - name: Test native headless Wayland startup
+        env:
+          STUDIO_APP_BINARY: ${{ github.workspace }}/target/release/studio-app
+        run: ./scripts/test-headless-wayland.sh

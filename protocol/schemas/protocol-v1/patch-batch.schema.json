@@ -1,0 +1,251 @@
+{
+  "$id": "https://studio.local/schemas/protocol-v1/patch-batch.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PatchBatch",
+  "type": "object",
+  "properties": {
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PatchOp"
+      }
+    },
+    "sequence": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sequence",
+    "operations"
+  ],
+  "$defs": {
+    "NodeKind": {
+      "type": "string",
+      "enum": [
+        "box",
+        "column",
+        "row",
+        "stack",
+        "grid",
+        "scroll_view",
+        "list_view",
+        "spacer",
+        "divider",
+        "text",
+        "icon",
+        "image",
+        "card",
+        "badge",
+        "tag",
+        "avatar",
+        "empty",
+        "skeleton",
+        "progress_indicator",
+        "progress_circle",
+        "spinner",
+        "button",
+        "icon_button",
+        "checkbox",
+        "radio",
+        "switch",
+        "toggle",
+        "button_group",
+        "slider",
+        "range_slider",
+        "select",
+        "combobox",
+        "number_input",
+        "text_input",
+        "text_area",
+        "field",
+        "input_group",
+        "otp_input",
+        "secret_input",
+        "dialog",
+        "alert_dialog",
+        "popover",
+        "sheet",
+        "bottom_sheet",
+        "toast",
+        "notification",
+        "banner",
+        "context_menu",
+        "command_palette",
+        "tooltip",
+        "scaffold",
+        "app_bar",
+        "sidebar",
+        "navigation_bar",
+        "navigation_rail",
+        "drawer",
+        "tabs",
+        "breadcrumb",
+        "stepper",
+        "pagination",
+        "list_tile",
+        "searchable_list",
+        "virtual_list",
+        "data_table",
+        "tree",
+        "description_list",
+        "calendar",
+        "date_picker",
+        "time_picker",
+        "separator",
+        "accordion",
+        "collapsible",
+        "hover_card",
+        "menu_bar",
+        "status_bar",
+        "keyboard_shortcuts",
+        "kbd",
+        "color_picker",
+        "rating",
+        "resizable",
+        "dock",
+        "chart",
+        "editor",
+        "rich_text",
+        "carousel",
+        "drag_drop",
+        "theme",
+        "aspect_ratio",
+        "alert",
+        "attachment",
+        "bubble",
+        "command",
+        "native_select",
+        "navigation_menu",
+        "scroll_area",
+        "item",
+        "message",
+        "message_scroller",
+        "toggle_group",
+        "sonner"
+      ]
+    },
+    "PatchOp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "node_id": {
+              "type": "string"
+            },
+            "op": {
+              "type": "string",
+              "const": "update_prop"
+            },
+            "property": {
+              "type": "string"
+            },
+            "value": true
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "node_id",
+            "property",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "node": {
+              "$ref": "#/$defs/UiNode"
+            },
+            "op": {
+              "type": "string",
+              "const": "insert_child"
+            },
+            "parent_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "parent_id",
+            "index",
+            "node"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "node_id": {
+              "type": "string"
+            },
+            "op": {
+              "type": "string",
+              "const": "remove_node"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "node_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/UiNode"
+            },
+            "node_id": {
+              "type": "string"
+            },
+            "op": {
+              "type": "string",
+              "const": "replace_node"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "node_id",
+            "node"
+          ]
+        }
+      ]
+    },
+    "UiNode": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UiNode"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ]
+    }
+  }
+}

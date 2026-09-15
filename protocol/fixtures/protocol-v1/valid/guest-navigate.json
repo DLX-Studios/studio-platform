@@ -1,0 +1,7 @@
+{
+  "type": "navigate",
+  "payload": {
+    "operation": "push",
+    "route": "/checkout"
+  }
+}

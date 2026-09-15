@@ -1,0 +1,97 @@
+<script lang="ts">
+  // Votes live in guest state; tapping a vote button patches the counts.
+  let post1Votes = $state(1284);
+  let post2Votes = $state(856);
+  let post3Votes = $state(342);
+
+  function upvotePost1() {
+    post1Votes += 1;
+  }
+
+  function upvotePost2() {
+    post2Votes += 1;
+  }
+
+  function upvotePost3() {
+    post3Votes += 1;
+  }
+</script>
+
+<Scaffold id="app">
+  <Row id="shell">
+    <Box id="sidebar" width={240}>
+      <Column id="side-col" gap={8}>
+        <Text id="brand" typography_role="headline" text="LocalTalk" />
+        <Button id="nav-home" label="Home" variant="selected" />
+        <Button id="nav-popular" label="Popular" variant="secondary" />
+        <Button id="nav-all" label="All" variant="secondary" />
+        <Text id="communities-title" typography_role="label" text="Communities" />
+        <Button id="comm-help" label="t/localhelp" variant="secondary" />
+        <Button id="comm-events" label="t/events" variant="secondary" />
+        <Button id="comm-market" label="t/market" variant="secondary" />
+        <Button id="new-post" label="New Post" />
+      </Column>
+    </Box>
+
+    <Column id="feed" flex={1}>
+      <Row id="sortbar" gap={8}>
+        <Button id="sort-hot" label="Hot" variant="selected" />
+        <Button id="sort-new" label="New" variant="secondary" />
+        <Button id="sort-top" label="Top" variant="secondary" />
+        <IconButton id="feed-search" icon="search" />
+      </Row>
+
+      <ScrollView id="posts" axis="vertical">
+        <Column id="posts-col" gap={12}>
+          <Card id="post1" padding={8}>
+            <Column id="post1-col" gap={8}>
+              <Row id="post1-meta" gap={8}>
+                <Text id="post1-comm" typography_role="caption" text="t/localhelp" />
+                <Text id="post1-age" typography_role="caption" text="3h" />
+              </Row>
+              <Text id="post1-title" typography_role="label" text="Best plumber in the neighborhood?" />
+              <Text id="post1-body" typography_role="caption" text="Kitchen sink leaking since Tuesday, need someone reliable." />
+              <Row id="post1-actions" gap={8}>
+                <Button id="post1-up" label="+" variant="secondary" onclick={upvotePost1} />
+                <Text id="post1-votes">{post1Votes}</Text>
+                <Button id="post1-comments" label="24 comments" variant="secondary" />
+              </Row>
+            </Column>
+          </Card>
+
+          <Card id="post2" padding={8}>
+            <Column id="post2-col" gap={8}>
+              <Row id="post2-meta" gap={8}>
+                <Text id="post2-comm" typography_role="caption" text="t/events" />
+                <Text id="post2-age" typography_role="caption" text="7h" />
+              </Row>
+              <Text id="post2-title" typography_role="label" text="Saturday market moved indoors" />
+              <Text id="post2-body" typography_role="caption" text="Rain forecast, see you at the community hall." />
+              <Row id="post2-actions" gap={8}>
+                <Button id="post2-up" label="+" variant="secondary" onclick={upvotePost2} />
+                <Text id="post2-votes">{post2Votes}</Text>
+                <Button id="post2-comments" label="58 comments" variant="secondary" />
+              </Row>
+            </Column>
+          </Card>
+
+          <Card id="post3" padding={8}>
+            <Column id="post3-col" gap={8}>
+              <Row id="post3-meta" gap={8}>
+                <Text id="post3-comm" typography_role="caption" text="t/market" />
+                <Text id="post3-age" typography_role="caption" text="1d" />
+              </Row>
+              <Text id="post3-title" typography_role="label" text="Giving away moving boxes" />
+              <Text id="post3-body" typography_role="caption" text="Twenty boxes, porch pickup only." />
+              <Row id="post3-actions" gap={8}>
+                <Button id="post3-up" label="+" variant="secondary" onclick={upvotePost3} />
+                <Text id="post3-votes">{post3Votes}</Text>
+                <Button id="post3-comments" label="12 comments" variant="secondary" />
+              </Row>
+            </Column>
+          </Card>
+        </Column>
+      </ScrollView>
+    </Column>
+  </Row>
+</Scaffold>

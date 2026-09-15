@@ -1,0 +1,45 @@
+[package]
+name = "rsvelte_esrap"
+version = "0.10.37"
+edition = "2024"
+rust-version = "1.95"
+description = "A Rust port of esrap — prints an oxc AST to JavaScript with esrap's exact layout"
+license = "MIT"
+repository = "https://github.com/baseballyama/rsvelte"
+homepage = "https://baseballyama.github.io/rsvelte/"
+documentation = "https://docs.rs/rsvelte_esrap"
+readme = "README.md"
+keywords = ["svelte", "compiler", "esrap", "printer"]
+categories = ["compilers", "development-tools"]
+publish = ["crates-io"]
+autobins = false
+autobenches = false
+exclude = ["tests/**", "benches/**", "examples/**"]
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+compact_str = "0.10"
+memchr = "2.7"
+oxc_allocator = "0.146"
+oxc_ast = "0.146"
+oxc_span = "0.146"
+oxc_syntax = "0.146"
+
+[dev-dependencies]
+oxc_parser = "0.146"
+oxc_ast_visit = "0.146"
+
+[lints.rust]
+# Vendored upstream lint contract (rsvelte workspace root at the pinned rev).
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+format_push_string = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[package.metadata.docs.rs]
+all-features = true

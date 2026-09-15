@@ -1,0 +1,208 @@
+<script lang="ts">
+  let teeCount = $state(0);
+  let jeansCount = $state(0);
+  let jacketCount = $state(0);
+  let bagCount = $derived(teeCount + jeansCount + jacketCount);
+  let bagTotal = $derived(teeCount * 2999 + jeansCount * 8900 + jacketCount * 14900);
+
+  function addTee() {
+    teeCount += 1;
+  }
+
+  function addJeans() {
+    jeansCount += 1;
+  }
+
+  function addJacket() {
+    jacketCount += 1;
+  }
+</script>
+
+<Scaffold id="store">
+  <Row id="app">
+    <Box id="rail" width={76}>
+      <Column id="rail-col" gap={8}>
+        <IconButton id="nav-home" icon="H" />
+        <IconButton id="nav-pos" icon="P" />
+        <IconButton id="nav-box" icon="B" />
+        <IconButton id="nav-wallet" icon="W" />
+        <IconButton id="nav-history" icon="T" />
+        <IconButton id="nav-staff" icon="U" />
+        <IconButton id="nav-link" icon="L" />
+        <IconButton id="nav-shield" icon="S" />
+        <IconButton id="nav-help" icon="?" />
+      </Column>
+    </Box>
+
+    <Column id="main" flex={1}>
+      <Row id="topbar" gap={12}>
+        <Text id="title" typography_role="headline" text="Create Transaction" />
+        <Row id="top-actions" gap={8}>
+          <IconButton id="act-bell" icon="bell" />
+          <IconButton id="act-gear" icon="gear" />
+          <Avatar id="staff-1" fallback="AK" />
+          <Avatar id="staff-2" fallback="MJ" />
+          <Avatar id="staff-3" fallback="TP" />
+          <Text id="bag" text="Bag" />
+          <Text id="bag-count">{bagCount}</Text>
+          <Button id="new-access" label="New Access" variant="secondary" />
+          <Avatar id="user" fallback="JD" />
+        </Row>
+      </Row>
+
+      <Row id="cats" gap={8}>
+        <Button id="cat-all" label="All Product 320" variant="selected" />
+        <Button id="cat-shoes" label="Shoes 182" variant="secondary" />
+        <Button id="cat-clothing" label="Clothing 78" variant="secondary" />
+        <Button id="cat-others" label="Others 60" variant="secondary" />
+        <IconButton id="search" icon="search" />
+      </Row>
+
+      <Row id="content" gap={12}>
+        <Column id="catalog" flex={1}>
+          <ScrollView id="scroll" axis="vertical">
+            <Grid id="grid" columns={3} gap={12}>
+              <Card id="p1-card" padding={8}>
+                <Column id="p1-col" gap={8}>
+                  <Badge id="p1-stock" label="218 Stock" />
+                  <Text id="p1-name" typography_role="label" text="Nike Waffle Debut" />
+                  <Text id="p1-desc" typography_role="caption" text="Retro gets modernized, smooth ride" />
+                  <Text id="p1-price" typography_role="label" text="$80.00" />
+                  <Button id="p1-add" label="Add to Cart" variant="secondary" onclick={addTee} />
+                </Column>
+              </Card>
+
+              <Card id="p2-card" padding={8}>
+                <Column id="p2-col" gap={8}>
+                  <Badge id="p2-stock" label="198 Stock" />
+                  <Text id="p2-name" typography_role="label" text="Nike Tech" />
+                  <Text id="p2-desc" typography_role="caption" text="Stretchy, breathable woven jacket" />
+                  <Text id="p2-price" typography_role="label" text="$130.83" />
+                  <Button id="p2-add" label="Add to Cart" variant="secondary" onclick={addJeans} />
+                </Column>
+              </Card>
+
+              <Card id="p3-card" padding={8}>
+                <Column id="p3-col" gap={8}>
+                  <Badge id="p3-stock" label="123 Stock" />
+                  <Text id="p3-name" typography_role="label" text="Nike V2K Run New" />
+                  <Text id="p3-desc" typography_role="caption" text="Elite crew basketball socks" />
+                  <Text id="p3-price" typography_role="label" text="$16.50" />
+                  <Button id="p3-add" label="Add to Cart" variant="secondary" onclick={addTee} />
+                </Column>
+              </Card>
+
+              <Card id="p4-card" padding={8}>
+                <Column id="p4-col" gap={8}>
+                  <Badge id="p4-stock" label="121 Stock" />
+                  <Text id="p4-name" typography_role="label" text="Nike P-6000" />
+                  <Text id="p4-desc" typography_role="caption" text="2006 Air Pegasus icon" />
+                  <Text id="p4-price" typography_role="label" text="$115.28" />
+                  <Button id="p4-add" label="Add to Cart" variant="secondary" onclick={addJeans} />
+                </Column>
+              </Card>
+
+              <Card id="p5-card" padding={8}>
+                <Column id="p5-col" gap={8}>
+                  <Badge id="p5-stock" label="119 Stock" />
+                  <Text id="p5-name" typography_role="label" text="Nike Zoom Vomero Roam" />
+                  <Text id="p5-desc" typography_role="caption" text="Winterized city runner" />
+                  <Text id="p5-price" typography_role="label" text="$187.43" />
+                  <Button id="p5-add" label="Add to Cart" variant="secondary" onclick={addTee} />
+                </Column>
+              </Card>
+
+              <Card id="p6-card" padding={8}>
+                <Column id="p6-col" gap={8}>
+                  <Badge id="p6-stock" label="192 Stock" />
+                  <Text id="p6-name" typography_role="label" text="Fleece Cargo Pants" />
+                  <Text id="p6-desc" typography_role="caption" text="Brushed fleece, casual fit" />
+                  <Text id="p6-price" typography_role="label" text="$65.42" />
+                  <Button id="p6-add" label="Add to Cart" variant="secondary" onclick={addJacket} />
+                </Column>
+              </Card>
+            </Grid>
+          </ScrollView>
+        </Column>
+
+        <Box id="detail" width={390}>
+          <Column id="detail-col" gap={12}>
+            <Row id="detail-head" gap={8}>
+              <Text id="detail-title" typography_role="label" text="Detail Transaction" />
+              <Button id="reset-order" label="Reset Order" variant="secondary" />
+            </Row>
+
+            <Card id="line1" padding={8}>
+              <Column id="line1-col" gap={8}>
+                <Row id="line1-top" gap={8}>
+                  <Text id="line1-name" typography_role="label" text="Nike V2K Run New" />
+                  <IconButton id="line1-del" icon="X" />
+                </Row>
+                <Row id="line1-attrs" gap={8}>
+                  <Tag id="line1-size" label="Size 42" />
+                  <Tag id="line1-color" label="Green" variant="success" />
+                </Row>
+                <Row id="line1-qty" gap={8}>
+                  <Button id="line1-dec" label="-" variant="secondary" />
+                  <Text id="line1-count" text="01" />
+                  <Button id="line1-inc" label="+" variant="secondary" />
+                  <Text id="line1-total" typography_role="label" text="$182.72" />
+                </Row>
+              </Column>
+            </Card>
+
+            <Card id="line2" padding={8}>
+              <Column id="line2-col" gap={8}>
+                <Row id="line2-top" gap={8}>
+                  <Text id="line2-name" typography_role="label" text="Phantom Baroque" />
+                  <IconButton id="line2-del" icon="X" />
+                </Row>
+                <Row id="line2-attrs" gap={8}>
+                  <Tag id="line2-size" label="Size 42" />
+                  <Tag id="line2-color" label="Brown" />
+                </Row>
+                <Row id="line2-qty" gap={8}>
+                  <Button id="line2-dec" label="-" variant="secondary" />
+                  <Text id="line2-count" text="01" />
+                  <Button id="line2-inc" label="+" variant="secondary" />
+                  <Text id="line2-total" typography_role="label" text="$187.92" />
+                </Row>
+              </Column>
+            </Card>
+
+            <Row id="promo" gap={8}>
+              <Text id="promo-label" text="Promo New User (10%)" />
+              <Button id="promo-change" label="Change Promo" variant="secondary" />
+            </Row>
+
+            <Column id="totals" gap={8}>
+              <Row id="tot-sub" gap={8}>
+                <Text id="tot-sub-l" typography_role="caption" text="Sub-Total" />
+                <Text id="tot-sub-v" typography_role="label" text="$370.67" />
+              </Row>
+              <Row id="tot-tax" gap={8}>
+                <Text id="tot-tax-l" typography_role="caption" text="Tax (12%)" />
+                <Text id="tot-tax-v" typography_role="label" text="$44.48" />
+              </Row>
+              <Row id="tot-disc" gap={8}>
+                <Text id="tot-disc-l" typography_role="caption" text="Discount" />
+                <Text id="tot-disc-v" typography_role="label" text="-$41.51" />
+              </Row>
+              <Row id="tot-pay" gap={8}>
+                <Text id="tot-pay-l" typography_role="label" text="Total Payment" />
+                <Text id="tot-pay-v" typography_role="label">${bagTotal}</Text>
+              </Row>
+            </Column>
+
+            <Row id="pay" gap={8}>
+              <Text id="pay-label" text="Credit Card" />
+              <Button id="pay-change" label="Change Method" variant="secondary" />
+            </Row>
+
+            <Button id="continue" label="Continue" width="full" />
+          </Column>
+        </Box>
+      </Row>
+    </Column>
+  </Row>
+</Scaffold>

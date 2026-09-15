@@ -1,0 +1,8 @@
+{
+  "type": "ui",
+  "payload": {
+    "node_id": "checkout",
+    "event": "pressed",
+    "payload": {}
+  }
+}

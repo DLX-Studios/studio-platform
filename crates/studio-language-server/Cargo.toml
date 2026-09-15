@@ -1,0 +1,23 @@
+[package]
+name = "studio-language-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Headless Studio Script language server"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+studio-script = { path = "../studio-script" }
+studio-protocol = { path = "../studio-protocol" }
+rsvelte_fmt = { path = "../../vendor/rsvelte/rsvelte_fmt", default-features = false }
+rsvelte_lint = { path = "../../vendor/rsvelte/rsvelte_lint", default-features = false }
+rsvelte_projection = { path = "../../vendor/rsvelte/rsvelte_projection", default-features = false }
+
+[[bin]]
+name = "studio-language-server"
+path = "src/bin/studio-language-server.rs"
+
+[lints]
+workspace = true

@@ -1,0 +1,2 @@
+{"type":"mount","payload":{"protocol_version":1,"route":"/typed-events","root":{"id":"typed-events#root","kind":"box","props":{},"children":[{"id":"events-card","kind":"card","props":{},"children":[{"id":"events-col","kind":"column","props":{},"children":[{"id":"events-name","kind":"text","props":{"text":"Latte"},"children":[]},{"id":"events-add","kind":"button","props":{"label":"Add (1)"},"children":[]}]}]}]}}}
+{"type":"event","name":"add-to-order","payload":{"productId":"Latte","quantity":1}}

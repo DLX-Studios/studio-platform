@@ -1,0 +1,8 @@
+<!-- Preserve this note -->
+studio 1
+<script lang="studio">
+on pressed submit push(/done)
+</script>
+<Screen id="checkout" title="Checkout">
+  <Button id="submit" label="Pay" />
+</Screen>
