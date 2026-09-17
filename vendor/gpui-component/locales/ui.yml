@@ -234,6 +234,19 @@ Dialog:
     zh-HK: 取消
     zh-TW: 取消
     it: Annulla
+Command:
+  placeholder:
+    en: Type a command or search...
+    zh-CN: 输入命令或搜索...
+    zh-HK: 輸入命令或搜尋...
+    zh-TW: 輸入命令或搜尋...
+    it: Digita un comando o cerca...
+  empty:
+    en: No results found.
+    zh-CN: 未找到结果。
+    zh-HK: 未找到結果。
+    zh-TW: 未找到結果。
+    it: Nessun risultato trovato.
 List:
   search_placeholder:
     en: Search...
@@ -242,6 +255,16 @@ List:
     zh-TW: 搜尋...
     it: Ricerca...
 Input:
+  Decrement:
+    en: Decrement
+    zh-CN: 减少
+    zh-HK: 減少
+    zh-TW: 減少
+  Increment:
+    en: Increment
+    zh-CN: 增加
+    zh-HK: 增加
+    zh-TW: 增加
   Replace:
     en: Replace
     zh-CN: 替换
@@ -306,3 +329,34 @@ Pagination:
     zh-CN: 下一页
     zh-HK: 下一頁
     zh-TW: 下一頁
+Carousel:
+  label:
+    en: Carousel
+    zh-CN: 轮播
+    zh-HK: 輪播
+    zh-TW: 輪播
+  previous:
+    en: Previous slide
+    zh-CN: 上一张
+    zh-HK: 上一張
+    zh-TW: 上一張
+  next:
+    en: Next slide
+    zh-CN: 下一张
+    zh-HK: 下一張
+    zh-TW: 下一張
+  slide:
+    en: Slide %{current} of %{total}
+    zh-CN: 第 %{current} 张，共 %{total} 张
+    zh-HK: 第 %{current} 張，共 %{total} 張
+    zh-TW: 第 %{current} 張，共 %{total} 張
+  pagination:
+    en: Carousel pagination
+    zh-CN: 轮播分页
+    zh-HK: 輪播分頁
+    zh-TW: 輪播分頁
+  go_to_slide:
+    en: Go to slide %{current}
+    zh-CN: 前往第 %{current} 张
+    zh-HK: 前往第 %{current} 張
+    zh-TW: 前往第 %{current} 張

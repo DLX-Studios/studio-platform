@@ -70,8 +70,10 @@ impl SettingGroup {
         self.items.iter().any(|item| item.is_match(query, cx))
     }
 
-    pub(super) fn is_resettable(&self, cx: &App) -> bool {
-        self.items.iter().any(|item| item.is_resettable(cx))
+    pub(super) fn is_resettable(&self, query: &str, cx: &App) -> bool {
+        self.items
+            .iter()
+            .any(|item| item.is_match(query, cx) && item.is_resettable(cx))
     }
 
     pub(crate) fn render(
@@ -82,8 +84,8 @@ impl SettingGroup {
         cx: &mut App,
     ) -> impl IntoElement {
         GroupBox::new()
-            .id(SharedString::from(format!("group-{}", options.group_ix)))
-            .with_variant(options.group_variant)
+            .id(SharedString::from(format!("group-{}", options.group_ix())))
+            .with_variant(options.group_variant())
             .when_some(self.title.clone(), |this, title| {
                 this.title(v_flex().gap_1().child(title).when_some(
                     self.description.clone(),
@@ -99,14 +101,10 @@ impl SettingGroup {
             .gap_4()
             .children(self.items.iter().enumerate().filter_map(|(item_ix, item)| {
                 if item.is_match(&query, cx) {
-                    Some(item.clone().render_item(
-                        &RenderOptions {
-                            item_ix,
-                            ..*options
-                        },
-                        window,
-                        cx,
-                    ))
+                    Some(
+                        item.clone()
+                            .render_item(&options.with_item_ix(item_ix), window, cx),
+                    )
                 } else {
                     None
                 }
@@ -114,9 +112,11 @@ impl SettingGroup {
             .refine_style(&self.style)
     }
 
-    pub(crate) fn reset(&self, window: &mut Window, cx: &mut App) {
+    pub(crate) fn reset(&self, query: &str, window: &mut Window, cx: &mut App) {
         for item in &self.items {
-            item.reset(window, cx);
+            if item.is_match(query, cx) {
+                item.reset(window, cx);
+            }
         }
     }
 }

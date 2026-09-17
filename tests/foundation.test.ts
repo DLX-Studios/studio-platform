@@ -36,7 +36,8 @@ describe("Phase 0 foundation", () => {
     ).text();
 
     expect(research).toContain("29cd89882465d6ebfe00af2ada6f89951581c580");
-    expect(research).toContain("e1570bdc8fd2dc17d38cab09e74b1783bdf3b24b");
+    expect(research).toContain("fb26e617da3add2ce2ac92a2ccc1a64bc8343135");
+    expect(research).toContain("0.3.5");
     expect(research).toContain("e158684b23d9cb043fed3989ca252212046dabca");
     expect(research).toContain("fecccf8c0d641efc75152fa206bbb941fa990c70");
     expect(research).toContain("b8b4228d9a1cb2bb108432241bcb5d8e6784a035");

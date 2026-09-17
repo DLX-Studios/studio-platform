@@ -19,7 +19,10 @@ use gpui_component::{
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     date_picker::{DatePicker, DatePickerState},
-    input::{Input, InputEvent, InputState, NumberInput, NumberStep, OtpInput, OtpState},
+    input::{
+        Input, InputEvent, InputState, NumberInput, NumberStep, OtpEvent, OtpInput, OtpState,
+        Textarea, TextareaState,
+    },
     popover::Popover,
     progress::{Progress, ProgressCircle},
     radio::Radio,
@@ -174,7 +177,6 @@ fn collect_retained_widget_ids(node: &PluginRenderNode, ids: &mut BTreeSet<Strin
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InputBinding {
     Text,
-    Multiline,
     Secret,
     Number,
 }
@@ -468,6 +470,7 @@ pub struct FoundationGallery {
     root_focus: FocusHandle,
     controls: [FocusHandle; 3],
     plugin_inputs: BTreeMap<String, Entity<InputState>>,
+    plugin_textareas: BTreeMap<String, Entity<TextareaState>>,
     plugin_selects: BTreeMap<String, Entity<SelectState<Vec<SharedString>>>>,
     plugin_sliders: BTreeMap<String, Entity<SliderState>>,
     plugin_otps: BTreeMap<String, Entity<OtpState>>,
@@ -503,6 +506,7 @@ impl FoundationGallery {
                 cx.focus_handle().tab_index(3).tab_stop(true),
             ],
             plugin_inputs: BTreeMap::new(),
+            plugin_textareas: BTreeMap::new(),
             plugin_selects: BTreeMap::new(),
             plugin_sliders: BTreeMap::new(),
             plugin_otps: BTreeMap::new(),
@@ -589,12 +593,10 @@ impl FoundationGallery {
         let initial_value = initial_value.to_owned();
         let state = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder(placeholder);
-            match binding {
+            if binding == InputBinding::Secret {
                 // Secret inputs are masked at the native layer and their buffers are never
                 // mirrored into host state or events.
-                InputBinding::Secret => state = state.masked(true),
-                InputBinding::Multiline => state = state.multi_line(true),
-                InputBinding::Text | InputBinding::Number => {}
+                state = state.masked(true);
             }
             if !initial_value.is_empty() && binding != InputBinding::Secret {
                 state.set_value(initial_value, window, cx);
@@ -616,9 +618,7 @@ impl FoundationGallery {
                     InputBinding::Number => {
                         parse_number_input(&raw).map(|value| InputAction::SliderDrag { value })
                     }
-                    InputBinding::Text | InputBinding::Multiline => {
-                        Some(InputAction::TextChanged { value: raw })
-                    }
+                    InputBinding::Text => Some(InputAction::TextChanged { value: raw }),
                 };
                 if let Some(action) = action {
                     this.dispatch_input(&node_id, action, cx);
@@ -626,6 +626,62 @@ impl FoundationGallery {
             }
         });
         self.plugin_inputs.insert(node_id.to_owned(), state.clone());
+        self.plugin_state_subscriptions
+            .entry(node_id.to_owned())
+            .or_default()
+            .push(change_subscription);
+        state
+    }
+
+    /// Retain (or create) one stable-ID multi-line text state for a plugin node.
+    ///
+    /// Multi-line editing is a distinct state type (`TextareaState`) in the
+    /// component model, so text areas keep a dedicated retained map while
+    /// sharing the visited-ID, value, and subscription bookkeeping.
+    fn plugin_textarea(
+        &mut self,
+        node_id: &str,
+        placeholder: &str,
+        initial_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        self.visited_input_ids.insert(node_id.to_owned());
+        let previous_value = self
+            .plugin_input_values
+            .insert(node_id.to_owned(), initial_value.to_owned());
+        if let Some(state) = self.plugin_textareas.get(node_id) {
+            let value_changed = host_value_changed(previous_value.as_deref(), initial_value);
+            state.update(cx, |state, cx| {
+                state.set_placeholder(placeholder, window, cx);
+                if value_changed {
+                    state.set_value(initial_value, window, cx);
+                }
+            });
+            return state.clone();
+        }
+        let placeholder = placeholder.to_owned();
+        let initial_value = initial_value.to_owned();
+        let state = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx).placeholder(placeholder);
+            if !initial_value.is_empty() {
+                state.set_value(initial_value, window, cx);
+            }
+            state
+        });
+        let change_subscription = cx.subscribe_in(&state, window, {
+            let node_id = node_id.to_owned();
+            let state = state.clone();
+            move |this, _, event: &InputEvent, _, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let raw = state.read(cx).value().to_string();
+                this.dispatch_input(&node_id, InputAction::TextChanged { value: raw }, cx);
+            }
+        });
+        self.plugin_textareas
+            .insert(node_id.to_owned(), state.clone());
         self.plugin_state_subscriptions
             .entry(node_id.to_owned())
             .or_default()
@@ -732,33 +788,38 @@ impl FoundationGallery {
             step,
             value: value_range.or(Some((single, single))),
         };
-        let binding_changed = self
+        let previous = self
             .plugin_slider_bindings
-            .insert(node_id.to_owned(), binding.clone())
-            .is_none_or(|previous| previous != binding);
-        if let Some(state) = self.plugin_sliders.get(node_id) {
+            .insert(node_id.to_owned(), binding.clone());
+        let binding_changed = previous.as_ref().is_none_or(|prev| *prev != binding);
+        if let Some(state) = self.plugin_sliders.get(node_id).cloned() {
             if binding_changed {
-                state.update(cx, |state, cx| {
-                    // Keep each intermediate range valid while applying an atomic protocol
-                    // patch; SliderState clamps through `f32::clamp`, which rejects min > max.
-                    if min > state.max_value() {
-                        state.set_max(max, window, cx);
-                        state.set_min(min, window, cx);
-                    } else if max < state.min_value() {
-                        state.set_min(min, window, cx);
-                        state.set_max(max, window, cx);
-                    } else {
-                        state.set_min(min, window, cx);
-                        state.set_max(max, window, cx);
-                    }
-                    state.set_step(step, window, cx);
-                    match value_range {
-                        Some(value) => state.set_value(value, window, cx),
-                        None => state.set_value(single, window, cx),
-                    }
+                // Range and step are construction-time builders in the component
+                // model; only the value can move in place. Rebuild the entity when
+                // the range moves so the new binding takes effect. Subscriptions
+                // tied to the retired entity are dropped with it.
+                let range_changed = previous.as_ref().is_none_or(|prev| {
+                    prev.min.to_bits() != binding.min.to_bits()
+                        || prev.max.to_bits() != binding.max.to_bits()
+                        || prev.step.to_bits() != binding.step.to_bits()
                 });
+                if range_changed {
+                    self.plugin_sliders.remove(node_id);
+                    self.plugin_state_subscriptions.remove(node_id);
+                } else {
+                    match value_range {
+                        Some(value) => state.update(cx, |state, cx| {
+                            state.set_value(value, window, cx);
+                        }),
+                        None => state.update(cx, |state, cx| {
+                            state.set_value(single, window, cx);
+                        }),
+                    }
+                    return state;
+                }
+            } else {
+                return state;
             }
-            return state.clone();
         }
         let state = cx.new(|_| {
             let mut state = SliderState::new().min(min).max(max);
@@ -810,22 +871,31 @@ impl FoundationGallery {
             .plugin_otp_bindings
             .insert(node_id.to_owned(), binding.clone())
             .is_none_or(|previous| previous != binding);
-        if let Some(state) = self.plugin_otps.get(node_id) {
+        if let Some(state) = self.plugin_otps.get(node_id).cloned() {
             if binding_changed {
-                state.update(cx, |state, cx| {
-                    state.set_length(length, window, cx);
-                    state.set_value(value, window, cx);
-                });
+                if state.read(cx).len() != length {
+                    // Length is fixed at construction in the component model;
+                    // rebuild the entity when it moves. Subscriptions tied to
+                    // the retired entity are dropped with it.
+                    self.plugin_otps.remove(node_id);
+                    self.plugin_state_subscriptions.remove(node_id);
+                } else {
+                    state.update(cx, |state, cx| {
+                        state.set_value(value, window, cx);
+                    });
+                    return state;
+                }
+            } else {
+                return state;
             }
-            return state.clone();
         }
         let value = value.to_owned();
         let state = cx.new(|cx| OtpState::new(length, window, cx).default_value(value));
         let change_subscription = cx.subscribe_in(&state, window, {
             let node_id = node_id.to_owned();
             let state = state.clone();
-            move |this, _, event: &InputEvent, _, cx| {
-                if !matches!(event, InputEvent::Change) {
+            move |this: &mut Self, _, event: &OtpEvent, _, cx| {
+                if !matches!(event, OtpEvent::Change) {
                     return;
                 }
                 this.dispatch_input(
@@ -848,6 +918,7 @@ impl FoundationGallery {
     fn prune_retired_widget_states(&mut self) {
         let live = std::mem::take(&mut self.visited_input_ids);
         self.plugin_inputs.retain(|id, _| live.contains(id));
+        self.plugin_textareas.retain(|id, _| live.contains(id));
         self.plugin_selects.retain(|id, _| live.contains(id));
         self.plugin_sliders.retain(|id, _| live.contains(id));
         self.plugin_otps.retain(|id, _| live.contains(id));
@@ -2900,14 +2971,8 @@ impl FoundationGallery {
                     .unwrap_or_default()
                     .to_owned();
                 let enabled = prop_bool(&node.props, "enabled", true);
-                let state = self.plugin_input(
-                    &node.id,
-                    &placeholder,
-                    &initial_value,
-                    InputBinding::Multiline,
-                    window,
-                    cx,
-                );
+                let state =
+                    self.plugin_textarea(&node.id, &placeholder, &initial_value, window, cx);
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -2916,7 +2981,7 @@ impl FoundationGallery {
                     })
                     .min_w_0()
                     .w_full()
-                    .child(Input::new(&state).disabled(!enabled))
+                    .child(Textarea::new(&state).disabled(!enabled))
                     .into_any_element()
             }
             NodeKind::NumberInput => {

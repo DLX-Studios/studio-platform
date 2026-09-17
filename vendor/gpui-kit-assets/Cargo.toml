@@ -1,0 +1,25 @@
+[package]
+name = "gpui-kit-assets"
+description = "Default bundled assets for GPUI Kit."
+keywords = ["desktop", "gpui", "shadcn", "ui", "uikit"]
+license = "Apache-2.0"
+documentation = "https://docs.rs/gpui-kit-assets"
+homepage = "https://gpui-kit.com"
+repository = "https://github.com/longbridge/gpui-kit"
+readme = "README.md"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+version = "0.6.1-studio.1"
+
+# Retain Cargo icon-directory metadata for existing build-script consumers.
+links = "gpui-kit-default-icons"
+
+[dependencies]
+anyhow = "1"
+gpui = { version = "=0.3.5", package = "gpui-pre", default-features = false, features = ["wayland"] }
+log = "0.4"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
+

@@ -1,0 +1,68 @@
+[package]
+description = "Behavior, interaction, and infrastructure foundations for GPUI applications."
+keywords = ["desktop", "gpui", "ui", "foundation"]
+license = "Apache-2.0"
+name = "gpui-base"
+# The examples are development tools that read fixtures from `crates/story`;
+# they stay out of the published package.
+exclude = ["examples/"]
+repository = "https://github.com/longbridge/gpui-kit"
+homepage = "https://gpui-kit.com"
+documentation = "https://docs.rs/gpui-base"
+version = "0.6.1-studio.1"
+publish = false
+edition = "2024"
+rust-version = "1.93"
+
+[lib]
+doctest = false
+
+[features]
+test-support = ["gpui/test-support"]
+inspector = ["gpui_macros/inspector", "gpui/inspector"]
+
+[dependencies]
+anyhow = "1"
+aho-corasick = "1.1.3"
+chrono = "0.4.38"
+data-url = "0.3"
+futures = "0.3"
+gpui = { version = "=0.3.5", package = "gpui-pre", default-features = false, features = ["wayland"] }
+gpui_macros = { version = "=0.3.5", package = "gpui-pre-macros" }
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+markdown = { version = "1.0.0", features = ["serde"] }
+html5ever = "0.27"
+markup5ever_rcdom = "0.3.0"
+ropey = { version = "=2.0.0-beta.1", features = ["metric_chars", "metric_lines_lf", "metric_utf16"] }
+regex = "1"
+schemars = "1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+sum-tree = { version = "=0.3.5", package = "gpui-pre-sum-tree" }
+tracing = "0.1.41"
+unicode-segmentation = "1.12.0"
+web-time = "1"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+smol = "2"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+async-channel = "2.3.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSAccessibility", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSString"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The reduced-motion preference (SystemParametersInfoW).
+windows = { version = "0.58.0", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The reduced-motion preference, through the XDG desktop portal's Settings
+# interface. The same version and features `gpui-pre-linux` already pulls in.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings"] }
+

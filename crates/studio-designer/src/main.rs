@@ -2,7 +2,7 @@
 
 use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Root, Theme, ThemeMode, TitleBar};
-use gpui_component_assets::Assets;
+use gpui_kit_assets::Assets;
 use gpui_platform::application;
 use studio_designer::bootstrap::{NativeProductBootstrap, NativeProductShell};
 

@@ -1,9 +1,11 @@
 # gpui-component Fork Policy
 
-Upstream revision: `e1570bdc8fd2dc17d38cab09e74b1783bdf3b24b`.
+Upstream revision: `fb26e617da3add2ce2ac92a2ccc1a64bc8343135` (package `0.6.1`).
 
-Audit completed: 2026-08-04. This revision replaces the former animation-only fork with the
-complete `gpui-component` UI package and its required `assets` and `macros` crates.
+Audit completed: 2026-08-04 for `e1570bdc8fd2dc17d38cab09e74b1783bdf3b24b` (package `0.5.2`);
+synchronized 2026-09-17 to `fb26e61` (package `0.6.1`). This revision replaces the former
+single-crate vendor tree with the upstream `component`/`base` split plus the required
+`assets` and `macros` crates.
 
 ## Retained scope
 
@@ -18,7 +20,7 @@ Button, Input, Select, or Slider.
 
 ## Enabled features
 
-- GPUI: `default-features = false`, `wayland` only.
+- GPUI: `gpui-pre 0.3.5` (Zed snapshot `d89e9c2`) with `default-features = false`, `wayland` only.
 - gpui-component: no default optional features.
 - No X11/XWayland feature is enabled in the shipping dependency graph.
 
@@ -28,9 +30,13 @@ its own dependency and release-binary audit. The present runtime remains Wayland
 ## Local deltas
 
 - Replaced upstream workspace dependencies with explicit versions and local asset/macro paths.
-- Pinned GPUI to `381953d44897c53c4d252ae30620bafaa7d060b7` (current Zed main at the upgrade date).
-- Added Wayland-only GPUI dependency declarations in all three vendored crates.
-- Disabled publishing for the vendored packages.
+- Moved GPUI off the Zed git pin onto crates.io `gpui-pre 0.3.5` (same Zed code, registry
+  distribution); `gpui-pre-macros`/`gpui-pre-sum-tree` follow at `0.3.5`.
+- Added Wayland-only GPUI dependency declarations in all four vendored crates
+  (`gpui-component`, `gpui-base`, `gpui-kit-assets`, `gpui-component-macros` where applicable).
+- Adopted the upstream `gpui-kit-assets` package name (`vendor/gpui-kit-assets`) and added
+  `vendor/gpui-base` for the 0.6.x component/base split.
+- Disabled publishing for the vendored packages (`0.6.1-studio.1`).
 
 Rules:
 

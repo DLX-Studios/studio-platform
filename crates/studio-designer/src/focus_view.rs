@@ -20,7 +20,7 @@ use gpui::{
 use gpui_component::{
     Disableable,
     button::{Button, ButtonVariants},
-    input::{Input, InputEvent, InputState},
+    input::{Editor, EditorState, InputEvent},
 };
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
@@ -1203,7 +1203,7 @@ pub struct FocusView<P> {
     /// second design or session; it only records view/panel geometry.
     workspace_persistence: Arc<dyn WorkspacePersistence>,
     /// Native editable Studio Script buffer and its event subscription.
-    script_input: Option<Entity<InputState>>,
+    script_input: Option<Entity<EditorState>>,
     _script_subscription: Option<Subscription>,
     script_editor: Option<ScriptDocumentAdapter>,
     script_source: String,
@@ -1919,9 +1919,9 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 });
             }
             let input = cx.new(|cx| {
-                InputState::new(window, cx)
+                EditorState::new(window, cx)
                     .default_value(source.clone())
-                    .code_editor("studio")
+                    .language("studio")
             });
             let subscription = cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -2649,7 +2649,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                             .role(Role::TextInput)
                             .aria_label("Editable Studio Script buffer")
                             .h(px(220.0))
-                            .child(Input::new(&script_input)),
+                            .child(Editor::new(&script_input)),
                     )
                     .child(
                         div()

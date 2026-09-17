@@ -1,8 +1,10 @@
-use crate::highlighter::{HighlightTheme, LanguageRegistry};
+#[cfg(test)]
+use crate::highlighter::HighlightTheme;
+use crate::highlighter::LanguageRegistry;
 
 use anyhow::{Context, Result, anyhow};
 use gpui::{HighlightStyle, SharedString};
-
+use gpui_base::input::RopeExt as _;
 use ropey::{ChunkCursor, Rope};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,16 +13,17 @@ use std::{
     ops::{ControlFlow, Range},
     usize,
 };
+use sum_tree::Bias;
 use tree_sitter::{
     InputEdit, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
 };
 
-/// When a node spans more than this many bytes beyond the requested query
-/// range, we recurse into its children instead of querying it directly.
-const LARGE_NODE_THRESHOLD: usize = 8 * 1024;
 const MAX_INJECTION_RANGES: usize = 4096;
 const MAX_INJECTION_BYTES: usize = 512 * 1024;
 const MAX_INJECTION_LANGUAGE_BYTES: usize = 64;
+/// Parse attempts, not resulting layers: a failed parse still spends budget.
+/// Matches past it keep host highlighting but get no injected tokens.
+const MAX_NON_COMBINED_INJECTION_PARSES: usize = 512;
 const INJECTION_PARSE_TIMEOUT: Duration = Duration::from_millis(20);
 
 /// A syntax highlighter that supports incremental parsing, multiline text,
@@ -375,14 +378,17 @@ impl SyntaxHighlighter {
             ));
         };
 
-        // Languages without grammar default to a highlighter that never
-        // parses and creates no styles.
-        let Some(grammar) = config.language.as_ref() else {
+        // Languages without a parser (neither a statically linked grammar nor a
+        // registered parser factory) default to a highlighter that never parses
+        // and creates no styles.
+        if !LanguageRegistry::singleton().has_parser(lang) {
             return Ok(Self::build_inert(config.name.clone()));
-        };
+        }
 
-        let mut parser = Parser::new();
-        parser.set_language(grammar).context("parse set_language")?;
+        let (mut parser, grammar) = LanguageRegistry::singleton().parser(lang)?;
+        parser
+            .set_language(&grammar)
+            .context("parse set_language")?;
 
         // Concatenate the query strings, keeping track of the start offset of each section.
         let mut query_source = String::new();
@@ -394,7 +400,7 @@ impl SyntaxHighlighter {
 
         // Construct a single query by concatenating the three query strings, but record the
         // range of pattern indices that belong to each individual string.
-        let mut query = Query::new(grammar, &query_source).context("new query")?;
+        let mut query = Query::new(&grammar, &query_source).context("new query")?;
 
         let mut locals_pattern_index = 0;
         let mut highlights_pattern_index = 0;
@@ -411,7 +417,7 @@ impl SyntaxHighlighter {
         }
 
         let injections_query = if !config.injections.is_empty() {
-            Query::new(grammar, &config.injections).ok().map(Arc::new)
+            Query::new(&grammar, &config.injections).ok().map(Arc::new)
         } else {
             None
         };
@@ -669,7 +675,8 @@ impl SyntaxHighlighter {
                 return Some((config.name, query.clone()));
             }
 
-            let query = match Query::new(config.language.as_ref()?, &config.highlights) {
+            let grammar = LanguageRegistry::singleton().grammar(language_name).ok()?;
+            let query = match Query::new(&grammar, &config.highlights) {
                 Ok(query) => Arc::new(query),
                 Err(error) => {
                     tracing::error!(
@@ -712,6 +719,7 @@ impl SyntaxHighlighter {
         let mut resolved_languages: HashMap<SharedString, Option<(SharedString, Arc<Query>)>> =
             HashMap::new();
         let mut new_layers = Vec::new();
+        let mut non_combined_parses = 0usize;
         while let Some(query_match) = matches.next() {
             let mut language_name: Option<SharedString> = None;
             let mut combined = false;
@@ -726,6 +734,11 @@ impl SyntaxHighlighter {
                     "injection.combined" => combined = true,
                     _ => {}
                 }
+            }
+
+            // Skip rather than break, so later combined ranges are still collected.
+            if !combined && non_combined_parses >= MAX_NON_COMBINED_INJECTION_PARSES {
+                continue;
             }
 
             if language_name.is_none() {
@@ -782,6 +795,7 @@ impl SyntaxHighlighter {
                     continue;
                 }
 
+                non_combined_parses += 1;
                 let old_tree = old_layer_trees
                     .get(&(language_name.clone(), ranges_cache_key(&ranges)))
                     .copied();
@@ -837,9 +851,8 @@ impl SyntaxHighlighter {
             let end = ranges.iter().map(|r| r.end_byte).max()?;
             Some(start..end)
         }
-        let config = LanguageRegistry::singleton().language(language_name)?;
-        let mut parser = Parser::new();
-        parser.set_language(config.language.as_ref()?).ok()?;
+        let (mut parser, grammar) = LanguageRegistry::singleton().parser(language_name).ok()?;
+        parser.set_language(&grammar).ok()?;
         parser.set_included_ranges(&ranges).ok()?;
         let parse_start = Instant::now();
         let mut timed_out = false;
@@ -973,41 +986,37 @@ impl SyntaxHighlighter {
             }
         }
 
-        let query_nodes = collect_query_nodes(root_node, &range);
+        let mut query_cursor = QueryCursor::new();
+        query_cursor.set_byte_range(range.clone());
 
-        for query_node in &query_nodes {
-            let mut query_cursor = QueryCursor::new();
-            query_cursor.set_byte_range(range.clone());
+        let mut matches = query_cursor.matches(query, root_node, TextProvider(source));
 
-            let mut matches = query_cursor.matches(&query, *query_node, TextProvider(&source));
+        while let Some(query_match) = matches.next() {
+            for cap in query_match.captures {
+                let node = cap.node;
 
-            while let Some(query_match) = matches.next() {
-                for cap in query_match.captures {
-                    let node = cap.node;
+                let Some(highlight_name) = query.capture_names().get(cap.index as usize) else {
+                    continue;
+                };
 
-                    let Some(highlight_name) = query.capture_names().get(cap.index as usize) else {
-                        continue;
-                    };
+                let node_range: Range<usize> = node.start_byte()..node.end_byte();
+                let highlight_name = SharedString::from(highlight_name.to_string());
 
-                    let node_range: Range<usize> = node.start_byte()..node.end_byte();
-                    let highlight_name = SharedString::from(highlight_name.to_string());
+                // Merge near range and same highlight name
+                let last_item = highlights.last();
+                let last_range = last_item.map(|item| &item.range).unwrap_or(&(0..0));
+                let last_highlight_name = last_item.map(|item| item.name.clone());
 
-                    // Merge near range and same highlight name
-                    let last_item = highlights.last();
-                    let last_range = last_item.map(|item| &item.range).unwrap_or(&(0..0));
-                    let last_highlight_name = last_item.map(|item| item.name.clone());
-
-                    if last_range == &node_range {
-                        // case:
-                        // last_range: 213..220, last_highlight_name: Some("property")
-                        // last_range: 213..220, last_highlight_name: Some("string")
-                        highlights.push(HighlightItem::new(
-                            node_range,
-                            last_highlight_name.unwrap_or(highlight_name),
-                        ));
-                    } else {
-                        highlights.push(HighlightItem::new(node_range, highlight_name.clone()));
-                    }
+                if last_range == &node_range {
+                    // case:
+                    // last_range: 213..220, last_highlight_name: Some("property")
+                    // last_range: 213..220, last_highlight_name: Some("string")
+                    highlights.push(HighlightItem::new(
+                        node_range,
+                        last_highlight_name.unwrap_or(highlight_name),
+                    ));
+                } else {
+                    highlights.push(HighlightItem::new(node_range, highlight_name.clone()));
                 }
             }
         }
@@ -1036,7 +1045,8 @@ impl SyntaxHighlighter {
     /// # Example
     ///
     /// ```no_run
-    /// use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
+    /// # mod gpui_kit { pub extern crate gpui_component as component; }
+    /// use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
     /// use ropey::Rope;
     ///
     /// let code = "fn main() {\n    println!(\"Hello\");\n}";
@@ -1046,12 +1056,12 @@ impl SyntaxHighlighter {
     ///
     /// let theme = HighlightTheme::default_dark();
     /// let range = 0..code.len();
-    /// let styles = highlighter.styles(&range, &theme);
+    /// let styles = highlighter.styles(&range, &*theme);
     /// ```
     pub fn styles(
         &self,
         range: &Range<usize>,
-        theme: &HighlightTheme,
+        theme: &dyn gpui_base::input::HighlightStyleResolver,
     ) -> Vec<(Range<usize>, HighlightStyle)> {
         let mut styles = vec![];
         let start_offset = range.start;
@@ -1069,6 +1079,13 @@ impl SyntaxHighlighter {
             if node_range.start > node_range.end {
                 node_range.end = node_range.start;
             }
+            // The tree can be stale while a background reparse is pending
+            // (sync-parse timeout, or the large-text `edit_tree` path), so
+            // node offsets may fall inside multi-byte characters of the
+            // current text. Snap to char boundaries — text shaping panics on
+            // a mid-char style boundary.
+            node_range = self.text.clip_offset(node_range.start, Bias::Left)
+                ..self.text.clip_offset(node_range.end, Bias::Right);
             if node_range.is_empty() {
                 continue;
             }
@@ -1192,57 +1209,6 @@ pub(crate) fn unique_styles(
     merged
 }
 
-/// Walk the tree and collect nodes suitable for querying, skipping subtrees
-/// that fall entirely outside the byte range. Nodes much larger than the
-/// query range are recursed into so that `QueryCursor` only visits the
-/// relevant portion of the tree.
-fn collect_query_nodes<'a>(
-    root: tree_sitter::Node<'a>,
-    range: &Range<usize>,
-) -> Vec<tree_sitter::Node<'a>> {
-    let mut nodes = Vec::new();
-    collect_query_nodes_inner(root, range, &mut nodes);
-    if nodes.is_empty() {
-        nodes.push(root);
-    }
-    nodes
-}
-
-fn collect_query_nodes_inner<'a>(
-    node: tree_sitter::Node<'a>,
-    range: &Range<usize>,
-    out: &mut Vec<tree_sitter::Node<'a>>,
-) {
-    // Skip nodes entirely outside the range.
-    if node.end_byte() <= range.start || node.start_byte() >= range.end {
-        return;
-    }
-
-    let node_span = node.end_byte() - node.start_byte();
-    let range_span = range.end - range.start;
-
-    // Use `goto_first_child_for_byte` to seek directly to the first
-    // overlapping child instead of iterating all children from the start.
-    if node_span > range_span + LARGE_NODE_THRESHOLD && node.child_count() > 0 {
-        let mut cursor = node.walk();
-        if cursor.goto_first_child_for_byte(range.start).is_some() {
-            loop {
-                let child = cursor.node();
-                if child.start_byte() >= range.end {
-                    break;
-                }
-                collect_query_nodes_inner(child, range, out);
-                if !cursor.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-        return;
-    }
-
-    out.push(node);
-}
-
 /// Merge other style (Other on top)
 fn merge_highlight_style(style: &mut HighlightStyle, other: &HighlightStyle) {
     if let Some(color) = other.color {
@@ -1290,13 +1256,42 @@ mod tests {
         assert!(highlighter.tree().is_none());
         assert_eq!(highlighter.text().to_string(), rope.to_string());
 
-        let styles = highlighter.styles(&(0..rope.len()), &HighlightTheme::default_dark());
+        let theme = HighlightTheme::default_dark();
+        let styles = highlighter.styles(&(0..rope.len()), theme.as_ref());
         assert_eq!(styles, vec![(0..rope.len(), HighlightStyle::default())]);
 
         // Unregistered languages fall back to plain text.
         let mut highlighter = SyntaxHighlighter::new("no-such-language");
         assert!(highlighter.update(None, &rope, None));
         assert!(highlighter.tree().is_none());
+    }
+
+    /// While a background reparse is pending (sync-parse timeout, or the
+    /// large-text `edit_tree` path), `styles()` serves ranges from a stale
+    /// tree. Those must still land on char boundaries of the current text,
+    /// or text shaping panics on multi-byte characters.
+    #[cfg(feature = "tree-sitter-languages")]
+    #[test]
+    fn test_stale_tree_styles_snap_to_char_boundaries() {
+        let mut highlighter = SyntaxHighlighter::new("markdown");
+        let old = Rope::from("# hello world\n*emphasis* and `code` here\n");
+        assert!(highlighter.update(None, &old, None));
+        assert!(highlighter.tree().is_some());
+
+        // Swap the text without reparsing: the tree is now stale and its node
+        // offsets point into the middle of the new text's CJK characters.
+        let new = Rope::from("# 你好，世界\n你好，*世界* 与 `代码`\n");
+        highlighter.edit_tree(None, &new);
+
+        let theme = HighlightTheme::default_dark();
+        let styles = highlighter.styles(&(0..new.len()), theme.as_ref());
+        assert!(!styles.is_empty());
+        for (range, _) in &styles {
+            assert!(
+                new.is_char_boundary(range.start) && new.is_char_boundary(range.end),
+                "style range {range:?} is not on char boundaries of the current text"
+            );
+        }
     }
 
     #[cfg(feature = "tree-sitter-languages")]
@@ -1441,7 +1436,7 @@ console.log(answer);
         }
 
         let theme = HighlightTheme::default_dark();
-        let styles = highlighter.styles(&(0..markdown.len()), &theme);
+        let styles = highlighter.styles(&(0..markdown.len()), theme.as_ref());
         let keyword_start = markdown.find("fn first").unwrap();
         let keyword_color = theme.style("keyword").and_then(|style| style.color);
         assert!(styles.iter().any(|(range, style)| {
@@ -1471,6 +1466,7 @@ console.log(answer);
     #[cfg(feature = "tree-sitter-languages")]
     fn test_markdown_fenced_code_highlights_blocks_beyond_previous_limit() {
         const FENCE_COUNT: usize = 384;
+        const _: () = assert!(FENCE_COUNT <= MAX_NON_COMBINED_INJECTION_PARSES);
         let markdown = (0..FENCE_COUNT)
             .map(|i| format!("```rust\nfn function_{i}() {{}}\n```\n"))
             .collect::<String>();
@@ -1493,6 +1489,56 @@ console.log(answer);
             "function_383",
             "function"
         ));
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter-languages")]
+    fn test_markdown_fenced_code_injection_layers_are_bounded() {
+        const FENCE_COUNT: usize = MAX_NON_COMBINED_INJECTION_PARSES + 128;
+        // The paragraph trails the fences so the combined match is only reached
+        // once the non-combined budget is already exhausted.
+        let markdown = format!(
+            "{}\nparagraph *inline*\n",
+            (0..FENCE_COUNT)
+                .map(|i| format!("```rust\nfn function_{i}() {{}}\n```\n"))
+                .collect::<String>()
+        );
+        let rope = Rope::from_str(&markdown);
+        let mut highlighter = SyntaxHighlighter::new("markdown");
+
+        assert!(highlighter.update(None, &rope, None));
+        assert_eq!(
+            highlighter
+                .injection_layers
+                .iter()
+                .filter(|layer| layer.language_name.as_ref() == "rust")
+                .count(),
+            MAX_NON_COMBINED_INJECTION_PARSES
+        );
+        assert!(
+            highlighter
+                .injection_layers
+                .iter()
+                .any(|layer| layer.language_name.as_ref() == "markdown_inline"),
+            "the non-combined budget should not starve combined injection layers"
+        );
+
+        let highlights = highlighter.match_styles(0..markdown.len());
+        assert!(has_highlight_covering(
+            &highlights,
+            &markdown,
+            "function_0",
+            "function"
+        ));
+        assert!(
+            !has_highlight_covering(
+                &highlights,
+                &markdown,
+                &format!("function_{}", FENCE_COUNT - 1),
+                "function"
+            ),
+            "fences past the budget keep host highlighting but get no injected tokens"
+        );
     }
 
     #[test]
@@ -1615,7 +1661,8 @@ $x = 1;
         let mut highlighter = SyntaxHighlighter::new("markdown");
         highlighter.update(None, &rope, None);
 
-        let styles = highlighter.styles(&(0..markdown.len()), &HighlightTheme::default_dark());
+        let theme = HighlightTheme::default_dark();
+        let styles = highlighter.styles(&(0..markdown.len()), theme.as_ref());
         for text in ["bold and italic", "with"] {
             let start = markdown.find(text).unwrap();
             let end = start + text.len();

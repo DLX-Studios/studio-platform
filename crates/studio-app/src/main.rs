@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 
 use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Root, Theme, ThemeMode};
-use gpui_component_assets::Assets;
+use gpui_kit_assets::Assets;
 use gpui_platform::application;
 use studio_app::{
     cli::LaunchRequest,

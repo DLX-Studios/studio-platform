@@ -121,8 +121,8 @@ Security-sensitive public surfaces that require additional review are:
 
 | Source | Status | License/provenance action |
 |---|---|---|
-| Longbridge `gpui-component` | vendored audited revision; primary implementation base | Apache-2.0 files and delta recorded in notices |
-| Zed GPUI | pinned Git revision with Wayland-only features | distribution license review remains required |
+| Longbridge `gpui-component` | vendored audited revision `fb26e61` (0.6.1); primary implementation base | Apache-2.0 files and delta recorded in notices |
+| Zed GPUI via `gpui-pre 0.3.5` | crates.io distribution with Wayland-only features (no git pin) | distribution license review remains required |
 | adabraka-ui | reference only; no local source imported | verify repository/revision/license before any code copy |
 | gpui-nav | pattern source only; no local source imported | verify repository/revision/license before any code copy |
 | gpui-router | pattern source only; no local source imported | verify repository/revision/license before any code copy |
