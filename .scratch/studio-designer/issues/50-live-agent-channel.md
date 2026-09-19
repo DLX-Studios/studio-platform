@@ -7,8 +7,8 @@
 **Status:** ready-for-agent
 
 - [ ] Interleaved human and agent edits both land when independent
-- [ ] Overlapping stale agent batch returns structured conflict without losing either intent
-- [ ] One task spanning many batches undoes as one named group
+- [ ] Overlapping stale agent batch resolves last-writer-wins at batch granularity (per #08 override; losing batch surfaces diagnostics only)
+- [ ] Each accepted batch undoes independently (per-batch undo; no cross-batch task grouping)
 - [ ] Cancellation prevents acceptance of subsequent batches only
 - [ ] Check failures flow back as machine-readable feedback enabling self-correction
 - [ ] Progress, accepted operations, warnings, and failures visible live in the editor dock
