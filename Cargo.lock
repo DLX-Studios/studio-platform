@@ -9349,6 +9349,7 @@ dependencies = [
  "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-platform",
+ "parking_lot",
  "serde",
  "serde_json",
  "sha2 0.11.0",

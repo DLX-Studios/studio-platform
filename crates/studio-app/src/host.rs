@@ -1,7 +1,7 @@
 //! Secure bundle-to-policy-to-instance-to-mount startup orchestration.
 
-use std::{ffi::OsStr, fs, sync::Arc};
 use parking_lot::Mutex;
+use std::{ffi::OsStr, fs, sync::Arc};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -194,7 +194,10 @@ impl std::fmt::Debug for StudioHost {
             .field("wayland", &self.wayland)
             .field("https_client_installed", &self.https_client.is_some())
             .field("credential_backend_installed", &true)
-            .field("provisioned_secret_count", &self.provisioned_secrets.lock().len())
+            .field(
+                "provisioned_secret_count",
+                &self.provisioned_secrets.lock().len(),
+            )
             .field("oauth_adapters_installed", &true)
             .finish()
     }
@@ -628,11 +631,9 @@ fn prepare_github_services(
         .for_application(&principal, environment)
         .map_err(|_| LaunchError::BundleInvalid(String::from("protected store unavailable")))?;
     for (key, value) in std::mem::take(&mut *provisioned_secrets.lock()) {
-        if manifest
-            .secrets
-            .iter()
-            .any(|declaration| declaration.name == key.name() && declaration.purpose == key.purpose())
-        {
+        if manifest.secrets.iter().any(|declaration| {
+            declaration.name == key.name() && declaration.purpose == key.purpose()
+        }) {
             scope.configure(&key, value).map_err(|_| {
                 LaunchError::BundleInvalid(String::from("protected secret configuration failed"))
             })?;

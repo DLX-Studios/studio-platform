@@ -567,7 +567,7 @@ pub struct GithubViewer<'api> {
 impl<'api> GithubViewer<'api> {
     /// Create the signed-out initial state.
     #[must_use]
-    pub const fn new(api: &'api GuestRestApi<'api>) -> Self {
+    pub fn new(api: &'api GuestRestApi<'api>) -> Self {
         Self {
             client: GithubClient::new(api),
             screen: GithubViewerScreen::SignIn,

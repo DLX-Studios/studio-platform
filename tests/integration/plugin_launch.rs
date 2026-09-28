@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 #![allow(clippy::format_collect)]
 
+use parking_lot::Mutex;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -12,10 +13,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use parking_lot::Mutex;
 use studio_github::route_groups as github_route_groups;
-use studio_net::{HttpsClient, IncomingResponse, OutgoingRequest, TransportError, TransportLimits};
 use studio_net::declaration::HttpMethod;
+use studio_net::{HttpsClient, IncomingResponse, OutgoingRequest, TransportError, TransportLimits};
 use studio_oauth::{
     BrowserHandoff, Callback, CallbackListener, CallbackReceiver, EntropySource, OAuthError,
     OAuthErrorCode, OsEntropy,
@@ -179,8 +179,12 @@ fn github_action_module() -> Vec<u8> {
             ]
         }
     });
-    let mount = serde_json::to_string(&String::from_utf8(serde_json::to_vec(&mount).unwrap()).unwrap()).unwrap();
-    let action = serde_json::to_string(&String::from_utf8(serde_json::to_vec(&action).unwrap()).unwrap()).unwrap();
+    let mount =
+        serde_json::to_string(&String::from_utf8(serde_json::to_vec(&mount).unwrap()).unwrap())
+            .unwrap();
+    let action =
+        serde_json::to_string(&String::from_utf8(serde_json::to_vec(&action).unwrap()).unwrap())
+            .unwrap();
     let patch = serde_json::to_string(&patch.to_string()).unwrap();
     wat::parse_str(format!(
         r#"(module
@@ -295,9 +299,7 @@ impl BrowserHandoff for TestBrowser {
 struct TestCallbackListener(Arc<Mutex<Option<String>>>);
 
 impl CallbackListener for TestCallbackListener {
-    fn bind(
-        &self,
-    ) -> Result<Box<dyn CallbackReceiver>, studio_oauth::OAuthError> {
+    fn bind(&self) -> Result<Box<dyn CallbackReceiver>, studio_oauth::OAuthError> {
         Ok(Box::new(TestCallbackReceiver(Arc::clone(&self.0))))
     }
 }
@@ -309,10 +311,7 @@ impl CallbackReceiver for TestCallbackReceiver {
         "http://127.0.0.1:43123/oauth/callback"
     }
 
-    fn wait(
-        &mut self,
-        _timeout: Duration,
-    ) -> Result<Callback, studio_oauth::OAuthError> {
+    fn wait(&mut self, _timeout: Duration) -> Result<Callback, studio_oauth::OAuthError> {
         let state = self.0.lock().take().ok_or_else(|| {
             studio_oauth::OAuthError::new(studio_oauth::OAuthErrorCode::CallbackFailed)
         })?;
@@ -334,51 +333,75 @@ impl HttpsClient for TestGitHubHttpsClient {
     ) -> Result<IncomingResponse, TransportError> {
         assert!(limits.is_valid());
         let response = match (request.method, request.url.as_str()) {
-            (studio_net::declaration::HttpMethod::Post, "https://github.com/login/oauth/access_token") => {
+            (
+                studio_net::declaration::HttpMethod::Post,
+                "https://github.com/login/oauth/access_token",
+            ) => {
                 let body = String::from_utf8(request.body.unwrap()).unwrap();
                 assert!(body.contains("client_id=fixture-client"));
                 assert!(body.contains("client_secret=fixture-github-secret"));
                 assert!(body.contains("code_verifier="));
                 assert!(body.contains("code=one-time-code"));
-                incoming(200, json!({
-                    "access_token": "test-access-token",
-                    "scope": "read:user,user:email",
-                    "expires_in": 3600
-                }))
+                incoming(
+                    200,
+                    json!({
+                        "access_token": "test-access-token",
+                        "scope": "read:user,user:email",
+                        "expires_in": 3600
+                    }),
+                )
             }
             (studio_net::declaration::HttpMethod::Get, "https://api.github.com/user") => {
-                assert_eq!(header(&request, "authorization"), Some("Bearer test-access-token"));
-                incoming(200, json!({
-                    "id": 17,
-                    "login": "octocat",
-                    "name": "Octocat",
-                    "email": null,
-                    "avatar_url": "https://avatars.example/octocat.png",
-                    "html_url": "https://github.com/octocat"
-                }))
+                assert_eq!(
+                    header(&request, "authorization"),
+                    Some("Bearer test-access-token")
+                );
+                incoming(
+                    200,
+                    json!({
+                        "id": 17,
+                        "login": "octocat",
+                        "name": "Octocat",
+                        "email": null,
+                        "avatar_url": "https://avatars.example/octocat.png",
+                        "html_url": "https://github.com/octocat"
+                    }),
+                )
             }
             (studio_net::declaration::HttpMethod::Get, "https://api.github.com/user/emails") => {
-                assert_eq!(header(&request, "authorization"), Some("Bearer test-access-token"));
-                incoming(200, json!([
-                    {"email":"octocat@example.test","primary":true,"verified":true}
-                ]))
+                assert_eq!(
+                    header(&request, "authorization"),
+                    Some("Bearer test-access-token")
+                );
+                incoming(
+                    200,
+                    json!([
+                        {"email":"octocat@example.test","primary":true,"verified":true}
+                    ]),
+                )
             }
             (studio_net::declaration::HttpMethod::Get, url)
                 if url.starts_with("https://api.github.com/user/repos?") =>
             {
-                assert_eq!(header(&request, "authorization"), Some("Bearer test-access-token"));
-                incoming(200, json!([
-                    {
-                        "id": 1,
-                        "name": "studio",
-                        "full_name": "octocat/studio",
-                        "html_url": "https://github.com/octocat/studio",
-                        "owner": {"login": "octocat"},
-                        "private": false,
-                        "stargazers_count": 3,
-                        "forks_count": 1
-                    }
-                ]))
+                assert_eq!(
+                    header(&request, "authorization"),
+                    Some("Bearer test-access-token")
+                );
+                incoming(
+                    200,
+                    json!([
+                        {
+                            "id": 1,
+                            "name": "studio",
+                            "full_name": "octocat/studio",
+                            "html_url": "https://github.com/octocat/studio",
+                            "owner": {"login": "octocat"},
+                            "private": false,
+                            "stargazers_count": 3,
+                            "forks_count": 1
+                        }
+                    ]),
+                )
             }
             _ => return Err(TransportError::ConnectionFailure),
         };
