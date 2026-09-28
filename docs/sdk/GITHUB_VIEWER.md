@@ -2,8 +2,9 @@
 
 The checked-in `examples/github-viewer` package is the smallest signed Runtime launch target for
 the provider-plugin path. Its manifest pins the `github` integration descriptor and signs three
-REST route groups. The viewer uses a public OAuth client with host-owned S256 PKCE; it requests
-only `read:user` and `user:email` and never declares or stores a client secret:
+REST route groups. The viewer uses a confidential GitHub OAuth app with host-owned S256 PKCE; it
+requests only `read:user` and `user:email`. The manifest contains the public client ID and a name
+for the protected client-secret entry, never the secret value itself:
 
 | route group | method | path | credential |
 | --- | --- | --- | --- |
@@ -32,21 +33,35 @@ bun run ./scripts/build-example.ts github-viewer
 cargo run -p studio-app -- --dev examples/github-viewer/build/github-viewer.studio
 ```
 
-Before a production launch, replace the manifest's example client id through the release
-configuration workflow and register the matching GitHub OAuth callback policy. The host binds a
-fresh `127.0.0.1` loopback port for each sign-in, validates the exact callback path and state, and
-discards malformed, denied, replayed, or scope-mismatched callbacks before token exchange.
+Before a production launch, replace the manifest's example client ID and configure the GitHub OAuth
+client secret in protected host storage under `github.oauth.client_secret`. Register
+`http://127.0.0.1/oauth/callback` as the loopback callback base; the host binds a fresh
+`127.0.0.1` port for each sign-in. GitHub permits the runtime redirect to use that port. The host
+validates the exact callback path and state and discards malformed, denied, replayed, or
+scope-mismatched callbacks before token exchange.
 
 ## Staging evidence
 
-The deterministic source tests cover PKCE URL construction, least-privilege scope admission,
-strict callback decoding/redirect checks, protected-token expiry, broker route admission, and the
-typed profile/repository transitions. A live staging run must be performed with a disposable GitHub
-OAuth app and recorded with:
+The deterministic provider-flow tests run with:
 
 ```text
-STUDIO_GITHUB_CLIENT_ID=... \
-STUDIO_GITHUB_STAGING=1 \
+cargo test --locked -p studio-oauth -p studio-github -p studio-package
+```
+
+They use the real host-owned TCP loopback listener and protected token store with
+`GithubHttpsOAuthTransport` over a deterministic HTTPS client. They verify PKCE callback/state
+validation, protected-secret exchange and GitHub revocation, minimal scopes, private-email fallback,
+latest-descriptor updates, send-time token injection, and fail-closed refresh behavior. This is not
+evidence of a live GitHub exchange.
+
+A live staging run needs a disposable GitHub OAuth app with its client ID in the signed manifest.
+Inject `STUDIO_GITHUB_CLIENT_SECRET` through the deployment secret manager; `studio-app` persists it
+in the OS protected store under `github.oauth.client_secret` and removes it from the browser
+launcher environment. `studio-app` supplies the GPUI HTTPS client to `GithubHttpsOAuthTransport`.
+Record the live run with:
+
+```text
+STUDIO_GITHUB_CLIENT_SECRET=... \
 <host launch command>
 ```
 

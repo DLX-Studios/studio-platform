@@ -8468,6 +8468,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls"
+version = "0.23.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+dependencies = [
+ "once_cell",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8475,6 +8488,17 @@ checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
  "web-time",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-webpki"
+version = "0.103.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -9319,6 +9343,7 @@ name = "studio-app"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek 3.0.0",
+ "futures",
  "getrandom 0.3.4",
  "gpui-component",
  "gpui-kit-assets",
@@ -9329,9 +9354,11 @@ dependencies = [
  "sha2 0.11.0",
  "studio-actions",
  "studio-components",
+ "studio-github",
  "studio-host",
  "studio-navigation",
  "studio-net",
+ "studio-oauth",
  "studio-package",
  "studio-protocol",
  "studio-security",
@@ -9339,6 +9366,7 @@ dependencies = [
  "studio-wasm",
  "thiserror 2.0.20",
  "wat",
+ "zeroize",
 ]
 
 [[package]]
@@ -9483,6 +9511,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "studio-security",
+ "tungstenite",
  "zeroize",
 ]
 
@@ -9490,7 +9519,9 @@ dependencies = [
 name = "studio-oauth"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "getrandom 0.3.4",
+ "parking_lot",
  "semver",
  "serde",
  "serde_json",
@@ -10673,9 +10704,12 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.20",
  "utf-8",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -11567,6 +11601,24 @@ dependencies = [
  "phf_codegen 0.13.1",
  "string_cache 0.9.0",
  "string_cache_codegen 0.6.1",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

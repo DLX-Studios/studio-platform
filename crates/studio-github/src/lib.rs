@@ -29,7 +29,7 @@ use thiserror::Error;
 /// Stable first-party provider identifier.
 pub const GITHUB_PROVIDER_ID: &str = "github";
 /// Version of the maintained provider descriptor shipped with this SDK.
-pub const GITHUB_PROVIDER_VERSION: &str = "1.0.0";
+pub const GITHUB_PROVIDER_VERSION: &str = "1.1.0";
 /// GitHub API origin used by the proof application.
 pub const GITHUB_API_ORIGIN: &str = "https://api.github.com";
 /// Provider descriptor schema version.
@@ -38,8 +38,12 @@ pub const GITHUB_DESCRIPTOR_SCHEMA_VERSION: u16 = 1;
 /// Host-owned client authentication mode declared by the GitHub provider.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientAuthentication {
-    /// Authorization code exchange uses the protected client secret and a PKCE challenge.
+    /// Public client using an S256 PKCE verifier without a client secret.
     Pkce,
+    /// Confidential client using a protected client secret without PKCE.
+    ConfidentialClient,
+    /// Confidential client using both a protected client secret and S256 PKCE.
+    PkceConfidentialClient,
 }
 
 /// The host-owned GitHub OAuth provider descriptor.
@@ -91,7 +95,7 @@ pub const fn provider_descriptor() -> GithubProviderDescriptor {
         token_endpoint: "https://github.com/login/oauth/access_token",
         profile_endpoint: "/user",
         scopes: &["read:user", "user:email"],
-        client_authentication: ClientAuthentication::Pkce,
+        client_authentication: ClientAuthentication::PkceConfidentialClient,
         refresh: RefreshSemantics::None,
         profile: GithubProfileMapping {
             private_email_fallback: "primary verified email",
@@ -111,7 +115,7 @@ pub fn descriptor_document() -> Value {
         "tokenEndpoint": "https://github.com/login/oauth/access_token",
         "profileEndpoint": "/user",
         "scopes": ["read:user", "user:email"],
-        "clientAuthentication": "pkce",
+        "clientAuthentication": "pkceConfidentialClient",
         "refresh": "none",
         "privateEmailFallback": { "endpoint": "/user/emails", "field": "primary verified email" }
     })
@@ -179,14 +183,16 @@ impl OAuthSessionResolver for GithubOAuthSessionResolver {
     }
 }
 
-/// A package reference that enables the first-party provider without embedding a secret.
+/// A package reference that enables GitHub without embedding the client secret itself.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GithubProviderReference {
     /// Provider id, always `github` for this package.
     pub provider: String,
-    /// OAuth application client id; never a client secret.
+    /// OAuth application client id.
     pub client_id: String,
+    /// Protected configuration entry containing the OAuth client secret.
+    pub client_secret_name: String,
     /// Descriptor version selected by the package.
     pub descriptor_version: String,
 }
@@ -196,6 +202,7 @@ impl Default for GithubProviderReference {
         Self {
             provider: GITHUB_PROVIDER_ID.to_owned(),
             client_id: String::new(),
+            client_secret_name: String::from("github.oauth.client_secret"),
             descriptor_version: GITHUB_PROVIDER_VERSION.to_owned(),
         }
     }
@@ -339,14 +346,14 @@ pub enum GithubError {
 
 /// Typed SDK client over a host-provided restricted REST facade.
 pub struct GithubClient<'api> {
-    api: &'api GuestRestApi<'api>,
+    api: GuestRestApi<'api>,
 }
 
 impl<'api> GithubClient<'api> {
-    /// Bind the client to the host facade. No credential material is accepted or retained.
+    /// Bind the client to a cloned host facade handle; no credential material is accepted or retained.
     #[must_use]
-    pub const fn new(api: &'api GuestRestApi<'api>) -> Self {
-        Self { api }
+    pub fn new(api: &GuestRestApi<'api>) -> Self {
+        Self { api: api.clone() }
     }
 
     /// Fetch the authenticated GitHub profile.
@@ -716,7 +723,14 @@ mod tests {
     #[test]
     fn descriptor_and_routes_are_stable_and_bounded() {
         assert_eq!(provider_descriptor().id, GITHUB_PROVIDER_ID);
-        assert_eq!(descriptor_document()["clientAuthentication"], "pkce");
+        assert_eq!(
+            descriptor_document()["clientAuthentication"],
+            "pkceConfidentialClient"
+        );
+        assert_eq!(
+            GithubProviderReference::default().client_secret_name,
+            "github.oauth.client_secret"
+        );
         let groups = route_groups();
         assert_eq!(groups.len(), 3);
         for group in groups {

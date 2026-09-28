@@ -6,6 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+futures = "0.3.34"
+parking_lot = "0.12.5"
 getrandom.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
@@ -16,15 +18,18 @@ serde_json.workspace = true
 sha2.workspace = true
 studio-actions = { path = "../studio-actions" }
 studio-components = { path = "../studio-components" }
+studio-github = { path = "../studio-github" }
 studio-host = { path = "../studio-host" }
 studio-navigation = { path = "../studio-navigation" }
 studio-net = { path = "../studio-net" }
+studio-oauth = { path = "../studio-oauth" }
 studio-package = { path = "../studio-package" }
 studio-protocol = { path = "../studio-protocol" }
 studio-security = { path = "../studio-security" }
 studio-ui = { path = "../studio-ui" }
 studio-wasm = { path = "../studio-wasm" }
 thiserror.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true

@@ -4,15 +4,15 @@
 
 **Blocked by:** 18
 
-**Status:** implemented-pending-verification (UNVERIFIED: written code-only; the serialized runner must confirm `cargo test --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`)
+**Status:** implemented-pending-staging-verification (focused package checks pass; full-workspace checks are blocked by missing `libclang`; approved staging endpoint not configured)
 
-- [ ] Requests to undeclared origins or paths are denied with stable codes
-- [ ] Responses failing declared schema validation never reach guest memory
-- [ ] Credential values appear in neither guest memory nor any log/diagnostic surface
-- [ ] Streaming route delivers incremental validated chunks, honors cancellation, and applies declared bounds
+- [x] Requests to undeclared origins or paths are denied with stable codes
+- [x] Responses failing declared schema validation never reach guest memory
+- [x] Credential values appear in neither guest memory nor any log/diagnostic surface
+- [x] Streaming route delivers incremental validated chunks, honors cancellation, and applies declared bounds
 - [ ] Integration suite executes against an approved real endpoint, not a simulator
 
-## Implementation notes (UNVERIFIED)
+## Implementation notes
 
 New crate `crates/studio-net` (workspace member; host-owned networking lives here rather than in
 `crates/studio-host`, which ticket 20 owns). Branch also fast-forward merges
@@ -77,3 +77,11 @@ New crate `crates/studio-net` (workspace member; host-owned networking lives her
 Known follow-ups (not blockers): per-reconnect credential re-injection (currently injected once
 per stream open and reused across host-owned reconnects within one stream lifetime); SSE `event:`-
 typed delivery is declared host-side only.
+
+## Verification (2026-09-25)
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo test --locked -p studio-net`: passed.
+- `cargo clippy --locked -p studio-net --all-targets --all-features -- -D warnings`: passed; the staging response-header parser uses `.last()` over its forward-only iterator chain.
+- Full workspace tests and Clippy stop in `surrealdb-librocksdb-sys` because this environment has no `libclang.so`.
+- The approved REST staging endpoint and credential are not configured, so the real-endpoint acceptance criterion remains unchecked.

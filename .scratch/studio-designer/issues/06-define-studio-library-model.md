@@ -22,4 +22,4 @@ Lifecycle is reference-aware. Assets track usages (`reference_id`, owner, field)
 
 Packaging ships an immutable library snapshot inside the signed Runtime package. The projection maps assets to `assets/<path>` strings; bytes never cross the design seam. Manifest asset lists must exactly match packaged keys; archives are deterministic with fixed sizes and permissions.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

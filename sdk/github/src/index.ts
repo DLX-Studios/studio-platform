@@ -15,7 +15,7 @@ export interface GithubRestClient {
 
 export const GITHUB_PROVIDER = "github" as const;
 export const GITHUB_API_ORIGIN = "https://api.github.com" as const;
-export const GITHUB_DESCRIPTOR_VERSION = "1.0.0" as const;
+export const GITHUB_DESCRIPTOR_VERSION = "1.1.0" as const;
 
 /** Version-pinned integration configuration emitted into a signed application package. */
 export interface GithubIntegration {
@@ -23,7 +23,7 @@ export interface GithubIntegration {
   readonly version: typeof GITHUB_DESCRIPTOR_VERSION;
   readonly clientId: string;
   readonly clientSecretName: string;
-  readonly scopes: readonly ["read:user", "user:email", "repo"];
+  readonly scopes: readonly ["read:user", "user:email"];
 }
 
 /** GitHub route declarations; the host rejects every path outside this set. */

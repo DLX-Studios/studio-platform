@@ -42,12 +42,15 @@ use studio_security::{
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod https_transport;
+pub use https_transport::GithubHttpsOAuthTransport;
+
 /// The descriptor wire schema implemented by this host.
 pub const DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
 /// The first-party GitHub provider identifier.
 pub const GITHUB_PROVIDER_ID: &str = "github";
 /// The current first-party GitHub descriptor version.
-pub const GITHUB_DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const GITHUB_DESCRIPTOR_VERSION: &str = "1.1.0";
 const CALLBACK_PATH: &str = "/oauth/callback";
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_BYTES: usize = 4096;
@@ -155,10 +158,12 @@ impl OAuthError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ClientAuthentication {
-    /// Public client using an S256 PKCE verifier.
+    /// Public client using an S256 PKCE verifier without a client secret.
     Pkce,
-    /// Confidential client whose secret is supplied through protected configuration.
+    /// Confidential client using a protected client secret without PKCE.
     ConfidentialClient,
+    /// Confidential client using both a protected client secret and S256 PKCE.
+    PkceConfidentialClient,
 }
 
 /// Declarative provider-specific behavior flags.
@@ -289,7 +294,7 @@ impl ProviderDescriptor {
             // The viewer only reads the authenticated profile and private email. `repo` is a
             // broad repository-management grant and is intentionally not admitted here.
             scopes: vec![String::from("read:user"), String::from("user:email")],
-            client_authentication: ClientAuthentication::Pkce,
+            client_authentication: ClientAuthentication::PkceConfidentialClient,
             quirks: ProviderQuirks {
                 no_refresh_tokens: true,
                 private_email_fallback: true,
@@ -443,10 +448,11 @@ impl ProviderPackage {
             || self.client_id.is_empty()
             || self.client_id.len() > 256
             || self.client_id.chars().any(char::is_control)
-            || (descriptor.client_authentication == ClientAuthentication::ConfidentialClient
-                && self.client_secret.is_none())
-            || (descriptor.client_authentication == ClientAuthentication::Pkce
-                && self.client_secret.is_some())
+            || (match descriptor.client_authentication {
+                ClientAuthentication::Pkce => self.client_secret.is_some(),
+                ClientAuthentication::ConfidentialClient
+                | ClientAuthentication::PkceConfidentialClient => self.client_secret.is_none(),
+            })
         {
             return Err(OAuthError::new(OAuthErrorCode::PackageInvalid));
         }
@@ -834,7 +840,9 @@ pub struct RevokeRequest<'a> {
     pub endpoint: &'a str,
     /// OAuth client ID.
     pub client_id: &'a str,
-    /// Protected access token.
+    /// Protected client secret, when the provider requires a confidential client.
+    pub client_secret: Option<SecretToken<'a>>,
+    /// Protected access token being revoked.
     pub access_token: SecretToken<'a>,
 }
 
@@ -855,6 +863,7 @@ pub struct SystemBrowser;
 impl BrowserHandoff for SystemBrowser {
     fn open(&self, authorization_url: &str) -> Result<(), OAuthError> {
         std::process::Command::new("xdg-open")
+            .env_remove("STUDIO_GITHUB_CLIENT_SECRET")
             .arg(authorization_url)
             .spawn()
             .map(|_| ())
@@ -1424,7 +1433,7 @@ fn authorization_url(
     package: &ProviderPackage,
     redirect_uri: &str,
     state: &str,
-    pkce: &PkcePair,
+    pkce: Option<&PkcePair>,
 ) -> String {
     let scopes = package_scope_string(descriptor);
     let separator = if descriptor.authorization_endpoint.contains('?') {
@@ -1432,15 +1441,20 @@ fn authorization_url(
     } else {
         '?'
     };
-    format!(
-        "{}{separator}response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+    let mut url = format!(
+        "{}{separator}response_type=code&client_id={}&redirect_uri={}&scope={}&state={}",
         descriptor.authorization_endpoint,
         percent_encode(&package.client_id),
         percent_encode(redirect_uri),
         percent_encode(&scopes),
         percent_encode(state),
-        percent_encode(pkce.challenge()),
-    )
+    );
+    if let Some(pkce) = pkce {
+        url.push_str("&code_challenge=");
+        url.push_str(&percent_encode(pkce.challenge()));
+        url.push_str("&code_challenge_method=S256");
+    }
+    url
 }
 
 fn package_scope_string(descriptor: &ProviderDescriptor) -> String {
@@ -1598,6 +1612,10 @@ impl OAuthManager {
     /// Fallible host form of [`Self::sign_in`] for orchestration and deterministic tests.
     pub fn try_sign_in(&self, provider: &str) -> Result<OAuthActionResult, OAuthError> {
         let (descriptor, package) = self.resolve_package(provider)?;
+        if let Some(reference) = package.client_secret.as_ref() {
+            self.store
+                .with_client_secret(reference, &mut |_secret| Ok(()))?;
+        }
         let mut callback = self
             .listener
             .bind()
@@ -1606,9 +1624,14 @@ impl OAuthManager {
             return Err(OAuthError::new(OAuthErrorCode::CallbackBindFailed));
         }
         let redirect_uri = callback.redirect_uri().to_owned();
-        let pkce = PkcePair::generate(self.entropy.as_ref())?;
+        let pkce = match descriptor.client_authentication {
+            ClientAuthentication::Pkce | ClientAuthentication::PkceConfidentialClient => {
+                Some(PkcePair::generate(self.entropy.as_ref())?)
+            }
+            ClientAuthentication::ConfidentialClient => None,
+        };
         let state = self.generate_state()?;
-        let url = authorization_url(&descriptor, &package, &redirect_uri, &state, &pkce);
+        let url = authorization_url(&descriptor, &package, &redirect_uri, &state, pkce.as_ref());
         self.browser.open(&url)?;
         let response = callback.wait(self.callback_timeout)?;
         if callback.redirect_uri() != redirect_uri
@@ -1629,7 +1652,7 @@ impl OAuthManager {
             &descriptor,
             &package,
             response.code.as_deref().unwrap_or_default(),
-            &pkce,
+            pkce.as_ref(),
             &redirect_uri,
         )?;
         validate_granted_scopes(&descriptor, &token_response)?;
@@ -1677,37 +1700,49 @@ impl OAuthManager {
         descriptor: &ProviderDescriptor,
         package: &ProviderPackage,
         code: &str,
-        pkce: &PkcePair,
+        pkce: Option<&PkcePair>,
         redirect_uri: &str,
     ) -> Result<TokenResponse, OAuthError> {
-        match descriptor.client_authentication {
-            ClientAuthentication::Pkce => self.transport.exchange_code(CodeExchangeRequest {
+        let verifier = match descriptor.client_authentication {
+            ClientAuthentication::Pkce | ClientAuthentication::PkceConfidentialClient => Some(
+                pkce.ok_or_else(|| OAuthError::new(OAuthErrorCode::TokenExchangeFailed))?
+                    .verifier(),
+            ),
+            ClientAuthentication::ConfidentialClient => None,
+        };
+        let client_secret = if descriptor.client_authentication == ClientAuthentication::Pkce {
+            None
+        } else {
+            Some(
+                package
+                    .client_secret
+                    .as_ref()
+                    .ok_or_else(|| OAuthError::new(OAuthErrorCode::ClientSecretUnavailable))?,
+            )
+        };
+        if let Some(reference) = client_secret {
+            let mut result = None;
+            self.store.with_client_secret(reference, &mut |secret| {
+                result = Some(self.transport.exchange_code(CodeExchangeRequest {
+                    endpoint: &descriptor.token_endpoint,
+                    client_id: &package.client_id,
+                    code,
+                    verifier,
+                    client_secret: Some(secret),
+                    redirect_uri,
+                }));
+                Ok(())
+            })?;
+            result.unwrap_or_else(|| Err(OAuthError::new(OAuthErrorCode::TokenExchangeFailed)))
+        } else {
+            self.transport.exchange_code(CodeExchangeRequest {
                 endpoint: &descriptor.token_endpoint,
                 client_id: &package.client_id,
                 code,
-                verifier: Some(pkce.verifier()),
+                verifier,
                 client_secret: None,
                 redirect_uri,
-            }),
-            ClientAuthentication::ConfidentialClient => {
-                let reference = package
-                    .client_secret
-                    .as_ref()
-                    .ok_or_else(|| OAuthError::new(OAuthErrorCode::ClientSecretUnavailable))?;
-                let mut result = None;
-                self.store.with_client_secret(reference, &mut |secret| {
-                    result = Some(self.transport.exchange_code(CodeExchangeRequest {
-                        endpoint: &descriptor.token_endpoint,
-                        client_id: &package.client_id,
-                        code,
-                        verifier: None,
-                        client_secret: Some(secret),
-                        redirect_uri,
-                    }));
-                    Ok(())
-                })?;
-                result.unwrap_or_else(|| Err(OAuthError::new(OAuthErrorCode::TokenExchangeFailed)))
-            }
+            })
         }
     }
 
@@ -1784,7 +1819,8 @@ impl OAuthManager {
                         refresh_token,
                         client_secret: None,
                     }),
-                    ClientAuthentication::ConfidentialClient => {
+                    ClientAuthentication::ConfidentialClient
+                    | ClientAuthentication::PkceConfidentialClient => {
                         let reference = package.client_secret.as_ref().ok_or_else(|| {
                             OAuthError::new(OAuthErrorCode::ClientSecretUnavailable)
                         })?;
@@ -1893,12 +1929,25 @@ impl OAuthManager {
             let endpoint = endpoint.replace("{clientId}", &percent_encode(&package.client_id));
             let mut result = None;
             let callback_result = self.store.with_access_token(provider, &mut |token| {
-                result = Some(self.transport.revoke(RevokeRequest {
-                    endpoint: &endpoint,
-                    client_id: &package.client_id,
-                    access_token: token,
-                }));
-                Ok(())
+                if let Some(reference) = package.client_secret.as_ref() {
+                    self.store.with_client_secret(reference, &mut |secret| {
+                        result = Some(self.transport.revoke(RevokeRequest {
+                            endpoint: &endpoint,
+                            client_id: &package.client_id,
+                            client_secret: Some(secret),
+                            access_token: token,
+                        }));
+                        Ok(())
+                    })
+                } else {
+                    result = Some(self.transport.revoke(RevokeRequest {
+                        endpoint: &endpoint,
+                        client_id: &package.client_id,
+                        client_secret: None,
+                        access_token: token,
+                    }));
+                    Ok(())
+                }
             });
             upstream = callback_result.and_then(|_| {
                 result.unwrap_or_else(|| Err(OAuthError::new(OAuthErrorCode::TokenUnavailable)))
@@ -2126,7 +2175,7 @@ mod tests {
     #[test]
     fn authorization_url_contains_only_the_declared_scopes() {
         let descriptor = ProviderDescriptor::github();
-        let package = ProviderPackage::new("github", "1.0.0", "client");
+        let package = ProviderPackage::new("github", "1.1.0", "client");
         let pkce = PkcePair {
             verifier: Zeroizing::new(b"verifier".to_vec()),
             challenge: String::from("challenge"),
@@ -2136,10 +2185,11 @@ mod tests {
             &package,
             "http://127.0.0.1:43121/oauth/callback",
             "state",
-            &pkce,
+            Some(&pkce),
         );
         assert!(url.contains("scope=read%3Auser%20user%3Aemail"));
         assert!(!url.contains("repo"));
+        assert!(url.contains("code_challenge=challenge"));
     }
 
     #[test]

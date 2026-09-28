@@ -16,4 +16,4 @@ Each accepted local operation atomically updates materialized state and appends 
 
 Assets transfer content-addressed by hash beside the operation log. Periodic logical snapshots bound replay time. Large media lives in the content-addressed asset store. Recovery restores the last durable transaction plus outbox replay.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

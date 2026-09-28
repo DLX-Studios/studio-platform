@@ -1,6 +1,8 @@
 //! Wayland-only Runtime guest host and platform feasibility probe.
 
-use std::ffi::OsStr;
+mod gpui_https_client;
+
+use std::{ffi::OsStr, sync::Arc};
 
 use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Root, Theme, ThemeMode};
@@ -13,6 +15,7 @@ use studio_app::{
     plugin_surface::PluginSurface,
 };
 use studio_package::TrustStore;
+use studio_security::{ProtectedSecretKey, SecretInput};
 
 fn has_wayland_endpoint(display: Option<&OsStr>, socket: Option<&OsStr>) -> bool {
     display.is_some_and(|value| !value.is_empty()) || socket.is_some_and(|value| !value.is_empty())
@@ -22,10 +25,13 @@ fn run(
     application: Application,
     plugin_surface: Option<PluginSurface>,
     reload_inbox: Option<std::sync::Arc<studio_app::reload::ReloadInbox>>,
+    https_client: Arc<gpui_https_client::GpuiHttpsClient>,
 ) {
     application.run(move |cx: &mut App| {
+        let _ = https_client.install(cx.http_client());
         gpui_component::init(cx);
         Theme::change(ThemeMode::Light, None, cx);
+        let has_plugin_surface = plugin_surface.is_some();
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -41,6 +47,33 @@ fn run(
                         FoundationGallery::new(reduced_motion, window, cx)
                     }
                 });
+                if has_plugin_surface {
+                    let shell = shell.downgrade();
+                    cx.spawn(async move |cx| {
+                        use std::time::Duration;
+                        loop {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(100))
+                                .await;
+                            let alive = shell.update(&mut cx.clone(), |shell, cx| {
+                                match shell.pump_host_actions() {
+                                    Ok(changed) => {
+                                        if changed {
+                                            cx.notify();
+                                        }
+                                        true
+                                    }
+                                    Err(_) => false,
+                                }
+                            });
+                            if !alive.is_ok_and(|poll_ok| poll_ok) {
+                                eprintln!("provider action response could not be applied");
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                }
                 // Drain prepared reload swaps without recreating the window:
                 // the daemon server thread validates and instantiates, and the
                 // frame loop applies each accepted replacement here.
@@ -92,7 +125,7 @@ fn main() {
         eprintln!("usage: studio-app (--bundle <absolute-path> | --dev <local-path>)");
         std::process::exit(2);
     }
-    let (plugin_surface, reload_inbox) = {
+    let (plugin_surface, reload_inbox, https_client) = {
         let request = match LaunchRequest::parse_from(arguments) {
             Ok(request) => request,
             Err(error) => {
@@ -114,7 +147,29 @@ fn main() {
             studio_app::cli::LaunchMode::Development => TrustStore::default(),
         };
         let socket = request.reload_socket().map(std::path::Path::to_path_buf);
-        let host = StudioHost::new(HostConfig::new(trust_store), wayland);
+        let https_client = Arc::new(gpui_https_client::GpuiHttpsClient::default());
+        let mut host = StudioHost::new(HostConfig::new(trust_store), wayland)
+            .with_https_client(https_client.clone());
+        if let Ok(secret) = std::env::var("STUDIO_GITHUB_CLIENT_SECRET") {
+            let key = match ProtectedSecretKey::new(
+                "github.oauth.client_secret",
+                "GitHub OAuth client configuration",
+            ) {
+                Ok(key) => key,
+                Err(_) => {
+                    eprintln!("GitHub protected client secret declaration is invalid");
+                    std::process::exit(2);
+                }
+            };
+            let value = match SecretInput::new(secret.into_bytes()) {
+                Ok(value) => value,
+                Err(_) => {
+                    eprintln!("GitHub protected client secret is invalid");
+                    std::process::exit(2);
+                }
+            };
+            host = host.with_protected_secret(key, value);
+        }
         match host.prepare(request) {
             Ok(surface) => {
                 if let Some(warning) = surface.warning() {
@@ -123,7 +178,7 @@ fn main() {
                 let inbox = socket
                     .as_deref()
                     .map(|socket| start_reload_server(host, socket));
-                (Some(surface), inbox)
+                (Some(surface), inbox, https_client)
             }
             Err(error) => {
                 eprintln!("{error}");
@@ -135,6 +190,7 @@ fn main() {
         application().with_assets(Assets),
         plugin_surface,
         reload_inbox,
+        https_client,
     );
 }
 

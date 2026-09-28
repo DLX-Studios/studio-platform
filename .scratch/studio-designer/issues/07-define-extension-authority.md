@@ -16,4 +16,4 @@ Every extension ships a signed descriptor (identity, publisher, version, compati
 
 Lifecycle hooks are bounded in time and memory; a failing hook is contained and never hangs the project. Removal reports remaining artifacts owned by the extension before changing the project.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

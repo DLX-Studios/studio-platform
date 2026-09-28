@@ -548,6 +548,14 @@ impl FoundationGallery {
         cx.notify();
     }
 
+    /// Poll and apply completed asynchronous provider actions.
+    pub fn pump_host_actions(&mut self) -> Result<bool, crate::plugin_surface::SurfaceError> {
+        match self.plugin_surface.as_mut() {
+            Some(surface) => surface.poll_action_results(),
+            None => Ok(false),
+        }
+    }
+
     /// Apply one prepared reload swap: dispose-then-install the surface so at
     /// most one live instance exists, record the resolved route for the shell,
     /// and repaint. Window and entities persist; only plugin content changes.

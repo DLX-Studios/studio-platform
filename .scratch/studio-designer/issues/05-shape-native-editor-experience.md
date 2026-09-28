@@ -12,7 +12,7 @@ How should the native canvas, hierarchy, component insertion, responsive layout 
 
 Studio Designer has two fully supported workspace views over one editor session:
 
-- **Focus View** is the default. It follows prototype B: the canvas dominates, tools float near the work, the selected node opens a contextual inspector, and live agent activity plus its undo group remains visible in a bottom dock.
+- **Focus View** is the default. It follows prototype B: the canvas dominates, tools float near the work, the selected node opens a contextual inspector, and live agent activity and its per-batch undo groups remain visible in a bottom dock.
 - **Workbench View** follows prototype A. It keeps screens, hierarchy, Studio Library, canvas controls, inspector, diagnostics, interactions, agent activity, and history visible for deep authoring and debugging.
 
 The views are presentations of the same editor modules, not separate editors or document modes. Switching views preserves the active project and screen, selected node, device profile, canvas transform, current tool, live agent operation, undo/redo history, diagnostics, and unsaved changes. Each view may remember its own panel sizes and collapsed state without duplicating domain state.

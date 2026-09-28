@@ -17,4 +17,4 @@ Studio Design owns typed layout/style metadata, tokens, responsive variants, com
 
 All user, agent, MCP, extension, and agent-led-ingestion edits enter a typed command engine. Commands carry stable identities, preconditions, and inverse information; atomic batches produce immutable revisions and undo groups. Opaque identities remain stable across rename, move, and visual changes. The model is therefore independent of GPUI and Wasm while remaining aligned with the closed Runtime contract.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

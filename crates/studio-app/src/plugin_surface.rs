@@ -1,13 +1,20 @@
 //! Prepared mounted plugin surface retained for the complete launch lifetime.
 
-use serde_json::Value;
+use std::sync::{Arc, mpsc};
+use std::thread;
+
+use serde_json::{Value, json};
 use studio_components::{
     ComponentCatalog, DispatchError, HostEventDispatcher, InputAction, NativeStateStore,
     RuntimeControl, UpdateError, UpdateReport,
 };
+use studio_github::GithubClient;
+use studio_net::RestBroker;
+use studio_oauth::OAuthManager;
 use studio_package::ProviderAdmissionPlan;
 use studio_protocol::{
-    GuestMessage, HostEvent, NodeKind, ProtocolError, ProtocolLimits, UiNode, decode_guest_message,
+    ActionRequest, ActionResult, GuestMessage, HostEvent, NodeKind, ProtocolError, ProtocolLimits,
+    UiNode, decode_guest_message,
 };
 use studio_ui::{PatchError, PatchMetrics, UiRegistry};
 use studio_wasm::{PluginInstance, RuntimeError};
@@ -40,6 +47,10 @@ pub struct PluginSurface {
     assets: std::collections::BTreeMap<String, Vec<u8>>,
     protocol_limits: ProtocolLimits,
     provider_plan: ProviderAdmissionPlan,
+    oauth_manager: Option<Arc<OAuthManager>>,
+    rest_broker: Option<Arc<RestBroker<'static>>>,
+    action_sender: mpsc::Sender<studio_protocol::ActionResult>,
+    action_receiver: mpsc::Receiver<studio_protocol::ActionResult>,
     guest_event_calls: u64,
     guest_patch_messages: u64,
 }
@@ -54,7 +65,12 @@ impl PluginSurface {
         assets: std::collections::BTreeMap<String, Vec<u8>>,
         protocol_limits: ProtocolLimits,
         provider_plan: ProviderAdmissionPlan,
+        github_services: Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>,
     ) -> Self {
+        let (action_sender, action_receiver) = mpsc::channel();
+        let (oauth_manager, rest_broker) = github_services.map_or((None, None), |services| {
+            (Some(services.0), Some(services.1))
+        });
         Self {
             mode,
             warning: (mode == LaunchMode::Development).then_some(DEVELOPMENT_WARNING),
@@ -65,6 +81,10 @@ impl PluginSurface {
             assets,
             protocol_limits,
             provider_plan,
+            oauth_manager,
+            rest_broker,
+            action_sender,
+            action_receiver,
             guest_event_calls: 0,
             guest_patch_messages: 0,
         }
@@ -134,24 +154,71 @@ impl PluginSurface {
             .map_err(|error| SurfaceError::Serialization(error.to_string()))?;
         self.guest_event_calls = self.guest_event_calls.saturating_add(1);
         let outcome = self.instance.invoke_event_bytes(&encoded)?;
+        self.apply_guest_emissions(outcome.emissions)
+    }
+
+    fn apply_guest_emissions(
+        &mut self,
+        emissions: Vec<Vec<u8>>,
+    ) -> Result<UpdateReport, SurfaceError> {
+        let owner = self.dispatcher_owner().clone();
         let mut invalidated_nodes = Vec::new();
-        for emission in outcome.emissions {
-            let GuestMessage::Patch(batch) = decode_guest_message(&emission, self.protocol_limits)?
-            else {
-                return Err(SurfaceError::UnexpectedGuestMessage);
-            };
-            self.guest_patch_messages = self.guest_patch_messages.saturating_add(1);
-            let commit = self.registry.apply_patch(&owner, batch)?;
-            let report = self
-                .native_state
-                .apply_commit(&owner, &self.registry, &commit)?;
-            for node_id in report.invalidated_nodes {
-                if !invalidated_nodes.contains(&node_id) {
-                    invalidated_nodes.push(node_id);
+        for emission in emissions {
+            match decode_guest_message(&emission, self.protocol_limits)? {
+                GuestMessage::Patch(batch) => {
+                    self.guest_patch_messages = self.guest_patch_messages.saturating_add(1);
+                    let commit = self.registry.apply_patch(&owner, batch)?;
+                    let report = self
+                        .native_state
+                        .apply_commit(&owner, &self.registry, &commit)?;
+                    for node_id in report.invalidated_nodes {
+                        if !invalidated_nodes.contains(&node_id) {
+                            invalidated_nodes.push(node_id);
+                        }
+                    }
                 }
+                GuestMessage::Action(action) => self.queue_action(action),
+                _ => return Err(SurfaceError::UnexpectedGuestMessage),
             }
         }
         Ok(UpdateReport { invalidated_nodes })
+    }
+
+    fn queue_action(&self, request: ActionRequest) {
+        let sender = self.action_sender.clone();
+        let oauth_manager = self.oauth_manager.clone();
+        let rest_broker = self.rest_broker.clone();
+        let action_id = request.request_id.clone();
+        if thread::Builder::new()
+            .name(String::from("studio-provider-action"))
+            .spawn(move || {
+                let result = run_github_action(request, oauth_manager, rest_broker);
+                let _ = sender.send(result);
+            })
+            .is_err()
+        {
+            let _ = self.action_sender.send(ActionResult::Failure {
+                request_id: action_id,
+                code: String::from("host_action_unavailable"),
+                message: String::from("Host action could not start"),
+                retryable: true,
+            });
+        }
+    }
+
+    /// Deliver completed host actions to the guest on the UI thread.
+    pub fn poll_action_results(&mut self) -> Result<bool, SurfaceError> {
+        let mut changed = false;
+        while let Ok(result) = self.action_receiver.try_recv() {
+            let event = HostEvent::ActionResult(result);
+            let encoded = serde_json::to_vec(&event)
+                .map_err(|error| SurfaceError::Serialization(error.to_string()))?;
+            self.guest_event_calls = self.guest_event_calls.saturating_add(1);
+            let outcome = self.instance.invoke_event_bytes(&encoded)?;
+            let report = self.apply_guest_emissions(outcome.emissions)?;
+            changed |= !report.invalidated_nodes.is_empty();
+        }
+        Ok(changed)
     }
 
     /// Focus one native node.
@@ -344,6 +411,82 @@ impl PluginSurface {
         )
         .map_err(|_| crate::NativeCheckoutError::StateInvalid)?;
         crate::NativeCheckoutShell::new(owner, principal, checkout, reduced_motion)
+    }
+}
+
+fn run_github_action(
+    request: ActionRequest,
+    oauth_manager: Option<Arc<OAuthManager>>,
+    rest_broker: Option<Arc<RestBroker<'static>>>,
+) -> ActionResult {
+    let request_id = request.request_id;
+    if request.capability != "github.oauth" || request.operation != "sign_in" {
+        return ActionResult::Failure {
+            request_id,
+            code: String::from("capability_denied"),
+            message: String::from("Requested host action is not available"),
+            retryable: false,
+        };
+    }
+    if request.payload.get("provider").and_then(Value::as_str) != Some("github") {
+        return ActionResult::Failure {
+            request_id,
+            code: String::from("oauth.provider.unknown"),
+            message: String::from("GitHub provider is unavailable"),
+            retryable: false,
+        };
+    }
+    let (Some(oauth_manager), Some(rest_broker)) = (oauth_manager, rest_broker) else {
+        return ActionResult::Failure {
+            request_id,
+            code: String::from("oauth.provider.unavailable"),
+            message: String::from("GitHub sign-in is unavailable on this host"),
+            retryable: false,
+        };
+    };
+    let result = oauth_manager.sign_in("github");
+    if !result.is_success() {
+        return ActionResult::Failure {
+            request_id,
+            code: result.code_str().to_owned(),
+            message: String::from("GitHub sign-in failed"),
+            retryable: true,
+        };
+    }
+    let Some(claims) = result.claims else {
+        return ActionResult::Failure {
+            request_id,
+            code: String::from("oauth.claims.invalid"),
+            message: String::from("GitHub profile could not be verified"),
+            retryable: false,
+        };
+    };
+    let api = rest_broker.guest_api();
+    let client = GithubClient::new(&api);
+    let repositories = match client.repositories() {
+        Ok(repositories) => repositories,
+        Err(_) => {
+            return ActionResult::Failure {
+                request_id,
+                code: String::from("github.repositories.failed"),
+                message: String::from("GitHub repositories could not be loaded"),
+                retryable: true,
+            };
+        }
+    };
+    let repository_names = repositories
+        .into_iter()
+        .map(|repository| repository.full_name)
+        .collect::<Vec<_>>();
+    let repository_count = repository_names.len();
+    ActionResult::Success {
+        request_id,
+        payload: json!({
+            "login": claims.login,
+            "email": claims.email,
+            "repositoryNames": repository_names,
+            "repositoryCount": repository_count
+        }),
     }
 }
 

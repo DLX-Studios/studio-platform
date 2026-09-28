@@ -21,13 +21,19 @@ Reach a complete, implementation-ready decision set for specifying Studio Design
 - [Define the Studio Design model and operation algebra](issues/03-define-studio-design-model.md): use primitive Runtime catalog kinds and reusable compositions as source, with typed design metadata and a validated Runtime Projection to `UiNode` trees.
 - [Fix the Studio Designer v1 capability baseline](issues/04-fix-v1-capability-baseline.md): complete every Runtime catalog kind, all Canvas device profiles, broad normalized media, full extensions, and a POS journey using host-mediated Stripe, OAuth, Surreal data, REST, and WebSockets.
 - [Shape the native editor experience](issues/05-shape-native-editor-experience.md): make canvas-first Focus View the default and offer a fully supported persistent Workbench View over the same editor session and capabilities.
+- [Define Studio Library ownership and bindings](issues/06-define-studio-library-model.md): project-owned Library with content-addressed `asset-sha256-{hash}` identity, provenance merge on deduplication, typed bindings failing as `CONTENT_BUILD_BLOCKED`, reference-aware `RequireUnbound` deletion, and immutable packaged snapshots.
+- [Define full extension authority](issues/07-define-extension-authority.md): sandboxed declarative extensions behind signed descriptors that are rejected before activation when tampered or incompatible; capabilities are consent-recorded and revocable, lifecycle hooks are bounded and contained, and native renderer implementations stay first-party.
+- [Define live agent and MCP editing semantics](issues/08-define-live-agent-editing.md): live typed command batches through the validated engine with no proposal gate and `studio check` self-correction; overlapping stale batches resolve last-writer-wins at batch granularity and each accepted batch undoes independently with no cross-batch task grouping.
+- [Define offline and cloud synchronization](issues/09-define-sync-conflict-model.md): offline-first with optional same-user cloud sync through an idempotent operation outbox and cursor pulls, content-addressed asset transfer, periodic logical snapshots, and explicit recoverable conflicts that never silently overwrite.
+- [Define preview and Runtime compilation](issues/10-define-preview-compiler-pipeline.md): one validated Runtime Projection feeds both identity-preserving native previews and deterministic signed Runtime packages, with manifest asset lists matching packaged keys exactly.
+- [Define Designer trust and capability boundaries](issues/11-define-trust-and-capabilities.md): separated trust domains with capability checks at every closed-protocol boundary; guests, agents, MCP clients, and extensions never receive a database handle or query language, and compiler output is signed and verified before launch.
+- [Set quality and release gates](issues/12-set-quality-and-release-gates.md): measurable functional, performance, accessibility, recovery, security, synchronization, determinism, and end-to-end gates with recorded evidence; gaps become explicit waivers with named owners, never silent skips.
+- [Shape the specification and tracer-bullet handoff](issues/13-decompose-matt-delivery.md): synthesize through `/to-spec`, then decompose through `/to-tickets` into dependency-ordered, test-first tracer bullets landing through format, workspace-test, and Clippy integration checkpoints.
 
 ## Not yet specified
 
-- Exact cloud account, service, encryption, and deployment topology after the synchronization semantics are resolved.
-- Exact schema-version and migration policy after the Studio Design model is resolved.
-- Exact performance, scale, crash-recovery, accessibility, and release thresholds after the editor and compilation paths are resolved.
-- Exact tracer-bullet ticket split for Matt's `/to-tickets` after all architectural decisions are known.
+- Exact cloud account, service, encryption, and deployment topology; synchronization semantics are settled in [09](issues/09-define-sync-conflict-model.md).
+- Exact performance budgets and baseline hardware for the benchmark set, recorded before release; the gate set itself is fixed in [12](issues/12-set-quality-and-release-gates.md).
 
 ## Out of scope
 

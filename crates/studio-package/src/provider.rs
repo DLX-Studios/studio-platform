@@ -24,7 +24,7 @@ pub const PROVIDER_DESCRIPTOR_SCHEMA_VERSION: u16 = 1;
 /// Maintained GitHub integration id.
 pub const GITHUB_PROVIDER_ID: &str = "github";
 /// Maintained GitHub integration descriptor version.
-pub const GITHUB_PROVIDER_VERSION: &str = "1.0.0";
+pub const GITHUB_PROVIDER_VERSION: &str = "1.1.0";
 /// Maintained provider-neutral AI integration id.
 pub const AI_PROVIDER_ID: &str = "ai";
 /// Maintained provider-neutral AI integration descriptor version.
@@ -143,7 +143,7 @@ impl ProviderDescriptor {
                 github_route("github.repository", "/repos/{owner}/{repo}"),
             ],
         );
-        descriptor.scopes = ["read:user", "user:email", "repo"]
+        descriptor.scopes = ["read:user", "user:email"]
             .into_iter()
             .map(str::to_owned)
             .collect();

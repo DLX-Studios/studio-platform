@@ -410,7 +410,7 @@ fn parse_http_headers(raw: &[u8]) -> Result<ParsedHeaders, TransportError> {
         .split("\r\n\r\n")
         .chain(text.split("\n\n"))
         .filter(|candidate| candidate.trim_start().starts_with("HTTP/"))
-        .next_back()
+        .last()
         .ok_or(TransportError::ConnectionFailure)?;
     let mut lines = block.lines();
     let status_line = lines.next().ok_or(TransportError::ConnectionFailure)?;

@@ -14,4 +14,4 @@ Agent and MCP edits apply live through the same validated command engine as user
 
 Concurrency is last-writer-wins at batch granularity (user override of #50's structured-conflict draft). Overlapping stale agent batches overwrite at the batch boundary; no conflict preservation beyond the losing batch's diagnostics. Each accepted batch undoes independently (per-batch undo, no cross-batch task grouping). Cancellation stops acceptance of subsequent batches only; already-accepted batches remain and undo individually.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

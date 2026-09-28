@@ -12,4 +12,4 @@ What measurable functional, performance, accessibility, recovery, security, sync
 
 V1 ships only when all measurable gates pass with recorded evidence: functional coverage of every catalog kind and canvas profile, performance budgets, keyboard and accessibility acceptance, crash-recovery proofs, security and provenance review, same-user sync verification, deterministic build verification, and the end-to-end flagship journey. Gaps are recorded as explicit waivers with owners, never silent skips.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

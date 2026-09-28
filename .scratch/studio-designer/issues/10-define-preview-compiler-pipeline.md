@@ -14,4 +14,4 @@ One Studio Design produces both outputs through a single validated Runtime Proje
 
 Compilation is deterministic and signed: validation, Studio IR or AssemblyScript lowering, assets plus immutable library snapshot, interactions, diagnostics, and launch verification. Manifest asset lists match packaged keys exactly; archives are byte-stable; packages carry signatures verified at launch.
 
-See [CONTEXT.md](../../CONTEXT.md) for the settled glossary.
+See [CONTEXT.md](../../../CONTEXT.md) for the settled glossary.

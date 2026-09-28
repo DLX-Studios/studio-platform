@@ -31,5 +31,15 @@ manager:
 cargo test --locked -p studio-net --features integration-real --test integration_real_endpoint
 ```
 
+## WebSocket staging gate
+
+The separate `integration-websocket-real` feature tests the WebSocket broker against the operator-approved echo endpoint. Set `STUDIO_NET_REAL_WEBSOCKET_URL` to a certificate-validated `wss://` endpoint that accepts one JSON text message shaped as `{"message":"studio-net-websocket-gate"}`, echoes it unchanged, then closes the session. The test fails if the variable is missing or does not use `wss://`; it never skips the endpoint check.
+
+Run only in the approved staging job:
+
+```text
+cargo test --locked -p studio-net --features integration-websocket-real --test websocket_real_endpoint
+```
+
 Do not put endpoint values, credentials, or captured responses in source, CI logs, artifacts, or
 snapshots.

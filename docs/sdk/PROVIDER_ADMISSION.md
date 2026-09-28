@@ -20,7 +20,7 @@ The maintained first-party fixtures are:
 
 | Integration | Version | Routes |
 | --- | --- | --- |
-| `github` | `1.0.0` | `/user`, `/user/repos`, `/repos/{owner}/{repo}` (GET, OAuth session) |
+| `github` | `1.1.0` | `/user`, `/user/repos`, `/repos/{owner}/{repo}` (GET, OAuth session) |
 | `ai` | `1.0.0` | `/v1/chat/completions` (POST) and `/v1/chat/completions/stream` (GET), protected API key |
 
 Provider descriptors are host policy. A package cannot add an origin, route, scope, or credential

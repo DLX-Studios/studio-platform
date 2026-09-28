@@ -111,7 +111,7 @@ fn github_fixture_resolves_exact_routes_and_capabilities() {
     let package = manifest(
         vec![IntegrationReference {
             id: "github".to_owned(),
-            version: "1.0.0".to_owned(),
+            version: "1.1.0".to_owned(),
             config: Some(json!({
                 "clientId": "fixture-client",
                 "clientSecretName": "github.oauth.client_secret",
@@ -124,7 +124,7 @@ fn github_fixture_resolves_exact_routes_and_capabilities() {
         .admit(&package, &Default::default())
         .expect("maintained GitHub provider admits fixture");
     assert_eq!(plan.providers()[0].id, "github");
-    assert_eq!(plan.providers()[0].version, "1.0.0");
+    assert_eq!(plan.providers()[0].version, "1.1.0");
     assert_eq!(plan.capabilities(), &[Capability::DataSurrealQuery]);
     assert_eq!(plan.route_groups().len(), 1);
 }
@@ -162,7 +162,7 @@ fn unknown_revoked_outdated_and_incompatible_descriptors_fail_closed() {
     let package = manifest(
         vec![IntegrationReference {
             id: "github".to_owned(),
-            version: "1.0.0".to_owned(),
+            version: "1.1.0".to_owned(),
             config: Some(json!({
                 "clientId": "fixture-client",
                 "clientSecretName": "github.oauth.client_secret"
@@ -187,7 +187,7 @@ fn unknown_revoked_outdated_and_incompatible_descriptors_fail_closed() {
     revoked_registry
         .set_state(
             "github",
-            "1.0.0",
+            "1.1.0",
             studio_package::ProviderDescriptorState::Revoked,
         )
         .expect("fixture descriptor exists");
@@ -203,7 +203,7 @@ fn unknown_revoked_outdated_and_incompatible_descriptors_fail_closed() {
     incompatible_registry
         .set_state(
             "github",
-            "1.0.0",
+            "1.1.0",
             studio_package::ProviderDescriptorState::Incompatible,
         )
         .expect("fixture descriptor exists");
@@ -221,7 +221,7 @@ fn route_and_secret_rejections_are_value_free() {
     let mut package = manifest(
         vec![IntegrationReference {
             id: "github".to_owned(),
-            version: "1.0.0".to_owned(),
+            version: "1.1.0".to_owned(),
             config: Some(json!({
                 "clientId": "fixture-client",
                 "clientSecretName": "github.oauth.client_secret"

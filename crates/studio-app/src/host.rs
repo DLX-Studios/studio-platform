@@ -1,19 +1,34 @@
 //! Secure bundle-to-policy-to-instance-to-mount startup orchestration.
 
-use std::{ffi::OsStr, fs};
+use std::{ffi::OsStr, fs, sync::Arc};
+use parking_lot::Mutex;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use studio_actions::Checkout;
 use studio_components::{HostEventDispatcher, NativeStateStore};
 use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
-use studio_net::{BrokerError, RestBroker, RestBrokerConfig};
+use studio_net::limits::BrokerLimits;
+use studio_net::{
+    BrokerError, HttpsClient, ProductionHttpTransport, RestBroker, RestBrokerConfig,
+    TransportLimits,
+};
+use studio_oauth::{
+    BrowserHandoff, CallbackListener, EntropySource, GithubHttpsOAuthTransport, OAuthManager,
+    OsEntropy, ProtectedOAuthTokenStore, ProtectedSecretReference, ProviderPackage,
+    ProviderRegistry as OAuthProviderRegistry, SystemBrowser, TcpLoopbackListener,
+};
 use studio_package::{
     ArchivePolicy, CanonicalBundleInput, ManifestPolicy, ProviderRegistry, TrustStore,
     TrustStoreError, VerifiedMigrationBundle, canonical_bundle_document, inspect_archive,
     parse_manifest, verify_bundle_signature,
 };
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
-use studio_security::PluginPrincipal;
+use studio_security::{
+    ApplicationEnvironment, CredentialBackend, CredentialBackendError, CredentialBytes,
+    CredentialLocator, OsCredentialBackend, PluginPrincipal, ProtectedSecretKey,
+    ProtectedSecretStore, SecretInput, TrustMode,
+};
 use studio_ui::{InstanceId, UiRegistry};
 use studio_wasm::{ModulePolicy, PluginInstance, RuntimeBudgets, SandboxEngine};
 use thiserror::Error;
@@ -159,10 +174,30 @@ impl LaunchError {
 }
 
 /// Stateless secure startup orchestrator over one immutable host policy snapshot.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StudioHost {
     config: HostConfig,
     wayland: WaylandAvailability,
+    https_client: Option<Arc<dyn HttpsClient>>,
+    credential_backend: Arc<dyn CredentialBackend>,
+    provisioned_secrets: Arc<Mutex<Vec<(ProtectedSecretKey, SecretInput)>>>,
+    browser: Arc<dyn BrowserHandoff>,
+    callback_listener: Arc<dyn CallbackListener>,
+    entropy: Arc<dyn EntropySource>,
+}
+
+impl std::fmt::Debug for StudioHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StudioHost")
+            .field("config", &self.config)
+            .field("wayland", &self.wayland)
+            .field("https_client_installed", &self.https_client.is_some())
+            .field("credential_backend_installed", &true)
+            .field("provisioned_secret_count", &self.provisioned_secrets.lock().len())
+            .field("oauth_adapters_installed", &true)
+            .finish()
+    }
 }
 
 impl StudioHost {
@@ -183,8 +218,52 @@ impl StudioHost {
     }
     /// Create a host for one detected platform session.
     #[must_use]
-    pub const fn new(config: HostConfig, wayland: WaylandAvailability) -> Self {
-        Self { config, wayland }
+    pub fn new(config: HostConfig, wayland: WaylandAvailability) -> Self {
+        Self {
+            config,
+            wayland,
+            https_client: None,
+            credential_backend: Arc::new(OsCredentialBackend),
+            provisioned_secrets: Arc::new(Mutex::new(Vec::new())),
+            browser: Arc::new(SystemBrowser),
+            callback_listener: Arc::new(TcpLoopbackListener),
+            entropy: Arc::new(OsEntropy),
+        }
+    }
+
+    /// Bind the platform HTTPS client used by provider OAuth and REST sessions.
+    #[must_use]
+    pub fn with_https_client(mut self, client: Arc<dyn HttpsClient>) -> Self {
+        self.https_client = Some(client);
+        self
+    }
+
+    /// Replace the system credential adapter, primarily for deterministic host tests.
+    #[must_use]
+    pub fn with_credential_backend(mut self, backend: Arc<dyn CredentialBackend>) -> Self {
+        self.credential_backend = backend;
+        self
+    }
+
+    /// Supply one host-captured secret for immediate protected-store provisioning.
+    #[must_use]
+    pub fn with_protected_secret(mut self, name: ProtectedSecretKey, value: SecretInput) -> Self {
+        self.provisioned_secrets.lock().push((name, value));
+        self
+    }
+
+    /// Override host OAuth adapters for deterministic integration tests.
+    #[must_use]
+    pub fn with_oauth_adapters(
+        mut self,
+        browser: Arc<dyn BrowserHandoff>,
+        callback_listener: Arc<dyn CallbackListener>,
+        entropy: Arc<dyn EntropySource>,
+    ) -> Self {
+        self.browser = browser;
+        self.callback_listener = callback_listener;
+        self.entropy = entropy;
+        self
     }
 
     /// Construct the host-owned REST broker for one admitted package.
@@ -236,7 +315,13 @@ impl StudioHost {
     ///
     /// Returns a host-owned [`LaunchError`] before exposing any partially prepared surface.
     pub fn prepare(&self, request: LaunchRequest) -> Result<PluginSurface, LaunchError> {
-        self.prepare_internal(request, false)
+        self.prepare_internal(
+            request,
+            false,
+            self.https_client.clone(),
+            Arc::clone(&self.credential_backend),
+            Arc::clone(&self.provisioned_secrets),
+        )
     }
 
     /// Run signed application migrations and launch only after the lifecycle commits.
@@ -292,13 +377,22 @@ impl StudioHost {
             .run(&package, action)
             .await
             .map_err(LaunchError::MigrationInvalid)?;
-        self.prepare_internal(request, true)
+        self.prepare_internal(
+            request,
+            true,
+            self.https_client.clone(),
+            Arc::clone(&self.credential_backend),
+            Arc::clone(&self.provisioned_secrets),
+        )
     }
 
     fn prepare_internal(
         &self,
         request: LaunchRequest,
         migrations_complete: bool,
+        https_client: Option<Arc<dyn HttpsClient>>,
+        credential_backend: Arc<dyn CredentialBackend>,
+        provisioned_secrets: Arc<Mutex<Vec<(ProtectedSecretKey, SecretInput)>>>,
     ) -> Result<PluginSurface, LaunchError> {
         if self.wayland == WaylandAvailability::Unavailable {
             return Err(LaunchError::WaylandUnavailable);
@@ -361,6 +455,19 @@ impl StudioHost {
             .admit(&manifest, &studio_net::limits::BrokerLimits::default())
             .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
 
+        let github_services = prepare_github_services(
+            &manifest,
+            &archive_bytes,
+            mode,
+            &provider_plan,
+            https_client,
+            Arc::clone(&self.credential_backend),
+            Arc::clone(&self.provisioned_secrets),
+            Arc::clone(&self.browser),
+            Arc::clone(&self.callback_listener),
+            Arc::clone(&self.entropy),
+        )?;
+
         let engine =
             SandboxEngine::new().map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
         let module_policy = ModulePolicy {
@@ -401,8 +508,166 @@ impl StudioHost {
             render_assets,
             self.config.protocol_limits,
             provider_plan,
+            github_services,
         ))
     }
+}
+
+#[derive(Clone)]
+struct SharedCredentialBackend(Arc<dyn CredentialBackend>);
+
+impl CredentialBackend for SharedCredentialBackend {
+    fn set_secret(
+        &self,
+        locator: &CredentialLocator,
+        secret: &[u8],
+    ) -> Result<(), CredentialBackendError> {
+        self.0.set_secret(locator, secret)
+    }
+
+    fn get_secret(
+        &self,
+        locator: &CredentialLocator,
+    ) -> Result<CredentialBytes, CredentialBackendError> {
+        self.0.get_secret(locator)
+    }
+
+    fn delete_secret(&self, locator: &CredentialLocator) -> Result<(), CredentialBackendError> {
+        self.0.delete_secret(locator)
+    }
+}
+
+fn prepare_github_services(
+    manifest: &studio_package::ManifestV1,
+    archive_bytes: &[u8],
+    mode: LaunchMode,
+    provider_plan: &studio_package::ProviderAdmissionPlan,
+    https_client: Option<Arc<dyn HttpsClient>>,
+    credential_backend: Arc<dyn CredentialBackend>,
+    provisioned_secrets: Arc<Mutex<Vec<(ProtectedSecretKey, SecretInput)>>>,
+    browser: Arc<dyn BrowserHandoff>,
+    callback_listener: Arc<dyn CallbackListener>,
+    entropy: Arc<dyn EntropySource>,
+) -> Result<Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>, LaunchError> {
+    if !provider_plan
+        .providers()
+        .iter()
+        .any(|provider| provider.id == "github")
+    {
+        return Ok(None);
+    }
+    let Some(https_client) = https_client else {
+        return Ok(None);
+    };
+    let integration = manifest
+        .integrations
+        .iter()
+        .find(|integration| integration.id == "github")
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(String::from("GitHub integration config missing"))
+        })?;
+    let config = integration.config.as_ref().ok_or_else(|| {
+        LaunchError::BundleInvalid(String::from("GitHub integration config missing"))
+    })?;
+    let client_id = config
+        .get("clientId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| LaunchError::BundleInvalid(String::from("GitHub client id missing")))?;
+    let secret_name = config
+        .get("clientSecretName")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(String::from("GitHub secret reference missing"))
+        })?;
+    let secret_declaration = manifest
+        .secrets
+        .iter()
+        .find(|secret| secret.name == secret_name)
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(String::from("GitHub secret declaration missing"))
+        })?;
+    let provider = provider_plan
+        .providers()
+        .iter()
+        .find(|provider| provider.id == "github")
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(String::from("GitHub provider was not admitted"))
+        })?;
+
+    let mut instance_id = [0_u8; 16];
+    getrandom::fill(&mut instance_id)
+        .map_err(|_| LaunchError::GuestInvalid(String::from("runtime identity unavailable")))?;
+    let bundle_digest: [u8; 32] = Sha256::digest(archive_bytes).into();
+    let (principal, environment) = match mode {
+        LaunchMode::Production => (
+            PluginPrincipal::new_verified(
+                manifest.publisher.id.clone(),
+                manifest.publisher.key_id.clone(),
+                manifest.id.clone(),
+                bundle_digest,
+                instance_id,
+                TrustMode::Production,
+            ),
+            ApplicationEnvironment::Production,
+        ),
+        LaunchMode::Development => (
+            PluginPrincipal::new(
+                manifest.publisher.key_id.clone(),
+                manifest.id.clone(),
+                bundle_digest,
+                instance_id,
+                TrustMode::Development,
+            ),
+            ApplicationEnvironment::Development,
+        ),
+    };
+    let principal = principal
+        .map_err(|_| LaunchError::BundleInvalid(String::from("provider identity invalid")))?;
+    let protected_store = ProtectedSecretStore::new(SharedCredentialBackend(credential_backend));
+    let scope = protected_store
+        .for_application(&principal, environment)
+        .map_err(|_| LaunchError::BundleInvalid(String::from("protected store unavailable")))?;
+    for (key, value) in std::mem::take(&mut *provisioned_secrets.lock()) {
+        if manifest
+            .secrets
+            .iter()
+            .any(|declaration| declaration.name == key.name() && declaration.purpose == key.purpose())
+        {
+            scope.configure(&key, value).map_err(|_| {
+                LaunchError::BundleInvalid(String::from("protected secret configuration failed"))
+            })?;
+        }
+    }
+    drop(scope);
+    let package = ProviderPackage::new("github", provider.version.clone(), client_id)
+        .with_client_secret(ProtectedSecretReference {
+            name: secret_name.to_owned(),
+            purpose: secret_declaration.purpose.clone(),
+        });
+    let manager = Arc::new(OAuthManager::new(
+        OAuthProviderRegistry::github(),
+        [package],
+        Arc::new(ProtectedOAuthTokenStore::new(
+            protected_store,
+            principal,
+            environment,
+        )),
+        browser,
+        callback_listener,
+        entropy,
+        Arc::new(GithubHttpsOAuthTransport::new(Arc::clone(&https_client))),
+    ));
+    let transport = Arc::new(ProductionHttpTransport::new(
+        https_client,
+        TransportLimits::default(),
+    ));
+    let mut broker = RestBroker::new(transport, BrokerLimits::default());
+    provider_plan
+        .install_into(&mut broker)
+        .map_err(|_| LaunchError::BundleInvalid(String::from("GitHub routes invalid")))?;
+    let resolver: Arc<dyn studio_net::credential::OAuthSessionResolver> = manager.clone();
+    broker.set_oauth_resolver(resolver);
+    Ok(Some((manager, Arc::new(broker))))
 }
 
 fn decode_single_mount(

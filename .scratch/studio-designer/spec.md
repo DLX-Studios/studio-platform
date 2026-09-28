@@ -84,12 +84,12 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 62. As a designer, I want unused packaged assets identified, so that I can control application size without deleting Library sources.
 63. As an agent, I want scoped read access to the active project, selection, diagnostics, Library, and command schemas, so that I can make relevant edits without unrestricted host access.
 64. As an agent, I want to apply typed command batches directly to the active Studio Design, so that changes appear in real time.
-65. As an agent, I want command preconditions and validation results, so that I can recover from stale context instead of overwriting newer work.
-66. As an agent, I want one task to become a named undo group even when it contains many commands, so that the user can reverse my intent coherently.
+65. As an agent, I want command preconditions and machine-readable validation results, so that I can self-correct from stale context or invalid batches before completion.
+66. As an agent, I want each accepted batch to undo as one named group however many commands it holds, so that the user can reverse my work at batch granularity.
 67. As an agent, I want progress, accepted operations, warnings, and failures visible in the Designer, so that the user understands what is happening.
 68. As a designer, I want to cancel an active agent task, so that no further batches are accepted after cancellation takes effect.
 69. As a designer, I want to keep editing while an agent works, so that agent assistance does not impose a proposal gate.
-70. As a designer, I want conflicts between my edits and an agent's stale commands surfaced without losing either intent, so that live collaboration with agents remains safe.
+70. As a designer, I want overlapping stale agent batches resolved last-writer-wins at batch granularity with the losing batch's diagnostics surfaced, so that live agent editing stays predictable and observable.
 71. As an MCP client, I want the same scoped command and query interfaces as other agents, so that MCP cannot become a privileged mutation path.
 72. As a designer, I want agents to interpret external files as reference mockups, so that common source material can seed a Studio Design without native format importers.
 73. As a designer, I want agent-led ingestion to retain source provenance, so that generated design content can be traced to its reference.
@@ -303,10 +303,10 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 - Commands include operation identity, actor identity and kind, project identity, base revision, schema version, typed payload, structural/property preconditions, and enough prior information to produce an inverse.
 - Commands cover project and screen lifecycle; node insertion, movement, reorder, replacement, duplication, deletion, and restoration; property, token, responsive, accessibility, binding, interaction, composition, Library, fixture, extension, and project-setting changes.
 - An atomic command batch either validates and commits completely or produces no new revision.
-- Each accepted batch creates an immutable revision, a deterministic command receipt, an outbox record when sync is enabled, and a history entry. Multiple streamed agent batches may share one named undo-group identity.
+- Each accepted batch creates an immutable revision, a deterministic command receipt, an outbox record when sync is enabled, and a history entry. Each accepted agent batch is its own named undo group; an agent task never spans a shared undo group across batches.
 - Undo applies validated inverse commands as a new revision rather than moving storage backward. Redo reapplies the original intent against explicit preconditions.
 - Stable identities survive rename, reparent, reorder, styling, and responsive edits. Deletion produces tombstone information sufficient for undo, sync conflict detection, and reference diagnostics.
-- User edits may continue during agent work. Stale preconditions yield structured conflicts; they never trigger silent last-writer-wins mutation.
+- User edits may continue during agent work. The engine reports stale preconditions as structured conflict results and never mutates silently; for overlapping stale agent batches the live agent channel resolves last-writer-wins at batch granularity, keeping the losing batch's intent only as diagnostics.
 
 ### Native editor experience
 
@@ -324,7 +324,7 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 - The initial composer contains the prompt field, scoped context/attachment affordance, Import, model selection, and send. It does not expose “Switch to Terminal,” “Full access,” folder mounting, or other controls that imply authority outside Studio Designer.
 - Import opens the host-owned Agent-led Ingestion flow. Selected files or directories are admitted as scoped source material with provenance; they do not grant the agent continuing arbitrary filesystem access. The UI uses **Import**, not **Add folder**.
 - The model selector is a host-owned searchable popover listing configured providers and Studio-compatible models with availability and relevant model metadata. Provider credentials remain outside the conversation and agent process.
-- A selected model applies to the next run and is recorded with that run, its assistant messages, diagnostics, command batches, and undo group. Changing models affects later runs without rewriting prior provenance.
+- A selected model applies to the next run and is recorded with that run, its assistant messages, diagnostics, command batches, and per-batch undo groups. Changing models affects later runs without rewriting prior provenance.
 - Sending the first message dismisses the welcome composition, reveals the active design workspace, and moves the same Agent Conversation into a floating window. The thread is not restarted or summarized merely because its presentation changes.
 - The floating Agent Conversation is movable, resizable, collapsible, and constrained to the Designer workspace. Its placement and size are presentation state; its thread, model/run provenance, context, progress, and results belong to the project session.
 - View switching preserves the floating conversation. Agent activity and history may also appear in the compact bottom dock, but the activity feed and Agent Conversation are distinct presentations: the former reports operations, while the latter contains the interactive thread.
@@ -348,14 +348,14 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 ### Studio Library
 
 - Studio Library is the project-owned catalog of Assets, Content Collections, Content Bindings, fixture states, schemas, and provenance used by designers, agents, extensions, and the packaged Runtime Application.
-- Assets have opaque stable identity, content hash, media kind, original format, metadata, provenance, created/updated revision, original blob reference, normalized variants, usage references, and packaging policy.
+- Assets have opaque stable identity (`asset-sha256-{hash}` over exact source bytes), content hash, media kind, original format, metadata, provenance, created/updated revision, original blob reference, normalized variants, usage references, and packaging policy. Importing identical bytes again yields one identity and merged provenance; blobs are content-addressed under `blobs/sha256/` and deterministic variants carry `variant-sha256-{hash}` identities.
 - Blob content is stored in a content-addressed local asset store; SurrealDB stores identity, metadata, hashes, relationships, and synchronization state. Blob transfer and deduplication are independent from Design operation synchronization.
-- Preserve source originals. Generate deterministic Runtime variants according to the approved host decoder matrix. Sanitize SVG and reject unsafe active content.
+- Preserve source originals byte-for-byte. Generate deterministic Runtime variants by variant key according to the approved host decoder matrix. Admission validates format by extension plus magic bytes and gates video and audio codecs to an approved list; unsupported format, unsupported codec, and unsafe SVG fail at admission with a named diagnostic, and unsafe content is never packaged.
 - Baseline accepted originals include PNG, JPEG, WebP, GIF, AVIF, sanitized SVG; MP4, WebM, MOV; MP3, WAV, Ogg, FLAC, M4A/AAC; WOFF2, WOFF, TTF, OTF; PDF, plain text, Markdown; and SVG or raster icons. Admission does not imply every Runtime host can render every original; unsupported use produces diagnostics.
 - Content Collections use versioned typed schemas, stable record identities, validation, indexes declared by the project, and typed create/read/update/delete operations.
-- Content Bindings are typed references to an Asset, collection, record, field, current repeated item, or fixture value. Broken or type-incompatible references are build errors unless the binding declares a valid fallback.
-- Fixture states are authoring data used for preview and tests. Runtime packages receive a deterministic offline Library snapshot containing only admitted content and required asset variants.
-- Deletion is reference-aware. Referenced assets, records, fields, or schemas require replacement, unbinding, or an explicit breaking change that leaves diagnostics.
+- Content Bindings are typed references to an Asset, collection, record, field, current repeated item, or fixture value. Type mismatch or missing target fails the build with `CONTENT_BUILD_BLOCKED` unless the binding declares a valid type-correct fallback; failures carry node and binding IDs, the projection report, and an immediate editor toast or banner.
+- Fixture states are authoring data used for preview and tests. Runtime packages receive a deterministic offline Library snapshot containing only admitted content and required asset variants. Manifest asset lists must match packaged keys exactly, and archives are deterministic with fixed sizes and permissions.
+- Deletion is reference-aware. Assets track usages (`reference_id`, owner, field) and deletion defaults to `RequireUnbound` with a usage listing; breaking deletes are explicit and report broken references. Collection schema changes surface affected bindings as diagnostics.
 
 ### Declarative interactions
 
@@ -371,9 +371,9 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 - Read scopes may include project summaries, selected subtrees, schemas, Library metadata or requested blobs, interaction graphs, diagnostics, command schemas, and revision history. Scope is explicit and auditable.
 - Mutations are typed command batches with actor attribution, base revision, preconditions, progress metadata, and undo-group identity.
 - Accepted agent operations appear in the live design immediately. A proposal gate is not required.
-- Cancellation prevents acceptance of later batches from that run; previously accepted batches remain in their undo group and can be undone normally.
-- Agent failures preserve accepted revisions, reject incomplete atomic batches, and surface safe diagnostics. Retrying uses idempotent operation identities.
-- Concurrent user edits are permitted. The command engine admits independent work and returns structured conflicts for stale or overlapping work.
+- Cancellation prevents acceptance of later batches from that run; previously accepted batches remain and undo individually, one undo group per batch.
+- Agent failures preserve accepted revisions, reject incomplete atomic batches, and surface safe diagnostics. Batches verify with `studio check`; failures flow back machine-readable so the agent can self-correct. Retrying uses idempotent operation identities.
+- Concurrent user edits are permitted. Overlapping stale agent batches resolve last-writer-wins at batch granularity; the losing batch's intent is preserved only as diagnostics, never as a resolvable conflict record.
 - Agent-led Ingestion interprets external images, PDFs, design files, markup, or other references and constructs Studio Design through the same command interface. No dedicated Rust importer is required for external design formats in v1.
 - Ingested nodes, assets, and content retain source provenance and are validated exactly like manually authored content.
 - Agent Conversations persist structured messages, model/run provenance, imported context, Agent References, and safe progress/result metadata. They do not persist provider secrets, unrestricted prompts containing protected values, or raw capability handles.
@@ -381,10 +381,10 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 ### Extension framework
 
 - Extensions are sandboxed, versioned packages admitted by a first-party Extension Registry.
-- An extension descriptor declares identity, publisher, version, compatible Studio and schema versions, contributions, migrations, requested capabilities, and integrity information.
+- An extension descriptor declares identity, publisher, version, compatible Studio and schema versions, contributions, migrations, requested capabilities, and integrity information. Tampered or incompatible descriptors are rejected before activation.
 - Extensions may contribute Reusable Compositions of approved Primitive Nodes, inspector declarations made from first-party editor controls, commands, declarative actions, Content Collection types, validators, migrations, templates, and capability-mediated integrations.
 - Extensions cannot add native renderer kinds, execute unrestricted native code, access raw GPUI, inject HTML/CSS, draw arbitrary surfaces, access SurrealDB directly, or open arbitrary sockets.
-- Extension lifecycle includes admission, installation, activation, project open, validation, build participation, migration, deactivation, and removal. Each hook has bounded input, output, time, memory, and failure behavior.
+- Extension lifecycle includes admission, installation, activation, project open, validation, build participation, migration, deactivation, and removal. Each hook has bounded input, output, time, memory, and failure behavior; a failing hook is contained and never hangs the project.
 - Extension commands still pass through `DesignerSession`; extension migrations run through a separately authorized project migration path and create recovery points.
 - Requested capabilities are deny-by-default, explained to the user, recorded per project, and revocable. Removal reports remaining nodes, bindings, content, actions, or migrations owned by the extension before changing the project.
 
@@ -542,6 +542,7 @@ A Runtime Projection validates Studio Design and deterministically produces Runt
 - Before release, the project records baseline hardware and explicit budgets for those benchmarks; continuous integration fails regressions beyond the approved tolerance. A benchmark without an approved budget is evidence collection, not certification.
 - Recovery rehearsal covers logical backup/restore, Studio schema migration, SurrealDB patch upgrade, deliberately incompatible engine fixture, failed extension migration, interrupted asset transfer, and application data migration failure.
 - Run the repository's locked workspace tests, strict Clippy, formatting check, release build, fuzz targets, dependency audit, SBOM generation, license review, and signed-package verification as release gates.
+- A gate that cannot pass is recorded as an explicit waiver with a named owner; silent skips are forbidden.
 
 ## Out of Scope
 
