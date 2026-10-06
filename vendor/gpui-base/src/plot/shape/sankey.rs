@@ -12,7 +12,7 @@ const STAGGER_RATIO: f32 = 0.15;
 ///
 /// Mirrors d3-sankey's `sankeyLeft` / `sankeyRight` / `sankeyCenter` /
 /// `sankeyJustify`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum SankeyAlign {
     Left,
     Right,
@@ -26,6 +26,7 @@ pub enum SankeyAlign {
 /// `source` and `target` are indices into the node list (d3-sankey's default
 /// `nodeId`), `value` is the flow amount.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SankeyLink {
     pub source: usize,
     pub target: usize,
@@ -46,6 +47,7 @@ impl SankeyLink {
 
 /// A node with computed layout (d3-sankey's computed node fields).
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct SankeyNodeLayout {
     pub index: usize,
     /// The node's throughput in the layout's value space: max(sum of incoming,
@@ -78,6 +80,7 @@ pub struct SankeyNodeLayout {
 /// imbalanced one (e.g. sqrt-compressed values) the ribbon transitions
 /// smoothly between the two widths.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SankeyLinkLayout {
     pub index: usize,
     pub source: usize,
@@ -98,6 +101,7 @@ pub struct SankeyLinkLayout {
 
 /// The computed Sankey layout.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct SankeyGraph {
     pub nodes: Vec<SankeyNodeLayout>,
     pub links: Vec<SankeyLinkLayout>,
@@ -135,7 +139,7 @@ impl std::fmt::Display for SankeyError {
 impl std::error::Error for SankeyError {}
 
 /// How flow values map to node heights and ribbon widths.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum SankeyValueScale {
     /// Height is proportional to the value (standard sankey semantics).
     #[default]

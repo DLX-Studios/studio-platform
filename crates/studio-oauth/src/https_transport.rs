@@ -1,4 +1,4 @@
-//! GitHub OAuth protocol adapter over the host's certificate-validating HTTPS client.
+//! OAuth protocol adapter over the host's certificate-validating HTTPS client.
 
 use std::{sync::Arc, time::Duration};
 
@@ -19,24 +19,27 @@ use crate::{
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
+/// Media type for GitHub's JSON `DELETE` revocation shape, the only shape this adapter implements.
+const REVOKE_ACCEPT: &str = "application/vnd.github+json";
 
-/// GitHub OAuth operations sent through the host's certificate-validating HTTPS client.
+/// OAuth operations sent through the host's certificate-validating HTTPS client.
 ///
 /// The adapter never logs request bodies or credential headers. The injected client must enforce
 /// the supplied transport limits and must not retain credential-bearing requests after `execute`
-/// returns.
-pub struct GithubHttpsOAuthTransport {
+/// returns. Request media types come from the descriptor, so one adapter serves every maintained
+/// provider.
+pub struct HttpsOAuthTransport {
     http: ProductionHttpTransport,
 }
 
-impl std::fmt::Debug for GithubHttpsOAuthTransport {
+impl std::fmt::Debug for HttpsOAuthTransport {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("GithubHttpsOAuthTransport(REDACTED)")
+        formatter.write_str("HttpsOAuthTransport(REDACTED)")
     }
 }
 
-impl GithubHttpsOAuthTransport {
-    /// Construct the GitHub adapter over a host-provided TLS client.
+impl HttpsOAuthTransport {
+    /// Construct the adapter over a host-provided TLS client.
     #[must_use]
     pub fn new(client: Arc<dyn HttpsClient>) -> Self {
         let limits = TransportLimits {
@@ -109,7 +112,7 @@ impl GithubHttpsOAuthTransport {
     }
 }
 
-impl OAuthTransport for GithubHttpsOAuthTransport {
+impl OAuthTransport for HttpsOAuthTransport {
     fn exchange_code(&self, request: CodeExchangeRequest<'_>) -> Result<TokenResponse, OAuthError> {
         let verifier = request.verifier;
         let client_secret = request.client_secret;
@@ -152,10 +155,7 @@ impl OAuthTransport for GithubHttpsOAuthTransport {
             HttpMethod::Get,
             request.endpoint,
             vec![
-                (
-                    String::from("accept"),
-                    String::from("application/vnd.github+json"),
-                ),
+                (String::from("accept"), request.accept.to_owned()),
                 (String::from("authorization"), format!("Bearer {token}")),
                 (String::from("user-agent"), String::from("studio-oauth/1.0")),
             ],
@@ -166,6 +166,11 @@ impl OAuthTransport for GithubHttpsOAuthTransport {
             .map_err(|_| OAuthError::new(OAuthErrorCode::ProfileFailed))
     }
 
+    /// Revoke upstream using GitHub's authenticated JSON `DELETE`.
+    ///
+    /// RFC 7009 form-POST revocation is a different protocol. Only declare a
+    /// `revocation_endpoint` for a provider that accepts this exact shape, which is why the
+    /// Google descriptor declares none.
     fn revoke(&self, request: RevokeRequest<'_>) -> Result<(), OAuthError> {
         let secret = request
             .client_secret
@@ -187,10 +192,7 @@ impl OAuthTransport for GithubHttpsOAuthTransport {
             HttpMethod::Delete,
             request.endpoint,
             vec![
-                (
-                    String::from("accept"),
-                    String::from("application/vnd.github+json"),
-                ),
+                (String::from("accept"), REVOKE_ACCEPT.to_owned()),
                 (String::from("authorization"), authorization),
                 (
                     String::from("content-type"),
@@ -219,6 +221,8 @@ struct TokenDocument {
     expires_in: Option<u64>,
     #[serde(default)]
     scope: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
 }
 
 impl Drop for TokenDocument {
@@ -226,6 +230,9 @@ impl Drop for TokenDocument {
         self.access_token.zeroize();
         if let Some(refresh) = &mut self.refresh_token {
             refresh.zeroize();
+        }
+        if let Some(id_token) = &mut self.id_token {
+            id_token.zeroize();
         }
     }
 }
@@ -257,6 +264,9 @@ fn decode_token_response(body: Vec<u8>) -> Result<TokenResponse, OAuthError> {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         response = response.with_scopes(scopes)?;
+    }
+    if let Some(id_token) = document.id_token.take() {
+        response = response.with_id_token(id_token.into_bytes())?;
     }
     Ok(response)
 }
@@ -291,7 +301,7 @@ mod tests {
 
     use crate::{OAuthTransport, RefreshRequest, SecretToken};
 
-    use super::{GithubHttpsOAuthTransport, append_form_field};
+    use super::{HttpsOAuthTransport, append_form_field};
 
     struct RefreshHttpsClient;
 
@@ -344,7 +354,7 @@ mod tests {
 
     #[test]
     fn refresh_uses_protected_client_credentials_and_parses_rotation() {
-        let transport = GithubHttpsOAuthTransport::new(Arc::new(RefreshHttpsClient));
+        let transport = HttpsOAuthTransport::new(Arc::new(RefreshHttpsClient));
         let result = transport
             .refresh(RefreshRequest {
                 endpoint: "https://github.com/login/oauth/access_token",

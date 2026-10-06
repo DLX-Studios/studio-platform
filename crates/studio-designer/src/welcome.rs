@@ -1,10 +1,10 @@
 //! Product welcome matching the application-shell Monolith prototype.
 
-use gpui::{
-    App, ClickEvent, FontWeight, InteractiveElement, IntoElement, ParentElement,
+use gpui_kit::component::{TitleBar, h_flex, v_flex};
+use gpui_kit::{
+    App, ClickEvent, FontWeight, InteractiveElement, IntoElement, ParentElement, Pixels,
     StatefulInteractiveElement, Styled, Window, div, px, relative, rgb,
 };
-use gpui_component::{TitleBar, h_flex, v_flex};
 
 use crate::shell_theme::{
     COLOR_BG, COLOR_BRAND, COLOR_LINE, COLOR_LINE_STRONG, COLOR_MUTED, COLOR_PANEL, COLOR_PANEL_2,
@@ -203,9 +203,9 @@ fn board_column() -> impl IntoElement {
 fn artifact_card(
     name: &'static str,
     size: &'static str,
-    top: gpui::Pixels,
-    left: gpui::Pixels,
-    width: gpui::Pixels,
+    top: Pixels,
+    left: Pixels,
+    width: Pixels,
 ) -> impl IntoElement {
     v_flex()
         .absolute()

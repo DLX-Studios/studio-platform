@@ -15,14 +15,14 @@ use std::{
     task::{Context as TaskContext, Poll, Wake, Waker},
 };
 
-use gpui::prelude::FluentBuilder;
-use gpui::{
+use gpui_kit::component::Disableable;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, Subscription, Window, div,
 };
-use gpui_component::Disableable;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{Input, InputEvent, InputState};
 use serde::{Serialize, de::DeserializeOwned};
 use studio_design::{
     Actor, ActorId, ActorKind, DefaultDesignerSession, DesignNode, NodeId, NodeKind, NodeParent,
@@ -1319,7 +1319,7 @@ impl Render for NativeProductShell {
                     content = content.child(
                         div()
                             .id("identity-error")
-                            .role(gpui::Role::Alert)
+                            .role(gpui_kit::Role::Alert)
                             .child(error),
                     );
                 }
@@ -1369,7 +1369,7 @@ impl Render for NativeProductShell {
                     content = content.child(
                         div()
                             .id("identity-error")
-                            .role(gpui::Role::Alert)
+                            .role(gpui_kit::Role::Alert)
                             .child(error),
                     );
                 }
@@ -1417,7 +1417,7 @@ impl Render for NativeProductShell {
                     content = content.child(
                         div()
                             .id("designer-project-loading")
-                            .role(gpui::Role::Status)
+                            .role(gpui_kit::Role::Status)
                             .child("Opening the durable Designer project…"),
                     );
                 } else if let Some(error) = self.focus_error.clone() {
@@ -1425,7 +1425,7 @@ impl Render for NativeProductShell {
                         .child(
                             div()
                                 .id("designer-project-error")
-                                .role(gpui::Role::Alert)
+                                .role(gpui_kit::Role::Alert)
                                 .child("Project editor unavailable")
                                 .child(div().text_sm().child(error)),
                         )
@@ -1462,7 +1462,7 @@ impl Render for NativeProductShell {
                     content = content.child(
                         div()
                             .id("dashboard-error")
-                            .role(gpui::Role::Alert)
+                            .role(gpui_kit::Role::Alert)
                             .child(error),
                     );
                 } else if let Some(snapshot) = dashboard_snapshot {
@@ -1521,7 +1521,7 @@ impl Render for NativeProductShell {
                                     .child(
                                         div()
                                             .id(format!("delete-preview-{}", pending_id))
-                                            .role(gpui::Role::Alert)
+                                            .role(gpui_kit::Role::Alert)
                                             .child(lines.join(" ")),
                                     )
                                     .child(
@@ -1586,7 +1586,7 @@ impl Render for NativeProductShell {
                     content = content.child(
                         div()
                             .id("settings-error")
-                            .role(gpui::Role::Alert)
+                            .role(gpui_kit::Role::Alert)
                             .child(error),
                     );
                 } else if let Some(settings) = self.settings.as_ref() {

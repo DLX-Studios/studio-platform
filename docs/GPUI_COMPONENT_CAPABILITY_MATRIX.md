@@ -1,6 +1,6 @@
 # GPUI Component Capability Matrix
 
-This inventory is generated from the vendored `gpui-component` source and is the source of truth
+This inventory is generated from the vendored `gpui-kit` source and is the source of truth
 for runtime adapter work. Components are grouped by the amount of host state they require.
 
 ## Direct, stateless elements

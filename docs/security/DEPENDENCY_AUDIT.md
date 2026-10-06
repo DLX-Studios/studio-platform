@@ -1,7 +1,7 @@
 # Dependency and Supply-Chain Audit
 
 Audit date: 2026-08-04. Inputs: `Cargo.lock`, `bun.lock`, workspace manifests, the vendored
-`gpui-component` tree, `cargo tree --locked -e features,no-dev`, `bun pm ls --all`, `cargo audit`,
+`gpui-kit` tree, `cargo tree --locked -e features,no-dev`, `bun pm ls --all`, `cargo audit`,
 and `bun audit`. Detailed findings are recorded in
 `docs/security/RELEASE_REVIEW_2026-08-04.md`.
 
@@ -16,7 +16,7 @@ and `bun audit`. Detailed findings are recorded in
 | zip | exact `8.6.0`, stored/deflate features | bundle inspection | stored-only shipping output; paths/metadata/limits audited |
 | getrandom/zeroize | exact pins | opaque references and erasure | CSPRNG handles; terminal registry cleanup |
 | GPUI/GPUI platform | exact Git revision | native UI | current Zed main pin, default features off; Wayland only; release ELF has no X11/XCB |
-| gpui-component | vendored full upstream fork | native controls, themes, accessibility | Wayland-only GPUI pin; full vendor delta recorded |
+| gpui-kit | vendored full upstream fork | native controls, themes, accessibility | Wayland-only GPUI `gpui-pre 0.3.7` pin; full vendor delta recorded |
 | AssemblyScript/TypeScript/Bun types | `bun.lock` | guest SDK/tooling | build-time only; starter and POS compile under lockfile |
 
 ## Findings and release disposition

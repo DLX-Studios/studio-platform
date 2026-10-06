@@ -13,14 +13,14 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use gpui::{
-    AnyElement, Context as GpuiContext, Entity, FocusHandle, IntoElement, ParentElement, Render,
-    Role, Subscription, Window, div, prelude::*, px, rgb,
-};
-use gpui_component::{
+use gpui_kit::component::{
     Disableable,
     button::{Button, ButtonVariants},
     input::{Editor, EditorState, InputEvent},
+};
+use gpui_kit::{
+    AnyElement, Context as GpuiContext, Entity, FocusHandle, IntoElement, ParentElement, Render,
+    Role, Subscription, Window, div, prelude::*, px, rgb,
 };
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
@@ -1883,7 +1883,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             .child(
                 div()
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(format!("{kind} · {}", node.id)),
             )
             .children(children)

@@ -7,13 +7,16 @@ use gpui::{
 
 use super::{Input, TextareaState};
 use crate::native_menu::NativeMenu;
-use crate::{RoleOverride, StyledExt as _};
+use crate::{RoleOverride, Sizable, Size, StyledExt as _};
 
 /// A styled ordinary multi-line text field.
 #[derive(IntoElement)]
 pub struct Textarea {
+    token_renderer: Option<gpui_base::input::InlineTokenRenderer>,
+    token_click_listener: Option<gpui_base::input::InlineTokenClickListener>,
     state: Entity<TextareaState>,
     style: StyleRefinement,
+    size: Size,
     height: Option<DefiniteLength>,
     appearance: bool,
     bordered: bool,
@@ -21,6 +24,7 @@ pub struct Textarea {
     readonly: bool,
     tab_index: isize,
     role: RoleOverride,
+    accessibility_id: Option<SharedString>,
     aria_label: Option<SharedString>,
 
     /// An optional context menu builder to allow a custom context menu.
@@ -32,10 +36,32 @@ pub struct Textarea {
 }
 
 impl Textarea {
+    /// The element each atomic inline token renders as, in place of the default
+    /// [`InputToken`](super::InputToken); editing and history stay
+    /// with the input.
+    pub fn token<R: IntoElement>(
+        mut self,
+        render: impl Fn(&super::InlineTokenContext, &mut Window, &mut App) -> R + 'static,
+    ) -> Self {
+        self.token_renderer = Some(Rc::new(move |token, window, cx| {
+            render(token, window, cx).into_any_element()
+        }));
+        self
+    }
+    /// Open a reference after a completed, unconsumed token click.
+    pub fn on_token_click(
+        mut self,
+        listener: impl Fn(&super::InlineTokenClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.token_click_listener = Some(Rc::new(listener));
+        self
+    }
+
     pub fn new(state: &Entity<TextareaState>) -> Self {
         Self {
             state: state.clone(),
             style: StyleRefinement::default(),
+            size: Size::default(),
             height: None,
             appearance: true,
             bordered: true,
@@ -43,9 +69,12 @@ impl Textarea {
             readonly: false,
             tab_index: 0,
             role: RoleOverride::default(),
+            accessibility_id: None,
             aria_label: None,
             context_menu_builder: None,
             paste_handler: None,
+            token_renderer: None,
+            token_click_listener: None,
         }
     }
 
@@ -89,6 +118,12 @@ impl Textarea {
         self
     }
 
+    /// Set the developer-assigned accessibility identifier.
+    pub fn accessibility_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.accessibility_id = Some(id.into());
+        self
+    }
+
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.aria_label = Some(label.into());
         self
@@ -97,7 +132,9 @@ impl Textarea {
     /// Replace the built-in context menu shown on right-click.
     ///
     /// The closure receives an empty menu and returns the one to show, so it
-    /// decides entirely what appears — the default items are not added.
+    /// decides entirely what appears — the default items are not added. It
+    /// shows only while the state's context menu is enabled, which is the
+    /// default.
     pub fn context_menu(
         mut self,
         f: impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static,
@@ -121,22 +158,39 @@ impl Textarea {
     }
 }
 
+impl Sizable for Textarea {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
 impl Styled for Textarea {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
     }
 }
 
-impl RenderOnce for Textarea {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+impl Textarea {
+    /// The [`Input`] this textarea renders, for a compound control that frames
+    /// it.
+    pub(crate) fn into_input(self) -> Input {
         Input::from_state(self.state.clone())
+            .when_some(self.token_renderer, |this, render| {
+                this.token(move |token, window, cx| render(token, window, cx))
+            })
+            .when_some(self.token_click_listener, |this, listener| {
+                this.on_token_click(move |event, window, cx| listener(event, window, cx))
+            })
             .appearance(self.appearance)
             .bordered(self.bordered)
             .disabled(self.disabled)
             .readonly(self.readonly)
             .tab_index(self.tab_index)
             .role(self.role)
+            .with_size(self.size)
             .when_some(self.height, |this, height| this.h(height))
+            .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .when_some(self.context_menu_builder, |this, build| {
                 this.context_menu(move |menu, window, cx| build(menu, window, cx))
@@ -145,6 +199,12 @@ impl RenderOnce for Textarea {
                 this.on_paste(move |item, window, cx| handler(item, window, cx))
             })
             .refine_style(&self.style)
+    }
+}
+
+impl RenderOnce for Textarea {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        self.into_input()
     }
 }
 

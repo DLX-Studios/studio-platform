@@ -319,6 +319,7 @@ impl CallbackReceiver for TestCallbackReceiver {
             code: Some(String::from("one-time-code")),
             state: Some(state),
             denied: false,
+            form_fields: BTreeMap::new(),
         })
     }
 }

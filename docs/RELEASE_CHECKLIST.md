@@ -29,7 +29,7 @@
 - [ ] Review the Cargo/Bun lockfile delta and vulnerability advisories; see
   `docs/security/RELEASE_REVIEW_2026-08-04.md` (known-vulnerability scan is clean; unmaintained
   transitive crates remain for review).
-- [ ] Confirm Oxide extraction ledger and gpui-component SHA/delta remain accurate.
+- [ ] Confirm Oxide extraction ledger and gpui-kit SHA/delta remain accurate.
 - [ ] Obtain legal confirmation for licenses of the final linked GPUI binary and collect notices;
   the release review identifies GPL-linked Zed crates and metadata gaps requiring confirmation.
 - [ ] Confirm no production provider terminal printer network or filesystem capability was added.

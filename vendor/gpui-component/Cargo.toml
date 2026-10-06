@@ -7,7 +7,7 @@ documentation = "https://docs.rs/gpui-component"
 homepage = "https://gpui-kit.com"
 repository = "https://github.com/longbridge/gpui-kit"
 readme = "../../README.md"
-version = "0.6.1-studio.1"
+version = "0.7.0-studio.1"
 publish = false
 edition = "2024"
 rust-version = "1.93"
@@ -17,7 +17,7 @@ doctest = false
 
 [features]
 test-support = ["gpui/test-support", "gpui-base/test-support"]
-decimal = ["dep:rust_decimal"]
+decimal = ["gpui-base/decimal"]
 inspector = ["gpui_macros/inspector", "gpui/inspector", "gpui-base/inspector"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-json"]
 
@@ -99,8 +99,8 @@ tree-sitter-zig = ["tree-sitter", "dep:tree-sitter-zig"]
 [dependencies]
 regex = "1"
 anyhow = "1"
-gpui = { version = "=0.3.5", package = "gpui-pre", default-features = false, features = ["wayland"] }
-gpui_macros = { version = "=0.3.5", package = "gpui-pre-macros" }
+gpui = { version = "=0.3.7", package = "gpui-pre", default-features = false, features = ["wayland"] }
+gpui_macros = { version = "=0.3.7", package = "gpui-pre-macros" }
 gpui-base = { path = "../gpui-base" }
 gpui-component-macros = { path = "../gpui-component-macros" }
 gpui-kit-assets = { path = "../gpui-kit-assets" }
@@ -112,7 +112,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1"
 serde_repr = "0.1"
 smallvec = "1"
-sum-tree = { version = "=0.3.5", package = "gpui-pre-sum-tree" }
+sum-tree = { version = "=0.3.7", package = "gpui-pre-sum-tree" }
 tracing = "0.1.41"
 log = "0.4"
 markdown = { version = "1.0.0", features = ["serde"] }
@@ -206,4 +206,3 @@ windows = { version = "0.58.0", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
-

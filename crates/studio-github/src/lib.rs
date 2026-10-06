@@ -26,99 +26,28 @@ use studio_net::{BrokerError, GuestRestApi};
 use studio_security::BrokerCredentialSink;
 use thiserror::Error;
 
-/// Stable first-party provider identifier.
-pub const GITHUB_PROVIDER_ID: &str = "github";
-/// Version of the maintained provider descriptor shipped with this SDK.
-pub const GITHUB_PROVIDER_VERSION: &str = "1.1.0";
+/// Host-maintained provider identity and descriptor, owned by `studio_oauth`.
+pub use studio_oauth::{
+    DESCRIPTOR_SCHEMA_VERSION as GITHUB_DESCRIPTOR_SCHEMA_VERSION,
+    GITHUB_DESCRIPTOR_VERSION as GITHUB_PROVIDER_VERSION, GITHUB_PROVIDER_ID,
+};
+
 /// GitHub API origin used by the proof application.
 pub const GITHUB_API_ORIGIN: &str = "https://api.github.com";
-/// Provider descriptor schema version.
-pub const GITHUB_DESCRIPTOR_SCHEMA_VERSION: u16 = 1;
 
-/// Host-owned client authentication mode declared by the GitHub provider.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ClientAuthentication {
-    /// Public client using an S256 PKCE verifier without a client secret.
-    Pkce,
-    /// Confidential client using a protected client secret without PKCE.
-    ConfidentialClient,
-    /// Confidential client using both a protected client secret and S256 PKCE.
-    PkceConfidentialClient,
-}
-
-/// The host-owned GitHub OAuth provider descriptor.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GithubProviderDescriptor {
-    /// Stable provider id.
-    pub id: &'static str,
-    /// Independently updateable descriptor version.
-    pub version: &'static str,
-    /// Authorization endpoint.
-    pub authorization_endpoint: &'static str,
-    /// Token exchange endpoint.
-    pub token_endpoint: &'static str,
-    /// User profile endpoint.
-    pub profile_endpoint: &'static str,
-    /// Requested OAuth scopes.
-    pub scopes: &'static [&'static str],
-    /// Authorization code protection strategy.
-    pub client_authentication: ClientAuthentication,
-    /// GitHub does not issue refresh tokens for this flow.
-    pub refresh: RefreshSemantics,
-    /// Provider-specific profile handling.
-    pub profile: GithubProfileMapping,
-}
-
-/// OAuth refresh behavior declared by a provider.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefreshSemantics {
-    /// The access session expires and must be signed in again.
-    None,
-}
-
-/// GitHub profile quirks that the host handles before guest visibility.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GithubProfileMapping {
-    /// Fallback field used when the public profile has no email.
-    pub private_email_fallback: &'static str,
-    /// The provider action used to obtain that fallback.
-    pub email_endpoint: &'static str,
-}
-
-/// Return the maintained GitHub provider descriptor.
+/// The maintained GitHub provider descriptor the host executes.
+///
+/// Descriptor data has exactly one home: the host catalog in `studio_oauth`. This SDK consumes
+/// that descriptor rather than redeclaring a second, divergent copy.
 #[must_use]
-pub const fn provider_descriptor() -> GithubProviderDescriptor {
-    GithubProviderDescriptor {
-        id: GITHUB_PROVIDER_ID,
-        version: GITHUB_PROVIDER_VERSION,
-        authorization_endpoint: "https://github.com/login/oauth/authorize",
-        token_endpoint: "https://github.com/login/oauth/access_token",
-        profile_endpoint: "/user",
-        scopes: &["read:user", "user:email"],
-        client_authentication: ClientAuthentication::PkceConfidentialClient,
-        refresh: RefreshSemantics::None,
-        profile: GithubProfileMapping {
-            private_email_fallback: "primary verified email",
-            email_endpoint: "/user/emails",
-        },
-    }
+pub fn provider_descriptor() -> studio_oauth::ProviderDescriptor {
+    studio_oauth::ProviderDescriptor::github()
 }
 
-/// Serialize the maintained provider descriptor for signed package metadata.
+/// Serialize the host-maintained descriptor for signed package metadata.
 #[must_use]
 pub fn descriptor_document() -> Value {
-    json!({
-        "schemaVersion": GITHUB_DESCRIPTOR_SCHEMA_VERSION,
-        "id": GITHUB_PROVIDER_ID,
-        "version": GITHUB_PROVIDER_VERSION,
-        "authorizationEndpoint": "https://github.com/login/oauth/authorize",
-        "tokenEndpoint": "https://github.com/login/oauth/access_token",
-        "profileEndpoint": "/user",
-        "scopes": ["read:user", "user:email"],
-        "clientAuthentication": "pkceConfidentialClient",
-        "refresh": "none",
-        "privateEmailFallback": { "endpoint": "/user/emails", "field": "primary verified email" }
-    })
+    serde_json::to_value(provider_descriptor()).expect("host-owned GitHub descriptor serializes")
 }
 
 /// Provider session state safe to expose to the application shell.
@@ -582,7 +511,7 @@ impl<'api> GithubViewer<'api> {
 
     /// Start the provider-owned sign-in handoff. Browser and callback capture stay host-owned.
     #[must_use]
-    pub const fn sign_in_request() -> GithubSignInRequest {
+    pub fn sign_in_request() -> GithubSignInRequest {
         GithubSignInRequest {
             provider: GITHUB_PROVIDER_ID,
             scopes: provider_descriptor().scopes,
@@ -594,11 +523,7 @@ impl<'api> GithubViewer<'api> {
     pub fn sign_in_event() -> GithubGuestEvent {
         GithubGuestEvent::SignInRequested {
             provider: GITHUB_PROVIDER_ID.to_owned(),
-            scopes: provider_descriptor()
-                .scopes
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect(),
+            scopes: provider_descriptor().scopes,
         }
     }
 
@@ -674,17 +599,17 @@ impl<'api> GithubViewer<'api> {
 }
 
 /// Host request emitted when the viewer begins OAuth.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GithubSignInRequest {
     /// Provider descriptor identity.
     pub provider: &'static str,
     /// Scopes requested by the maintained descriptor.
-    pub scopes: &'static [&'static str],
+    pub scopes: Vec<String>,
 }
 
 /// Start the provider-owned sign-in handoff without requiring a client or a session token.
 #[must_use]
-pub const fn sign_in_request() -> GithubSignInRequest {
+pub fn sign_in_request() -> GithubSignInRequest {
     GithubSignInRequest {
         provider: GITHUB_PROVIDER_ID,
         scopes: provider_descriptor().scopes,
@@ -721,8 +646,15 @@ mod tests {
     use studio_net::limits::BrokerLimits;
 
     #[test]
-    fn descriptor_and_routes_are_stable_and_bounded() {
-        assert_eq!(provider_descriptor().id, GITHUB_PROVIDER_ID);
+    fn descriptor_comes_from_the_host_catalog_and_routes_are_bounded() {
+        // The SDK must not restate descriptor data; it serializes the host-owned descriptor.
+        let descriptor = provider_descriptor();
+        assert_eq!(descriptor.id, GITHUB_PROVIDER_ID);
+        assert_eq!(descriptor.version, GITHUB_PROVIDER_VERSION);
+        assert_eq!(
+            descriptor_document(),
+            serde_json::to_value(studio_oauth::ProviderDescriptor::github()).unwrap()
+        );
         assert_eq!(
             descriptor_document()["clientAuthentication"],
             "pkceConfidentialClient"
@@ -742,7 +674,10 @@ mod tests {
     fn sign_in_request_contains_only_provider_metadata() {
         let request = sign_in_request();
         assert_eq!(request.provider, GITHUB_PROVIDER_ID);
-        assert_eq!(request.scopes, &["read:user", "user:email"]);
+        assert_eq!(
+            request.scopes,
+            vec![String::from("read:user"), String::from("user:email")]
+        );
     }
 
     #[test]

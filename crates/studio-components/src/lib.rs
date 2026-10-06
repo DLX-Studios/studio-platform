@@ -16,7 +16,7 @@ pub use catalog::{
 };
 pub use controls::RuntimeControl;
 pub use events::{DispatchError, DispatchErrorCode, HostEventDispatcher, InputAction};
-pub use gpui_component::animation;
+pub use gpui_kit::component::animation;
 pub use secret_input::{
     HostSecretInput, SecretInputError, SecretInputErrorCode, SecretInputSnapshot,
 };

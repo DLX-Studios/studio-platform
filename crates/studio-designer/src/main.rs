@@ -1,14 +1,14 @@
 //! Wayland-only Studio Designer application.
 
-use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
-use gpui_component::{Root, Theme, ThemeMode, TitleBar};
-use gpui_kit_assets::Assets;
-use gpui_platform::application;
+use gpui_kit::assets::Assets;
+use gpui_kit::component::{Root, Theme, ThemeMode, TitleBar};
+use gpui_kit::platform::application;
+use gpui_kit::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use studio_designer::bootstrap::{NativeProductBootstrap, NativeProductShell};
 
 fn run(application: Application, bootstrap: NativeProductBootstrap) {
     application.run(move |cx: &mut App| {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(
@@ -20,7 +20,7 @@ fn run(application: Application, bootstrap: NativeProductBootstrap) {
             move |window, cx| {
                 let reduced_motion = cx.reduce_motion();
                 let shell = cx.new(|_cx| NativeProductShell::new(bootstrap, reduced_motion));
-                cx.new(|cx| Root::new(shell, window, cx).bordered(false))
+                cx.new(|cx| Root::new(shell, window, cx))
             },
         )
         .expect("Studio Designer could not create its Wayland window");

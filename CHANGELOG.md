@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — gpui-kit 0.7.0 migration
+
+- Moved the vendored component library from the `gpui-component` crates to the `gpui-kit`
+  facade at 0.7.0.
+- Raised the pinned `gpui-pre` and `gpui-pre-platform` versions from 0.3.5 to 0.3.7.
+- Moved component imports to `gpui_kit::component`, assets to `gpui_kit::assets`, and platform
+  utilities to `gpui_kit::platform`.
+- Replaced `gpui_component::init` with `gpui_kit::init`.
+- Removed the `Root::bordered(false)` call sites, which no longer exist in 0.7.0.
+
 ## Unreleased — Studio Runtime platform foundation
 
 Studio Platform is the native application runtime monorepo. It owns the protocol, retained UI

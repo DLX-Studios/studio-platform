@@ -7,12 +7,7 @@ use std::{
     time::Duration,
 };
 
-use gpui::{
-    Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, Image, ImageFormat,
-    IntoElement, KeyDownEvent, ParentElement, Render, Role, SharedString, Subscription, Window,
-    div, img, prelude::*, px, rgb, text,
-};
-use gpui_component::{
+use gpui_kit::component::{
     Disableable, IndexPath, Selectable,
     badge::Badge,
     button::{Button, ButtonVariants},
@@ -34,6 +29,11 @@ use gpui_component::{
     spinner::Spinner,
     switch::Switch,
     tag::Tag,
+};
+use gpui_kit::{
+    Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, Image, ImageFormat,
+    IntoElement, KeyDownEvent, ParentElement, Render, Role, SharedString, Subscription, Window,
+    div, img, prelude::*, px, rgb, text,
 };
 use studio_components::{InputAction, PropertyTransition, RuntimeControl, component_readiness};
 use studio_navigation::MotionPreference;
@@ -245,13 +245,13 @@ fn node_transition(node: &PluginRenderNode, reduced_motion: bool) -> Option<Node
     Some(NodeTransition { duration, curve })
 }
 
-fn semantic_background(value: Option<&str>) -> gpui::Hsla {
+fn semantic_background(value: Option<&str>) -> gpui_kit::Hsla {
     match value {
         Some("surface_variant") => rgb(COLOR_SURFACE_VARIANT).into(),
         Some("success") => rgb(COLOR_SUCCESS).into(),
         Some("warning") => rgb(COLOR_WARNING).into(),
         Some("error") => rgb(COLOR_ERROR).into(),
-        Some("transparent") => gpui::transparent_black(),
+        Some("transparent") => gpui_kit::transparent_black(),
         _ => rgb(COLOR_SURFACE).into(),
     }
 }
@@ -1048,8 +1048,8 @@ impl FoundationGallery {
             .when(!enabled, |element| element.opacity(0.5 * opacity))
             .when(selected, |element| element.border_color(rgb(COLOR_TEXT)))
             .when(interactive, |element| element.focusable().tab_stop(true))
-            .when(horizontal, gpui::Styled::flex_row)
-            .when(!horizontal, gpui::Styled::flex_col)
+            .when(horizontal, gpui_kit::Styled::flex_row)
+            .when(!horizontal, gpui_kit::Styled::flex_col)
             .when(scrollable, |element| {
                 element.max_h(px(320.0)).overflow_y_scroll()
             })
@@ -1065,7 +1065,7 @@ impl FoundationGallery {
                 element.child(
                     div()
                         .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(heading.clone()),
                 )
             })
@@ -1094,13 +1094,15 @@ impl FoundationGallery {
         depth: usize,
         dimmed: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let dismiss_id = node_id.to_owned();
         div()
             .id(format!("{node_id}:overlay:{depth}"))
             .absolute()
             .inset_0()
-            .when(dimmed, |element| element.bg(gpui::hsla(0.0, 0.0, 0.0, 0.5)))
+            .when(dimmed, |element| {
+                element.bg(gpui_kit::hsla(0.0, 0.0, 0.0, 0.5))
+            })
             .flex()
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key.as_str() == "escape" {
@@ -1116,7 +1118,7 @@ impl FoundationGallery {
         message: Option<String>,
         width: f32,
         children: Vec<AnyElement>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         div()
             .w(px(width))
             .max_w(px(560.0))
@@ -1132,7 +1134,7 @@ impl FoundationGallery {
             .child(
                 div()
                     .text_xl()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(title),
             )
             .when_some(message, |element, message| {
@@ -1380,11 +1382,14 @@ impl FoundationGallery {
                     .flex_grow(flex)
                     .flex()
                     .flex_col()
-                    .when(alignment == "start", gpui::Styled::items_start)
-                    .when(alignment == "center", gpui::Styled::items_center)
-                    .when(alignment == "end", gpui::Styled::items_end)
-                    .when(alignment == "stretch", gpui::Styled::items_stretch)
-                    .when(alignment == "space_between", gpui::Styled::justify_between)
+                    .when(alignment == "start", gpui_kit::Styled::items_start)
+                    .when(alignment == "center", gpui_kit::Styled::items_center)
+                    .when(alignment == "end", gpui_kit::Styled::items_end)
+                    .when(alignment == "stretch", gpui_kit::Styled::items_stretch)
+                    .when(
+                        alignment == "space_between",
+                        gpui_kit::Styled::justify_between,
+                    )
                     .gap(px(gap))
                     .children(children)
                     .into_any_element()
@@ -1404,14 +1409,17 @@ impl FoundationGallery {
                     .min_h_0()
                     .flex_grow(flex)
                     .flex()
-                    .when(alignment.is_none(), gpui::Styled::items_center)
-                    .when(alignment == Some("start"), gpui::Styled::items_start)
-                    .when(alignment == Some("center"), gpui::Styled::items_center)
-                    .when(alignment == Some("end"), gpui::Styled::items_end)
-                    .when(alignment == Some("stretch"), gpui::Styled::items_stretch)
+                    .when(alignment.is_none(), gpui_kit::Styled::items_center)
+                    .when(alignment == Some("start"), gpui_kit::Styled::items_start)
+                    .when(alignment == Some("center"), gpui_kit::Styled::items_center)
+                    .when(alignment == Some("end"), gpui_kit::Styled::items_end)
+                    .when(
+                        alignment == Some("stretch"),
+                        gpui_kit::Styled::items_stretch,
+                    )
                     .when(
                         alignment == Some("space_between"),
-                        gpui::Styled::justify_between,
+                        gpui_kit::Styled::justify_between,
                     )
                     .gap(px(gap))
                     .children(children)
@@ -1427,8 +1435,8 @@ impl FoundationGallery {
                         element.aria_label(label)
                     })
                     .flex()
-                    .when(horizontal, gpui::Styled::flex_row)
-                    .when(!horizontal, gpui::Styled::flex_col)
+                    .when(horizontal, gpui_kit::Styled::flex_row)
+                    .when(!horizontal, gpui_kit::Styled::flex_col)
                     .min_h_0()
                     .min_w_0()
                     .flex_grow_1()
@@ -1436,11 +1444,11 @@ impl FoundationGallery {
                     .gap(px(gap))
                     .when(
                         horizontal,
-                        gpui::StatefulInteractiveElement::overflow_x_scroll,
+                        gpui_kit::StatefulInteractiveElement::overflow_x_scroll,
                     )
                     .when(
                         !horizontal,
-                        gpui::StatefulInteractiveElement::overflow_y_scroll,
+                        gpui_kit::StatefulInteractiveElement::overflow_y_scroll,
                     )
                     .children(children)
                     .into_any_element()
@@ -1460,11 +1468,11 @@ impl FoundationGallery {
                     .flex_grow_1()
                     .when(
                         horizontal,
-                        gpui::StatefulInteractiveElement::overflow_x_scroll,
+                        gpui_kit::StatefulInteractiveElement::overflow_x_scroll,
                     )
                     .when(
                         !horizontal,
-                        gpui::StatefulInteractiveElement::overflow_y_scroll,
+                        gpui_kit::StatefulInteractiveElement::overflow_y_scroll,
                     )
                     .children(children)
                     .into_any_element()
@@ -1514,8 +1522,11 @@ impl FoundationGallery {
                     .when(alignment == "end", |element| {
                         element.items_end().justify_end()
                     })
-                    .when(alignment == "stretch", gpui::Styled::items_stretch)
-                    .when(alignment == "space_between", gpui::Styled::justify_between)
+                    .when(alignment == "stretch", gpui_kit::Styled::items_stretch)
+                    .when(
+                        alignment == "space_between",
+                        gpui_kit::Styled::justify_between,
+                    )
                     .children(children)
                     .into_any_element()
             }
@@ -1580,7 +1591,7 @@ impl FoundationGallery {
                     .flex_grow(flex)
                     .flex()
                     .flex_col()
-                    .when(shrink, gpui::Styled::flex_shrink_0)
+                    .when(shrink, gpui_kit::Styled::flex_shrink_0)
                     .p(px(padding))
                     .bg(background)
                     .children(children)
@@ -1691,7 +1702,7 @@ impl FoundationGallery {
                         .py(px(2.0))
                         .rounded_full()
                         .text_xs()
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .bg(rgb(COLOR_SUCCESS))
                         .text_color(rgb(COLOR_TEXT))
                         .child(label)
@@ -1784,10 +1795,10 @@ impl FoundationGallery {
                             }),
                             |element, label| element.aria_label(label),
                         )
-                        .when(width.is_none(), gpui::Styled::w_full)
+                        .when(width.is_none(), gpui_kit::Styled::w_full)
                         .when_some(width, |element, width| element.w(px(width)))
                         .when_some(height, |element, height| element.h(px(height)))
-                        .object_fit(gpui::ObjectFit::Cover)
+                        .object_fit(gpui_kit::ObjectFit::Cover)
                         .rounded_md()
                         .into_any_element(),
                     None => div()
@@ -1801,9 +1812,9 @@ impl FoundationGallery {
                                     .and_then(serde_json::Value::as_str)
                                     .map(ToOwned::to_owned)
                             }),
-                            gpui::StatefulInteractiveElement::aria_label,
+                            gpui_kit::StatefulInteractiveElement::aria_label,
                         )
-                        .when(width.is_none(), gpui::Styled::w_full)
+                        .when(width.is_none(), gpui_kit::Styled::w_full)
                         .when_some(width, |element, width| element.w(px(width)))
                         .when_some(height, |element, height| element.h(px(height)))
                         .rounded_md()
@@ -1911,7 +1922,7 @@ impl FoundationGallery {
                 let content = match source {
                     Some(source) => img(source)
                         .size(px(40.0))
-                        .object_fit(gpui::ObjectFit::Cover)
+                        .object_fit(gpui_kit::ObjectFit::Cover)
                         .rounded_full()
                         .into_any_element(),
                     None => div()
@@ -1922,7 +1933,7 @@ impl FoundationGallery {
                         .justify_center()
                         .bg(rgb(COLOR_SURFACE_VARIANT))
                         .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(fallback)
                         .into_any_element(),
                 };
@@ -1930,7 +1941,7 @@ impl FoundationGallery {
                     .id(node.id)
                     .role(Role::Image)
                     .opacity(opacity)
-                    .when_some(alt, gpui::StatefulInteractiveElement::aria_label)
+                    .when_some(alt, gpui_kit::StatefulInteractiveElement::aria_label)
                     .child(content)
                     .into_any_element()
             }
@@ -1963,7 +1974,11 @@ impl FoundationGallery {
                     .border_1()
                     .border_color(rgb(COLOR_BORDER_SUBTLE))
                     .bg(rgb(COLOR_SURFACE_VARIANT))
-                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                    .child(
+                        div()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
                     .when(!description.is_empty(), |element| {
                         element.child(
                             div()
@@ -2138,9 +2153,9 @@ impl FoundationGallery {
                     })
                     .flex_shrink_0()
                     .flex()
-                    .when(vertical, gpui::Styled::flex_col)
-                    .when(!vertical, gpui::Styled::flex_row)
-                    .when(vertical, gpui::Styled::h_full)
+                    .when(vertical, gpui_kit::Styled::flex_col)
+                    .when(!vertical, gpui_kit::Styled::flex_row)
+                    .when(vertical, gpui_kit::Styled::h_full)
                     .items_center()
                     .gap_2()
                     .p_2()
@@ -2290,7 +2305,7 @@ impl FoundationGallery {
                                 .border_b_1()
                                 .border_color(rgb(COLOR_BORDER))
                                 .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .text_color(rgb(COLOR_MUTED))
                                 .children(columns.iter().map(|column| {
                                     div()
@@ -2388,7 +2403,7 @@ impl FoundationGallery {
                     root.with_animation(
                         format!("{}:fade", node.id),
                         Animation::new(Duration::from_millis(150)),
-                        gpui::Styled::opacity,
+                        gpui_kit::Styled::opacity,
                     )
                     .into_any_element()
                 }
@@ -2419,7 +2434,7 @@ impl FoundationGallery {
                     root.with_animation(
                         format!("{}:fade", node.id),
                         Animation::new(Duration::from_millis(150)),
-                        gpui::Styled::opacity,
+                        gpui_kit::Styled::opacity,
                     )
                     .into_any_element()
                 }
@@ -2450,7 +2465,7 @@ impl FoundationGallery {
                         element.child(
                             div()
                                 .text_lg()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                 .child(title),
                         )
                     })
@@ -2478,7 +2493,7 @@ impl FoundationGallery {
                     root.with_animation(
                         format!("{}:fade", node.id),
                         Animation::new(Duration::from_millis(150)),
-                        gpui::Styled::opacity,
+                        gpui_kit::Styled::opacity,
                     )
                     .into_any_element()
                 }
@@ -2690,7 +2705,7 @@ impl FoundationGallery {
                     .children(children)
                     .when(!tip.is_empty(), |element| {
                         element.tooltip(move |window, cx| {
-                            use gpui_component::tooltip;
+                            use gpui_kit::component::tooltip;
                             tooltip::Tooltip::new(tip.clone()).build(window, cx)
                         })
                     })
@@ -2724,13 +2739,13 @@ impl FoundationGallery {
                         element.text_xl().text_color(rgb(COLOR_MUTED))
                     })
                     .when(role == "label", |el| {
-                        el.text_base().font_weight(gpui::FontWeight::MEDIUM)
+                        el.text_base().font_weight(gpui_kit::FontWeight::MEDIUM)
                     })
                     .when(role == "headline", |el| {
-                        el.text_lg().font_weight(gpui::FontWeight::SEMIBOLD)
+                        el.text_lg().font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     })
                     .when(role == "display", |el| {
-                        el.text_2xl().font_weight(gpui::FontWeight::BOLD)
+                        el.text_2xl().font_weight(gpui_kit::FontWeight::BOLD)
                     })
                     .child(value)
                     .into_any_element()
@@ -2748,7 +2763,7 @@ impl FoundationGallery {
                     .label(label)
                     .disabled(!enabled)
                     .opacity(opacity)
-                    .when(full_width, gpui::Styled::w_full);
+                    .when(full_width, gpui_kit::Styled::w_full);
                 let (secondary, selected) = button_variant(variant);
                 let button = if secondary {
                     button.secondary()
@@ -2861,8 +2876,8 @@ impl FoundationGallery {
                     .min_w_0()
                     .flex()
                     .flex_wrap()
-                    .when(vertical, gpui::Styled::flex_col)
-                    .when(!vertical, gpui::Styled::flex_row)
+                    .when(vertical, gpui_kit::Styled::flex_col)
+                    .when(!vertical, gpui_kit::Styled::flex_row)
                     .gap(px(gap))
                     .children(children)
                     .into_any_element()
@@ -3058,7 +3073,7 @@ impl FoundationGallery {
                         element.child(
                             div()
                                 .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
                                 .child(label.clone()),
                         )
                     })
@@ -3133,7 +3148,7 @@ impl FoundationGallery {
                         transition_id,
                         Animation::new(transition.duration)
                             .with_easing(move |delta| transition.curve.sample(delta)),
-                        gpui::Styled::opacity,
+                        gpui_kit::Styled::opacity,
                     )
                     .into_any_element()
             }

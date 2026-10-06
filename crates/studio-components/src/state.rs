@@ -263,7 +263,7 @@ impl NativeStateStore {
         Ok(self.input_buffers.get(node_id).map_or("", String::as_str))
     }
 
-    /// Store a host-owned state value for a stateful gpui-component node.
+    /// Store a host-owned state value for a stateful GPUI Kit node.
     ///
     /// # Errors
     ///
@@ -284,7 +284,7 @@ impl NativeStateStore {
         Ok(())
     }
 
-    /// Read a host-owned state value for a stateful gpui-component node.
+    /// Read a host-owned state value for a stateful GPUI Kit node.
     ///
     /// # Errors
     ///

@@ -27,7 +27,7 @@ studio-app
                        -> studio-navigation
                        -> studio-security
                        -> studio-ui -> studio-protocol
-                       -> vendor/gpui-component -> GPUI (pinned Wayland build)
+                       -> vendor/gpui-kit -> GPUI (pinned Wayland build)
   -> studio-navigation
   -> studio-package
   -> studio-protocol
@@ -88,7 +88,7 @@ Security-sensitive public surfaces that require additional review are:
 | protocol fixtures and generator | `protocol/fixtures/**` | generator rejects stale files |
 | `routes/*.studio` | `assembly/routes.generated.ts` | `studio-cli`; never hand-edit |
 | AssemblyScript SDK sources | `sdk/assemblyscript/build/**` | Bun/ASC build output, not API source |
-| vendored Longbridge source plus patch workflow | `vendor/gpui-component*` | upstream sync scripts and delta doc |
+| vendored Longbridge source plus patch workflow | `vendor/gpui-kit*`, `vendor/gpui-component*` | upstream sync scripts and delta doc |
 
 `protocol/` is the canonical contract tree. Generated files never initiate a move.
 
@@ -110,7 +110,7 @@ Security-sensitive public surfaces that require additional review are:
 
 | Area | Existing owners | Decision |
 |---|---|---|
-| component widgets | `gpui-component`, `studio-components` | Longbridge implements widgets; Studio supplies protocol adapters and lifecycle only |
+| component widgets | `gpui-kit`, `studio-components` | Longbridge implements widgets; Studio supplies protocol adapters and lifecycle only |
 | retained state | `studio-ui`, `studio-components::state`, upstream entities | registry owns node identity; component state registry owns GPUI entities; do not merge their responsibilities |
 | routing | `studio-navigation`, `studio-app::router` | generic plugin routing stays in navigation; checkout/host-sensitive routes remain host-owned |
 | events | protocol `UiEvent`, component dispatcher, SDK registry | one versioned envelope; host router owns registration and cleanup |
@@ -121,8 +121,8 @@ Security-sensitive public surfaces that require additional review are:
 
 | Source | Status | License/provenance action |
 |---|---|---|
-| Longbridge `gpui-component` | vendored audited revision `fb26e61` (0.6.1); primary implementation base | Apache-2.0 files and delta recorded in notices |
-| Zed GPUI via `gpui-pre 0.3.5` | crates.io distribution with Wayland-only features (no git pin) | distribution license review remains required |
+| Longbridge `gpui-kit` | vendored audited revision `0c830f4` (0.7.0); primary implementation base | Apache-2.0 files and delta recorded in notices |
+| Zed GPUI via `gpui-pre 0.3.7` | crates.io distribution with Wayland-only features (no git pin) | distribution license review remains required |
 | adabraka-ui | reference only; no local source imported | verify repository/revision/license before any code copy |
 | gpui-nav | pattern source only; no local source imported | verify repository/revision/license before any code copy |
 | gpui-router | pattern source only; no local source imported | verify repository/revision/license before any code copy |

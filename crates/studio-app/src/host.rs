@@ -14,8 +14,8 @@ use studio_net::{
     TransportLimits,
 };
 use studio_oauth::{
-    BrowserHandoff, CallbackListener, EntropySource, GithubHttpsOAuthTransport, OAuthManager,
-    OsEntropy, ProtectedOAuthTokenStore, ProtectedSecretReference, ProviderPackage,
+    BrowserHandoff, CallbackListener, EntropySource, HttpsJwksProvider, HttpsOAuthTransport,
+    OAuthManager, OsEntropy, ProtectedOAuthTokenStore, ProtectedSecretReference, ProviderPackage,
     ProviderRegistry as OAuthProviderRegistry, SystemBrowser, TcpLoopbackListener,
 };
 use studio_package::{
@@ -250,7 +250,7 @@ impl StudioHost {
 
     /// Supply one host-captured secret for immediate protected-store provisioning.
     #[must_use]
-    pub fn with_protected_secret(mut self, name: ProtectedSecretKey, value: SecretInput) -> Self {
+    pub fn with_protected_secret(self, name: ProtectedSecretKey, value: SecretInput) -> Self {
         self.provisioned_secrets.lock().push((name, value));
         self
     }
@@ -318,13 +318,7 @@ impl StudioHost {
     ///
     /// Returns a host-owned [`LaunchError`] before exposing any partially prepared surface.
     pub fn prepare(&self, request: LaunchRequest) -> Result<PluginSurface, LaunchError> {
-        self.prepare_internal(
-            request,
-            false,
-            self.https_client.clone(),
-            Arc::clone(&self.credential_backend),
-            Arc::clone(&self.provisioned_secrets),
-        )
+        self.prepare_internal(request, false, self.https_client.clone())
     }
 
     /// Run signed application migrations and launch only after the lifecycle commits.
@@ -380,13 +374,7 @@ impl StudioHost {
             .run(&package, action)
             .await
             .map_err(LaunchError::MigrationInvalid)?;
-        self.prepare_internal(
-            request,
-            true,
-            self.https_client.clone(),
-            Arc::clone(&self.credential_backend),
-            Arc::clone(&self.provisioned_secrets),
-        )
+        self.prepare_internal(request, true, self.https_client.clone())
     }
 
     fn prepare_internal(
@@ -394,8 +382,6 @@ impl StudioHost {
         request: LaunchRequest,
         migrations_complete: bool,
         https_client: Option<Arc<dyn HttpsClient>>,
-        credential_backend: Arc<dyn CredentialBackend>,
-        provisioned_secrets: Arc<Mutex<Vec<(ProtectedSecretKey, SecretInput)>>>,
     ) -> Result<PluginSurface, LaunchError> {
         if self.wayland == WaylandAvailability::Unavailable {
             return Err(LaunchError::WaylandUnavailable);
@@ -646,7 +632,7 @@ fn prepare_github_services(
             purpose: secret_declaration.purpose.clone(),
         });
     let manager = Arc::new(OAuthManager::new(
-        OAuthProviderRegistry::github(),
+        OAuthProviderRegistry::maintained(),
         [package],
         Arc::new(ProtectedOAuthTokenStore::new(
             protected_store,
@@ -656,7 +642,10 @@ fn prepare_github_services(
         browser,
         callback_listener,
         entropy,
-        Arc::new(GithubHttpsOAuthTransport::new(Arc::clone(&https_client))),
+        Arc::new(HttpsOAuthTransport::new(Arc::clone(&https_client))),
+        // OpenID Connect providers publish their signing keys; the host verifies the ID token
+        // signature itself rather than trusting the token because it arrived over TLS.
+        Arc::new(HttpsJwksProvider::new(Arc::clone(&https_client))),
     ));
     let transport = Arc::new(ProductionHttpTransport::new(
         https_client,

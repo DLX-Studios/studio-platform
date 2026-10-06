@@ -232,7 +232,7 @@ $speckit-converge
 
 Studio is built for contributors — human or agent:
 
-- Small, traceable slices (≤5 files except vendored `gpui-component` deltas)
+- Small, traceable slices (≤5 files except vendored `gpui-kit` deltas)
 - `cargo fmt`, `clippy -D warnings`, `cargo test`, `bun test` must pass before PR
 - No `unsafe`, no X11, no WASI; every guest message is validated
 - See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and [.specify/memory/constitution.md](.specify/memory/constitution.md)
@@ -241,4 +241,4 @@ Studio is built for contributors — human or agent:
 
 ## License
 
-Apache-2.0 — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for `gpui`/`gpui-component` pins.
+Apache-2.0 — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for `gpui`/`gpui-kit` pins.

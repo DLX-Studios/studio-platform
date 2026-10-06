@@ -90,3 +90,4 @@ POS example.
 ## Phase 10: Convergence
 
 - [X] T037 Re-certify the JavaScript gates on a filesystem-safe checkout using the documented procedure in `docs/development/BUILDING.md`: run `bun install`, `bun run check`, and `bun test`, then update `specs/002-component-platform/validation-report.md` to record the passing Bun evidence for the SDK contract suites per T036 / SC-001 / SC-008 (partial)
+- [X] T038 Synchronize the vendored component library to the upstream GPUI Kit facade at 0.7.0, moving Studio imports to `gpui_kit::component`, `gpui_kit::assets`, and `gpui_kit::platform` and the GPUI pin to 0.3.7; record the new provenance and fork delta in `vendor/gpui-kit/UPSTREAM.md` and `docs/upstream/gpui-kit-delta.md`, and drop the removed `Root::bordered(false)` call sites in `crates/studio-app/src/main.rs` and `crates/studio-designer/src/main.rs`.

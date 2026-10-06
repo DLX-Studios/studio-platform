@@ -4,10 +4,10 @@ mod gpui_https_client;
 
 use std::{ffi::OsStr, sync::Arc};
 
-use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
-use gpui_component::{Root, Theme, ThemeMode};
-use gpui_kit_assets::Assets;
-use gpui_platform::application;
+use gpui_kit::assets::Assets;
+use gpui_kit::component::{Root, Theme, ThemeMode};
+use gpui_kit::platform::application;
+use gpui_kit::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use studio_app::{
     cli::LaunchRequest,
     foundation::FoundationGallery,
@@ -29,7 +29,7 @@ fn run(
 ) {
     application.run(move |cx: &mut App| {
         let _ = https_client.install(cx.http_client());
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         Theme::change(ThemeMode::Light, None, cx);
         let has_plugin_surface = plugin_surface.is_some();
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
@@ -101,7 +101,7 @@ fn run(
                     })
                     .detach();
                 }
-                cx.new(|cx| Root::new(shell, window, cx).bordered(false))
+                cx.new(|cx| Root::new(shell, window, cx))
             },
         )
         .expect("Studio could not create its Wayland window");

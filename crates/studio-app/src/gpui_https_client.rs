@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock, mpsc};
 
 use futures::AsyncReadExt;
-use gpui::http_client::{AsyncBody, HttpClient, HttpRequestExt, RedirectPolicy, Request, Url};
+use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, RedirectPolicy, Request, Url};
 use studio_net::transport::ByteStream;
 use studio_net::{HttpsClient, IncomingResponse, OutgoingRequest, TransportError, TransportLimits};
 use zeroize::Zeroize;
@@ -64,7 +64,7 @@ impl HttpsClient for GpuiHttpsClient {
         let status = response.status().as_u16();
         let media_type = response
             .headers()
-            .get(gpui::http_client::http::header::CONTENT_TYPE)
+            .get(gpui_kit::http_client::http::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let mut body = Vec::new();

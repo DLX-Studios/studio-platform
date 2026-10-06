@@ -14,5 +14,5 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Check latest Zed and gpui-component pins
+      - name: Check latest Zed and gpui-kit pins
         run: ./scripts/check-upstream-sync.sh

@@ -26,6 +26,7 @@ members = [
     "crates/studio-wasm",
 ]
 exclude = [
+    "vendor/gpui-kit",
     "vendor/gpui-component",
     "vendor/gpui-base",
     "vendor/gpui-kit-assets",
@@ -63,9 +64,16 @@ pbkdf2 = "=0.12.2"
 sha2_10 = { package = "sha2", version = "=0.10.9" }
 semver = "=1.0.28"
 keyring = "=4.1.6"
-gpui = { version = "=0.3.5", package = "gpui-pre", default-features = false, features = ["wayland"] }
-gpui_platform = { version = "=0.3.5", package = "gpui-pre-platform", default-features = false, features = ["wayland"] }
-gpui-component = { path = "vendor/gpui-component", default-features = false }
+# `aws_lc_rs` matches the backend `surrealdb-core` already selects. Cargo unifies features across a
+# workspace build, so requesting `rust_crypto` here would enable *both* backends at once and
+# jsonwebtoken would then refuse to pick one at runtime.
+jsonwebtoken = { version = "=10.4.0", default-features = false, features = [
+    "aws_lc_rs",
+    "use_pem",
+] }
+gpui = { version = "=0.3.7", package = "gpui-pre", default-features = false, features = ["wayland"] }
+gpui_platform = { version = "=0.3.7", package = "gpui-pre-platform", default-features = false, features = ["wayland"] }
+gpui-kit = { path = "vendor/gpui-kit", default-features = false, features = ["component", "assets"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

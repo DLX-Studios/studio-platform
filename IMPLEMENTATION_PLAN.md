@@ -14,7 +14,7 @@ Studio is a new standalone project. Existing Canvas and Studio OS repositories r
 
 ## 2. Fixed Decisions
 
-- Host: Rust, GPUI, and a Studio-owned audited fork/wrapper of `gpui-component`.
+- Host: Rust, GPUI, and a Studio-owned audited fork/wrapper of `gpui-kit`.
 - Toolchain: dated Rust nightly `nightly-2026-03-04`, required by the pinned GPUI revision.
 - Delivery workflow: GitHub Spec Kit `v0.15.2` with native Codex skills; implementation tasks are executed test-first.
 - Platform: general Linux desktop and POS hardware using Wayland only.
@@ -34,14 +34,14 @@ Studio is a new standalone project. Existing Canvas and Studio OS repositories r
 Research is pinned to:
 
 - Oxide: `29cd89882465d6ebfe00af2ada6f89951581c580`
-- gpui-component: `6c804fa7acaf0bce4659401821969da2b283dc30`
+- gpui-kit: `0c830f4d257e69fdd17200650533ab4ca9a40cc0`
 - adabraka-ui: `e158684b23d9cb043fed3989ca252212046dabca`
 - gpui-nav: `fecccf8c0d641efc75152fa206bbb941fa990c70`
 - gpui-router: `b8b4228d9a1cb2bb108432241bcb5d8e6784a035`
 
 Usage:
 
-- `gpui-component` is the native component foundation, isolated behind Studio-owned interfaces.
+- `gpui-kit` is the native component foundation, isolated behind Studio-owned interfaces.
 - `adabraka-ui` is a reference for animation, easing, layout, and component ergonomics only.
 - `gpui-nav` and `gpui-router` are references for stack and route-tree behavior only.
 - Oxide is an audited source-code donor, not the application foundation.
@@ -73,7 +73,7 @@ studio-platform/
 ├── sdk/assemblyscript/
 ├── examples/pos-desktop/
 ├── protocol/
-├── vendor/gpui-component/
+├── vendor/gpui-kit/
 ├── docs/{architecture,security,sdk,upstream}/
 └── scripts/
 ```
@@ -87,7 +87,7 @@ Before the plugin runtime, build a minimal GPUI application containing text, a b
 Acceptance requirements:
 
 - GPUI default features that introduce X11 are disabled.
-- The `gpui-component` fork uses the same restricted feature set.
+- The `gpui-kit` fork uses the same restricted feature set.
 - If upstream cannot compile without X11, patch the pinned sources to remove X11 compile paths.
 - No runtime XWayland fallback.
 - Absence of a Wayland compositor produces a concise controlled error.

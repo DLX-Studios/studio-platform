@@ -21,7 +21,7 @@ The architectural definition of each phase is in the root `IMPLEMENTATION_PLAN.m
 - [x] Check the Cargo feature graph for X11 dependencies.
 - [x] Check the linked binary for X11/XCB libraries.
 - [x] Smoke-test the native event loop on Wayland.
-- [x] Import the minimal `gpui-component` fork with X11 disabled.
+- [x] Import the minimal `gpui-kit` fork with X11 disabled.
 - [x] Build the complete component/focus/animation gallery.
 - [x] Automate a nested headless-compositor integration test.
 
