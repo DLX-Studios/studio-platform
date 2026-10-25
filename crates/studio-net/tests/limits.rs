@@ -178,7 +178,7 @@ fn wired_oauth_resolver_injects_at_send_time() {
         request
             .headers
             .iter()
-            .any(|(name, value)| name == "authorization" && value.contains("session-token-value")),
-        "session credential must ride the send"
+            .any(|(name, value)| name == "authorization" && value == "Bearer session-token-value"),
+        "session credential must ride the send with its scheme"
     );
 }

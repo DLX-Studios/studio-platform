@@ -21,7 +21,24 @@ The maintained first-party fixtures are:
 | Integration | Version | Routes |
 | --- | --- | --- |
 | `github` | `1.1.0` | `/user`, `/user/repos`, `/repos/{owner}/{repo}` (GET, OAuth session) |
+| `apple` | `1.0.0` | none: sign-in only |
+| `discord` | `1.0.0` | none: sign-in only |
+| `facebook` | `1.0.0` | none: sign-in only |
+| `gitlab` | `1.0.0` | none: sign-in only |
+| `google` | `1.0.0` | none: sign-in only |
+| `linkedin` | `1.0.0` | none: sign-in only |
+| `microsoft` | `1.0.0` | none: sign-in only |
+| `spotify` | `1.0.0` | none: sign-in only |
 | `ai` | `1.0.0` | `/v1/chat/completions` (POST) and `/v1/chat/completions/stream` (GET), protected API key |
+
+An identity-only integration enables sign-in without granting any REST surface: the application
+authenticates the account and reads the approved claims, but the host broker holds no route
+group for that provider, so the provider's API is unreachable from the guest.
+
+Every OAuth integration requires the protected secret `{provider}.oauth.client_secret` with the
+purpose the catalog declares, and reads the client id from the integration's `clientId`. A
+Microsoft package additionally states the tenant issuer it expects, because the token names the
+tenant that issued it.
 
 Provider descriptors are host policy. A package cannot add an origin, route, scope, or credential
 mapping by declaring extra strings in its manifest.

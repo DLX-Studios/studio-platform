@@ -21,6 +21,7 @@ use studio_wasm::{PluginInstance, RuntimeError};
 use thiserror::Error;
 
 use crate::cli::LaunchMode;
+use crate::host::is_oauth_provider;
 
 /// Persistent host-owned indicator required for explicitly untrusted development launches.
 pub const DEVELOPMENT_WARNING: &str = "Development mode: unsigned plugin bundle";
@@ -65,10 +66,10 @@ impl PluginSurface {
         assets: std::collections::BTreeMap<String, Vec<u8>>,
         protocol_limits: ProtocolLimits,
         provider_plan: ProviderAdmissionPlan,
-        github_services: Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>,
+        provider_services: Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>,
     ) -> Self {
         let (action_sender, action_receiver) = mpsc::channel();
-        let (oauth_manager, rest_broker) = github_services.map_or((None, None), |services| {
+        let (oauth_manager, rest_broker) = provider_services.map_or((None, None), |services| {
             (Some(services.0), Some(services.1))
         });
         Self {
@@ -192,7 +193,7 @@ impl PluginSurface {
         if thread::Builder::new()
             .name(String::from("studio-provider-action"))
             .spawn(move || {
-                let result = run_github_action(request, oauth_manager, rest_broker);
+                let result = run_provider_action(request, oauth_manager, rest_broker);
                 let _ = sender.send(result);
             })
             .is_err()
@@ -414,13 +415,46 @@ impl PluginSurface {
     }
 }
 
-fn run_github_action(
+/// Resolve the provider a host action capability names.
+///
+/// The host exposes one capability per provider, named `{provider}.oauth`. A capability that
+/// names no provider the host can sign in with is not a capability this host offers: a
+/// maintained first-party provider always is one, and a declared issuer is one once the launch
+/// has enabled it on the manager.
+fn provider_from_capability<'a>(
+    capability: &'a str,
+    oauth_manager: Option<&Arc<OAuthManager>>,
+) -> Option<&'a str> {
+    let provider = capability.strip_suffix(".oauth")?;
+    if is_oauth_provider(provider) {
+        return Some(provider);
+    }
+    oauth_manager
+        .is_some_and(|manager| manager.supports(provider))
+        .then_some(provider)
+}
+
+/// Run one provider host action.
+///
+/// The capability names the provider, the operation is always `sign_in`, and the approved
+/// claims of that provider are returned to the guest. GitHub additionally lists the
+/// repositories the signed-in account can reach, because that application reads them.
+fn run_provider_action(
     request: ActionRequest,
     oauth_manager: Option<Arc<OAuthManager>>,
     rest_broker: Option<Arc<RestBroker<'static>>>,
 ) -> ActionResult {
     let request_id = request.request_id;
-    if request.capability != "github.oauth" || request.operation != "sign_in" {
+    let Some(provider) = provider_from_capability(&request.capability, oauth_manager.as_ref())
+    else {
+        return ActionResult::Failure {
+            request_id,
+            code: String::from("capability_denied"),
+            message: String::from("Requested host action is not available"),
+            retryable: false,
+        };
+    };
+    if request.operation != "sign_in" {
         return ActionResult::Failure {
             request_id,
             code: String::from("capability_denied"),
@@ -428,28 +462,30 @@ fn run_github_action(
             retryable: false,
         };
     }
-    if request.payload.get("provider").and_then(Value::as_str) != Some("github") {
+    if let Some(requested) = request.payload.get("provider").and_then(Value::as_str)
+        && requested != provider
+    {
         return ActionResult::Failure {
             request_id,
             code: String::from("oauth.provider.unknown"),
-            message: String::from("GitHub provider is unavailable"),
+            message: String::from("Requested provider is unavailable"),
             retryable: false,
         };
     }
-    let (Some(oauth_manager), Some(rest_broker)) = (oauth_manager, rest_broker) else {
+    let Some(oauth_manager) = oauth_manager else {
         return ActionResult::Failure {
             request_id,
             code: String::from("oauth.provider.unavailable"),
-            message: String::from("GitHub sign-in is unavailable on this host"),
+            message: String::from("Sign-in is unavailable on this host"),
             retryable: false,
         };
     };
-    let result = oauth_manager.sign_in("github");
+    let result = oauth_manager.sign_in(provider);
     if !result.is_success() {
         return ActionResult::Failure {
             request_id,
             code: result.code_str().to_owned(),
-            message: String::from("GitHub sign-in failed"),
+            message: String::from("Sign-in failed"),
             retryable: true,
         };
     }
@@ -457,35 +493,57 @@ fn run_github_action(
         return ActionResult::Failure {
             request_id,
             code: String::from("oauth.claims.invalid"),
-            message: String::from("GitHub profile could not be verified"),
+            message: String::from("Profile could not be verified"),
             retryable: false,
         };
     };
-    let api = rest_broker.guest_api();
-    let client = GithubClient::new(&api);
-    let repositories = match client.repositories() {
-        Ok(repositories) => repositories,
-        Err(_) => {
+    if provider == studio_oauth::GITHUB_PROVIDER_ID {
+        let Some(rest_broker) = rest_broker else {
             return ActionResult::Failure {
                 request_id,
-                code: String::from("github.repositories.failed"),
-                message: String::from("GitHub repositories could not be loaded"),
-                retryable: true,
+                code: String::from("oauth.provider.unavailable"),
+                message: String::from("Sign-in is unavailable on this host"),
+                retryable: false,
             };
-        }
-    };
-    let repository_names = repositories
-        .into_iter()
-        .map(|repository| repository.full_name)
-        .collect::<Vec<_>>();
-    let repository_count = repository_names.len();
+        };
+        let api = rest_broker.guest_api();
+        let client = GithubClient::new(&api);
+        let repositories = match client.repositories() {
+            Ok(repositories) => repositories,
+            Err(_) => {
+                return ActionResult::Failure {
+                    request_id,
+                    code: String::from("github.repositories.failed"),
+                    message: String::from("GitHub repositories could not be loaded"),
+                    retryable: true,
+                };
+            }
+        };
+        let repository_names = repositories
+            .into_iter()
+            .map(|repository| repository.full_name)
+            .collect::<Vec<_>>();
+        let repository_count = repository_names.len();
+        return ActionResult::Success {
+            request_id,
+            payload: json!({
+                "login": claims.login,
+                "email": claims.email,
+                "repositoryNames": repository_names,
+                "repositoryCount": repository_count
+            }),
+        };
+    }
     ActionResult::Success {
         request_id,
         payload: json!({
+            "provider": provider,
+            "subject": claims.subject,
             "login": claims.login,
-            "email": claims.email,
-            "repositoryNames": repository_names,
-            "repositoryCount": repository_count
+            "displayName": claims.display_name,
+            "avatarUrl": claims.avatar_url,
+            "profileUrl": claims.profile_url,
+            "email": claims.email
         }),
     }
 }
@@ -543,4 +601,44 @@ pub enum SurfaceError {
     /// Native reconciliation failed.
     #[error(transparent)]
     Update(#[from] UpdateError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use studio_protocol::ActionRequest;
+
+    /// One sign-in request for the provider the capability names.
+    fn sign_in_request(capability: &str, provider: Option<&str>) -> ActionRequest {
+        ActionRequest {
+            request_id: String::from("sign-in-1"),
+            capability: capability.to_owned(),
+            operation: String::from("sign_in"),
+            payload: match provider {
+                Some(provider) => json!({"provider": provider}),
+                None => json!({}),
+            },
+        }
+    }
+
+    /// The failure code one action answered with.
+    fn failure_code(result: ActionResult) -> String {
+        match result {
+            ActionResult::Failure { code, .. } => code,
+            ActionResult::Success { .. } => panic!("the action was not refused"),
+        }
+    }
+
+    #[test]
+    fn a_capability_naming_no_provider_the_host_offers_is_denied() {
+        let result = run_provider_action(sign_in_request("storage.oauth", None), None, None);
+        assert_eq!(failure_code(result), "capability_denied");
+    }
+
+    #[test]
+    fn a_payload_naming_another_provider_than_the_capability_is_unknown() {
+        let result =
+            run_provider_action(sign_in_request("github.oauth", Some("discord")), None, None);
+        assert_eq!(failure_code(result), "oauth.provider.unknown");
+    }
 }

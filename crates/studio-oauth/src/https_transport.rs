@@ -13,7 +13,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     CodeExchangeRequest, OAuthError, OAuthErrorCode, OAuthTransport, ProfileRequest,
-    RefreshRequest, RevokeRequest, TokenResponse, https_url,
+    RefreshRequest, RevokeRequest, SecretToken, TokenEndpointAuthentication, TokenResponse,
+    https_url,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -88,6 +89,8 @@ impl HttpsOAuthTransport {
         client_id: &str,
         grant_type: &str,
         parameters: &[(&str, &[u8])],
+        authentication: TokenEndpointAuthentication,
+        client_secret: Option<SecretToken<'_>>,
     ) -> Result<TokenResponse, OAuthError> {
         let mut body = String::new();
         append_form_field(&mut body, "grant_type", grant_type.as_bytes());
@@ -95,16 +98,42 @@ impl HttpsOAuthTransport {
         for (key, value) in parameters {
             append_form_field(&mut body, key, value);
         }
+        let mut headers = vec![
+            (String::from("accept"), String::from("application/json")),
+            (
+                String::from("content-type"),
+                String::from("application/x-www-form-urlencoded"),
+            ),
+        ];
+        match authentication {
+            TokenEndpointAuthentication::RequestBody => {
+                // The secret travels in the body, so it is added to the form rather than the
+                // header.
+                if let Some(secret) = client_secret {
+                    append_form_field(&mut body, "client_secret", secret.as_bytes());
+                }
+            }
+            TokenEndpointAuthentication::Basic => {
+                // The secret travels in the header, so it is withheld from the body. A provider
+                // that accepts only one form rejects the other outright.
+                if let Some(secret) = client_secret {
+                    let mut credentials = Zeroizing::new(Vec::with_capacity(
+                        client_id.len() + secret.as_bytes().len() + 1,
+                    ));
+                    credentials.extend_from_slice(client_id.as_bytes());
+                    credentials.push(b':');
+                    credentials.extend_from_slice(secret.as_bytes());
+                    headers.push((
+                        String::from("authorization"),
+                        format!("Basic {}", STANDARD.encode(&*credentials)),
+                    ));
+                }
+            }
+        }
         let response = self.execute(
             HttpMethod::Post,
             endpoint,
-            vec![
-                (String::from("accept"), String::from("application/json")),
-                (
-                    String::from("content-type"),
-                    String::from("application/x-www-form-urlencoded"),
-                ),
-            ],
+            headers,
             Some(body.into_bytes()),
             OAuthErrorCode::TokenExchangeFailed,
         )?;
@@ -123,28 +152,26 @@ impl OAuthTransport for HttpsOAuthTransport {
         if let Some(verifier) = verifier.as_ref() {
             parameters.push(("code_verifier", verifier.as_bytes()));
         }
-        if let Some(secret) = client_secret.as_ref() {
-            parameters.push(("client_secret", secret.as_bytes()));
-        }
         self.token_request(
             request.endpoint,
             request.client_id,
             "authorization_code",
             &parameters,
+            request.authentication,
+            client_secret,
         )
     }
 
     fn refresh(&self, request: RefreshRequest<'_>) -> Result<TokenResponse, OAuthError> {
         let client_secret = request.client_secret;
-        let mut parameters = vec![("refresh_token", request.refresh_token.as_bytes())];
-        if let Some(secret) = client_secret.as_ref() {
-            parameters.push(("client_secret", secret.as_bytes()));
-        }
+        let parameters = vec![("refresh_token", request.refresh_token.as_bytes())];
         self.token_request(
             request.endpoint,
             request.client_id,
             "refresh_token",
             &parameters,
+            request.authentication,
+            client_secret,
         )
     }
 
@@ -299,7 +326,7 @@ mod tests {
         declaration::HttpMethod, transport::ByteStream,
     };
 
-    use crate::{OAuthTransport, RefreshRequest, SecretToken};
+    use crate::{OAuthTransport, RefreshRequest, SecretToken, TokenEndpointAuthentication};
 
     use super::{HttpsOAuthTransport, append_form_field};
 
@@ -361,6 +388,7 @@ mod tests {
                 client_id: "github-client-id",
                 refresh_token: SecretToken(b"host-only-refresh-token"),
                 client_secret: Some(SecretToken(b"host-only-client-secret")),
+                authentication: TokenEndpointAuthentication::RequestBody,
             })
             .unwrap();
         assert_eq!(format!("{result:?}"), "TokenResponse(REDACTED)");

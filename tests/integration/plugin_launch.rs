@@ -1,9 +1,10 @@
 #![allow(missing_docs)]
+#![allow(clippy::doc_markdown)]
 #![allow(clippy::format_collect)]
 
 use parking_lot::Mutex;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -16,17 +17,14 @@ use std::{
 use studio_github::route_groups as github_route_groups;
 use studio_net::declaration::HttpMethod;
 use studio_net::{HttpsClient, IncomingResponse, OutgoingRequest, TransportError, TransportLimits};
-use studio_oauth::{
-    BrowserHandoff, Callback, CallbackListener, CallbackReceiver, EntropySource, OAuthError,
-    OAuthErrorCode, OsEntropy,
-};
+use studio_oauth::{BrowserHandoff, Callback, CallbackListener, CallbackReceiver, OsEntropy};
 use studio_security::{
-    BrokerCredentialError, CredentialBackend, CredentialBackendError, CredentialBytes,
-    CredentialLocator, ProtectedSecretKey, SecretInput,
+    CredentialBackend, CredentialBackendError, CredentialBytes, CredentialLocator,
+    ProtectedSecretKey, SecretInput,
 };
 
 use ed25519_dalek::{Signer, SigningKey};
-use serde_json::{Value, json};
+use serde_json::json;
 use studio_app::{
     cli::{LaunchMode, LaunchRequest},
     host::{HostConfig, LaunchErrorCode, StudioHost, WaylandAvailability},
@@ -133,7 +131,53 @@ fn github_manifest() -> serde_json::Value {
     manifest
 }
 
-fn github_action_module() -> Vec<u8> {
+fn discord_manifest() -> serde_json::Value {
+    let mut manifest = manifest();
+    manifest["id"] = json!("com.example.discord-viewer");
+    manifest["name"] = json!("Example Discord Viewer");
+    manifest["secrets"] = json!([
+        {
+            "name": "discord.oauth.client_secret",
+            "purpose": "Discord OAuth client configuration"
+        }
+    ]);
+    manifest["integrations"] = json!([
+        {
+            "id": "discord",
+            "version": "1.0.0",
+            "config": {
+                "clientId": "fixture-client",
+                "clientSecretName": "discord.oauth.client_secret",
+                "scopes": ["email", "identify"]
+            }
+        }
+    ]);
+    manifest
+}
+
+/// A manifest that declares one OpenID Connect issuer of its own.
+///
+/// The application is a public client of the issuer: it holds a client id and no secret, and it
+/// asks only for the OpenID Connect standard scopes.
+fn declared_issuer_manifest() -> serde_json::Value {
+    let mut manifest = manifest();
+    manifest["id"] = json!("com.example.acme-viewer");
+    manifest["name"] = json!("Example Acme Viewer");
+    manifest["integrations"] = json!([
+        {
+            "id": "oidc-acme",
+            "version": "1.0.0",
+            "config": {
+                "issuer": "https://acme.example.com",
+                "clientId": "fixture-client",
+                "scopes": ["openid", "profile"]
+            }
+        }
+    ]);
+    manifest
+}
+
+fn provider_action_module(capability: &str, provider: &str, label: &str) -> Vec<u8> {
     let text_node = |id: &str, text: &str| UiNode {
         id: id.to_owned(),
         kind: NodeKind::Text,
@@ -144,48 +188,44 @@ fn github_action_module() -> Vec<u8> {
         id: String::from("signin"),
         kind: NodeKind::Button,
         props: BTreeMap::from([
-            ("label".to_owned(), json!("Sign in with GitHub")),
+            ("label".to_owned(), json!(label)),
             ("enabled".to_owned(), json!(true)),
         ]),
         children: Vec::new(),
     };
     let mount = GuestMessage::Mount(MountTree {
         protocol_version: 1,
-        route: "/github".to_owned(),
+        route: format!("/{provider}"),
         root: UiNode {
-            id: "root".to_owned(),
+            id: String::from("root"),
             kind: NodeKind::Column,
             props: BTreeMap::new(),
             children: vec![
                 sign_in_button,
-                text_node("status", "Sign in to list repositories"),
-                text_node("hint", "Repository access uses declared routes."),
+                text_node("status", &format!("Sign in with {label}")),
+                text_node("hint", "Signed-in claims are delivered to the guest."),
             ],
         },
     });
     let action = GuestMessage::Action(studio_protocol::ActionRequest {
-        request_id: String::from("github-sign-in"),
-        capability: String::from("github.oauth"),
+        request_id: format!("{provider}-sign-in"),
+        capability: capability.to_owned(),
         operation: String::from("sign_in"),
-        payload: json!({"provider": "github", "scopes": ["read:user", "user:email"]}),
+        payload: json!({"provider": provider}),
     });
     let patch = json!({
         "type": "patch",
         "payload": {
             "sequence": 1,
             "operations": [
-                {"op":"update_prop","node_id":"status","property":"text","value":"Signed in with GitHub"},
-                {"op":"update_prop","node_id":"hint","property":"text","value":"Repositories: octocat/studio"}
+                {"op":"update_prop","node_id":"status","property":"text","value":format!("Signed in with {label}")},
+                {"op":"update_prop","node_id":"hint","property":"text","value":"The host answered the sign-in action."}
             ]
         }
     });
-    let mount =
-        serde_json::to_string(&String::from_utf8(serde_json::to_vec(&mount).unwrap()).unwrap())
-            .unwrap();
-    let action =
-        serde_json::to_string(&String::from_utf8(serde_json::to_vec(&action).unwrap()).unwrap())
-            .unwrap();
-    let patch = serde_json::to_string(&patch.to_string()).unwrap();
+    let (mount, mount_len) = wat_data(&mount);
+    let (action, action_len) = wat_data(&action);
+    let (patch, patch_len) = wat_data(&patch);
     wat::parse_str(format!(
         r#"(module
           (import "studio_host" "emit" (func $emit (param i32 i32) (result i32)))
@@ -207,15 +247,27 @@ fn github_action_module() -> Vec<u8> {
               i32.const 1 global.set $phase
               i32.const 8192 i32.const {action_len} call $emit
             end))"#,
-        mount_len = mount.len(),
-        action_len = action.len(),
-        patch_len = patch.len(),
     ))
     .unwrap()
 }
 
-fn github_signed_bundle(module: Vec<u8>, signing_key: &SigningKey) -> Vec<u8> {
-    let manifest = github_manifest();
+/// Encode one protocol message for a guest data segment.
+///
+/// The segment holds the message's JSON, and the length is that JSON's byte length. The text is
+/// escaped for the WebAssembly text format, where `\"` and `\\` are the only escapes a message
+/// needs.
+fn wat_data(message: &impl serde::Serialize) -> (String, usize) {
+    let json = serde_json::to_string(message).unwrap();
+    let length = json.len();
+    let escaped = json.replace('\\', "\\\\").replace('"', "\\\"");
+    (format!("\"{escaped}\""), length)
+}
+
+fn provider_signed_bundle(
+    manifest: serde_json::Value,
+    module: Vec<u8>,
+    signing_key: &SigningKey,
+) -> Vec<u8> {
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
     let input = CanonicalBundleInput {
         manifest,
@@ -275,7 +327,10 @@ impl CredentialBackend for TestCredentialBackend {
 }
 
 #[derive(Clone)]
-struct TestBrowser(Arc<Mutex<Option<String>>>);
+struct TestBrowser {
+    state: Arc<Mutex<Option<String>>>,
+    authorization: Arc<Mutex<Option<String>>>,
+}
 
 impl BrowserHandoff for TestBrowser {
     fn open(&self, authorization_url: &str) -> Result<(), studio_oauth::OAuthError> {
@@ -290,7 +345,8 @@ impl BrowserHandoff for TestBrowser {
             .ok_or_else(|| {
                 studio_oauth::OAuthError::new(studio_oauth::OAuthErrorCode::BrowserUnavailable)
             })?;
-        *self.0.lock() = Some(state.to_owned());
+        *self.authorization.lock() = Some(authorization_url.to_owned());
+        *self.state.lock() = Some(state.to_owned());
         Ok(())
     }
 }
@@ -307,7 +363,7 @@ impl CallbackListener for TestCallbackListener {
 struct TestCallbackReceiver(Arc<Mutex<Option<String>>>);
 
 impl CallbackReceiver for TestCallbackReceiver {
-    fn redirect_uri(&self) -> &str {
+    fn redirect_uri(&self) -> &'static str {
         "http://127.0.0.1:43123/oauth/callback"
     }
 
@@ -324,89 +380,29 @@ impl CallbackReceiver for TestCallbackReceiver {
     }
 }
 
-struct TestGitHubHttpsClient;
+/// The deterministic upstream the provider tests sign in against.
+///
+/// It answers the token and profile endpoints of the providers under test and records every
+/// request it served, so a test can prove that a sign-in really travelled the provider's own
+/// endpoints instead of short-circuiting somewhere.
+struct TestProviderHttpsClient {
+    served: Arc<Mutex<Vec<String>>>,
+    bodies: Arc<Mutex<Vec<String>>>,
+}
 
-impl HttpsClient for TestGitHubHttpsClient {
+impl HttpsClient for TestProviderHttpsClient {
     fn execute(
         &self,
         request: OutgoingRequest,
         limits: TransportLimits,
     ) -> Result<IncomingResponse, TransportError> {
         assert!(limits.is_valid());
-        let response = match (request.method, request.url.as_str()) {
-            (
-                studio_net::declaration::HttpMethod::Post,
-                "https://github.com/login/oauth/access_token",
-            ) => {
-                let body = String::from_utf8(request.body.unwrap()).unwrap();
-                assert!(body.contains("client_id=fixture-client"));
-                assert!(body.contains("client_secret=fixture-github-secret"));
-                assert!(body.contains("code_verifier="));
-                assert!(body.contains("code=one-time-code"));
-                incoming(
-                    200,
-                    json!({
-                        "access_token": "test-access-token",
-                        "scope": "read:user,user:email",
-                        "expires_in": 3600
-                    }),
-                )
-            }
-            (studio_net::declaration::HttpMethod::Get, "https://api.github.com/user") => {
-                assert_eq!(
-                    header(&request, "authorization"),
-                    Some("Bearer test-access-token")
-                );
-                incoming(
-                    200,
-                    json!({
-                        "id": 17,
-                        "login": "octocat",
-                        "name": "Octocat",
-                        "email": null,
-                        "avatar_url": "https://avatars.example/octocat.png",
-                        "html_url": "https://github.com/octocat"
-                    }),
-                )
-            }
-            (studio_net::declaration::HttpMethod::Get, "https://api.github.com/user/emails") => {
-                assert_eq!(
-                    header(&request, "authorization"),
-                    Some("Bearer test-access-token")
-                );
-                incoming(
-                    200,
-                    json!([
-                        {"email":"octocat@example.test","primary":true,"verified":true}
-                    ]),
-                )
-            }
-            (studio_net::declaration::HttpMethod::Get, url)
-                if url.starts_with("https://api.github.com/user/repos?") =>
-            {
-                assert_eq!(
-                    header(&request, "authorization"),
-                    Some("Bearer test-access-token")
-                );
-                incoming(
-                    200,
-                    json!([
-                        {
-                            "id": 1,
-                            "name": "studio",
-                            "full_name": "octocat/studio",
-                            "html_url": "https://github.com/octocat/studio",
-                            "owner": {"login": "octocat"},
-                            "private": false,
-                            "stargazers_count": 3,
-                            "forks_count": 1
-                        }
-                    ]),
-                )
-            }
-            _ => return Err(TransportError::ConnectionFailure),
-        };
-        Ok(response)
+        self.served.lock().push(request.url.clone());
+        self.bodies.lock().push(form_body(&request));
+        github_route(&request)
+            .or_else(|| discord_route(&request))
+            .or_else(|| declared_issuer_route(&request))
+            .ok_or(TransportError::ConnectionFailure)
     }
 
     fn open_stream(
@@ -418,11 +414,226 @@ impl HttpsClient for TestGitHubHttpsClient {
     }
 }
 
-fn incoming(status: u16, value: serde_json::Value) -> IncomingResponse {
+/// The GitHub endpoints the host signs in against.
+fn github_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
+    let response = match (request.method, request.url.as_str()) {
+        (HttpMethod::Post, "https://github.com/login/oauth/access_token") => {
+            let body = form_body(request);
+            assert!(body.contains("client_id=fixture-client"));
+            assert!(body.contains("client_secret=fixture-github-secret"));
+            assert!(body.contains("code_verifier="));
+            assert!(body.contains("code=one-time-code"));
+            incoming(
+                200,
+                &json!({
+                    "access_token": "test-access-token",
+                    "scope": "read:user,user:email",
+                    "expires_in": 3600
+                }),
+            )
+        }
+        (HttpMethod::Get, "https://api.github.com/user") => {
+            assert_eq!(
+                header(request, "authorization"),
+                Some("Bearer test-access-token")
+            );
+            incoming(
+                200,
+                &json!({
+                    "id": 17,
+                    "login": "octocat",
+                    "name": "Octocat",
+                    "email": null,
+                    "avatar_url": "https://avatars.example/octocat.png",
+                    "html_url": "https://github.com/octocat"
+                }),
+            )
+        }
+        (HttpMethod::Get, "https://api.github.com/user/emails") => {
+            assert_eq!(
+                header(request, "authorization"),
+                Some("Bearer test-access-token")
+            );
+            incoming(
+                200,
+                &json!([
+                    {"email":"octocat@example.test","primary":true,"verified":true}
+                ]),
+            )
+        }
+        (HttpMethod::Get, url) if url.starts_with("https://api.github.com/user/repos?") => {
+            // The host broker injects the session credential with its bearer scheme.
+            let authorization = header(request, "authorization").unwrap_or_default();
+            assert_eq!(authorization, "Bearer test-access-token");
+            incoming(
+                200,
+                &json!([
+                    {
+                        "id": 1,
+                        "name": "studio",
+                        "full_name": "octocat/studio",
+                        "html_url": "https://github.com/octocat/studio",
+                        "owner": {"login": "octocat"},
+                        "private": false,
+                        "stargazers_count": 3,
+                        "forks_count": 1
+                    }
+                ]),
+            )
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+/// The Discord endpoints the host signs in against.
+fn discord_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
+    let response = match (request.method, request.url.as_str()) {
+        (HttpMethod::Post, "https://discord.com/api/oauth2/token") => {
+            let body = form_body(request);
+            assert!(body.contains("client_id=fixture-client"));
+            assert!(body.contains("client_secret=fixture-discord-secret"));
+            assert!(body.contains("code_verifier="));
+            assert!(body.contains("code=one-time-code"));
+            incoming(
+                200,
+                &json!({
+                    "access_token": "test-discord-access-token",
+                    "token_type": "Bearer",
+                    "scope": "email identify",
+                    "expires_in": 3600
+                }),
+            )
+        }
+        (HttpMethod::Get, "https://discord.com/api/v10/users/@me") => {
+            assert_eq!(
+                header(request, "authorization"),
+                Some("Bearer test-discord-access-token")
+            );
+            incoming(
+                200,
+                &json!({
+                    "id": "80351110224678912",
+                    "username": "discord-user",
+                    "global_name": "Discord User",
+                    "email": "discord@example.test",
+                    "verified": true
+                }),
+            )
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+/// The endpoints a declared OpenID Connect issuer publishes.
+///
+/// The discovery document names the issuer the application declared and publishes every
+/// endpoint under that issuer's own origin, which is what the host pins.
+fn declared_issuer_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
+    let response = match (request.method, request.url.as_str()) {
+        (HttpMethod::Get, "https://acme.example.com/.well-known/openid-configuration") => incoming(
+            200,
+            &json!({
+                "issuer": "https://acme.example.com",
+                "authorization_endpoint": "https://acme.example.com/authorize",
+                "token_endpoint": "https://acme.example.com/token",
+                "jwks_uri": "https://acme.example.com/jwks"
+            }),
+        ),
+        (HttpMethod::Get, "https://acme.example.com/jwks") => incoming(200, &json!({"keys": []})),
+        (HttpMethod::Post, "https://acme.example.com/token") => {
+            let body = form_body(request);
+            // A declared issuer is a public client: the exchange carries the client id and the
+            // PKCE verifier, and no client secret anywhere.
+            assert!(body.contains("client_id=fixture-client"));
+            assert!(body.contains("code_verifier="));
+            assert!(!body.contains("client_secret"));
+            incoming(
+                200,
+                &json!({
+                    "access_token": "test-declared-access-token",
+                    "token_type": "Bearer",
+                    "scope": "openid profile",
+                    "expires_in": 3600
+                }),
+            )
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+/// An upstream whose discovery document names an issuer the application did not declare.
+///
+/// The host pins the issuer it was given, so a document that points elsewhere is refused
+/// rather than followed.
+struct MismatchedIssuerHttpsClient;
+
+impl HttpsClient for MismatchedIssuerHttpsClient {
+    fn execute(
+        &self,
+        request: OutgoingRequest,
+        limits: TransportLimits,
+    ) -> Result<IncomingResponse, TransportError> {
+        assert!(limits.is_valid());
+        if request.url == "https://acme.example.com/.well-known/openid-configuration" {
+            return Ok(incoming(
+                200,
+                &json!({
+                    "issuer": "https://elsewhere.example.com",
+                    "authorization_endpoint": "https://elsewhere.example.com/authorize",
+                    "token_endpoint": "https://elsewhere.example.com/token",
+                    "jwks_uri": "https://elsewhere.example.com/jwks"
+                }),
+            ));
+        }
+        Err(TransportError::ConnectionFailure)
+    }
+
+    fn open_stream(
+        &self,
+        _request: OutgoingRequest,
+        _limits: TransportLimits,
+    ) -> Result<Box<dyn studio_net::transport::ByteStream>, TransportError> {
+        Err(TransportError::ConnectionFailure)
+    }
+}
+
+/// An upstream that answers nothing at all.
+///
+/// The host cannot learn an issuer's endpoints without reaching it, so an issuer that cannot be
+/// reached is an issuer the host cannot configure.
+struct UnreachableHttpsClient;
+
+impl HttpsClient for UnreachableHttpsClient {
+    fn execute(
+        &self,
+        _request: OutgoingRequest,
+        _limits: TransportLimits,
+    ) -> Result<IncomingResponse, TransportError> {
+        Err(TransportError::ConnectionFailure)
+    }
+
+    fn open_stream(
+        &self,
+        _request: OutgoingRequest,
+        _limits: TransportLimits,
+    ) -> Result<Box<dyn studio_net::transport::ByteStream>, TransportError> {
+        Err(TransportError::ConnectionFailure)
+    }
+}
+
+/// Decode a form-encoded request body without taking ownership of it.
+fn form_body(request: &OutgoingRequest) -> String {
+    String::from_utf8(request.body.as_deref().unwrap_or_default().to_vec()).unwrap()
+}
+
+fn incoming(status: u16, value: &serde_json::Value) -> IncomingResponse {
     IncomingResponse {
         status,
         media_type: Some(String::from("application/json")),
-        body: serde_json::to_vec(&value).unwrap(),
+        body: serde_json::to_vec(value).unwrap(),
     }
 }
 
@@ -646,4 +857,301 @@ fn mounted_catalog_accepts_pointer_and_keyboard_activation() {
         };
         assert_eq!(event.event, "pressed");
     }
+}
+
+/// One provider's sign-in fixture.
+struct ProviderFixture {
+    manifest: serde_json::Value,
+    capability: &'static str,
+    provider: &'static str,
+    label: &'static str,
+    secret_name: &'static str,
+    purpose: &'static str,
+    secret: &'static str,
+}
+
+/// The traffic one sign-in produced at the deterministic upstream.
+#[derive(Debug)]
+struct UpstreamTraffic {
+    /// Every URL the upstream was asked for.
+    urls: Vec<String>,
+    /// Every request body the upstream was asked to serve.
+    bodies: Vec<String>,
+    /// The authorization request the host opened in the browser, when it opened one.
+    authorization: Option<String>,
+}
+
+/// Sign in with one provider through the host action route and return the requests the
+/// deterministic upstream answered.
+///
+/// The guest asks for sign-in on its first event, the host runs the action on its own thread,
+/// and the result is delivered back to the guest. The upstream records what it served, so the
+/// test can tell a sign-in that really travelled the provider's endpoints from one that did
+/// not happen at all.
+fn sign_in_through_action_route(fixture: ProviderFixture, signing_key: &SigningKey) -> Vec<String> {
+    let ProviderFixture {
+        manifest,
+        capability,
+        provider,
+        label,
+        secret_name,
+        purpose,
+        secret,
+    } = fixture;
+    run_provider_sign_in(
+        manifest,
+        capability,
+        provider,
+        label,
+        Some((secret_name, purpose, secret)),
+        signing_key,
+    )
+    .urls
+}
+
+/// Sign in with one provider and return the traffic the deterministic upstream saw.
+///
+/// A provider that is a public client declares no secret, so the protected store is left
+/// empty for it.
+fn run_provider_sign_in(
+    manifest: serde_json::Value,
+    capability: &str,
+    provider: &str,
+    label: &str,
+    secret: Option<(&str, &str, &str)>,
+    signing_key: &SigningKey,
+) -> UpstreamTraffic {
+    let fixtures = FixtureDirectory::new();
+    let path = fixtures.write(
+        "provider.studio",
+        &provider_signed_bundle(
+            manifest,
+            provider_action_module(capability, provider, label),
+            signing_key,
+        ),
+    );
+    let served = Arc::new(Mutex::new(Vec::new()));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let authorization = Arc::new(Mutex::new(None));
+    let state = Arc::new(Mutex::new(None));
+    let mut host = StudioHost::new(
+        HostConfig::new(trust(signing_key)),
+        WaylandAvailability::Available,
+    )
+    .with_https_client(Arc::new(TestProviderHttpsClient {
+        served: Arc::clone(&served),
+        bodies: Arc::clone(&bodies),
+    }))
+    .with_credential_backend(Arc::new(TestCredentialBackend::default()))
+    .with_oauth_adapters(
+        Arc::new(TestBrowser {
+            state: Arc::clone(&state),
+            authorization: Arc::clone(&authorization),
+        }),
+        Arc::new(TestCallbackListener(Arc::clone(&state))),
+        Arc::new(OsEntropy),
+    );
+    if let Some((name, purpose, value)) = secret {
+        host = host.with_protected_secret(
+            ProtectedSecretKey::new(name, purpose).unwrap(),
+            SecretInput::new(value.as_bytes().to_vec()).unwrap(),
+        );
+    }
+    let mut surface = host.prepare(production_request(&path)).unwrap();
+    surface
+        .process_input("signin", InputAction::PointerClick)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !surface.poll_action_results().unwrap() {
+        assert!(
+            Instant::now() < deadline,
+            "the sign-in action never produced a result"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    UpstreamTraffic {
+        urls: served.lock().clone(),
+        bodies: bodies.lock().clone(),
+        authorization: authorization.lock().clone(),
+    }
+}
+
+#[test]
+fn a_non_github_provider_signs_in_through_the_generic_action_route() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let served = sign_in_through_action_route(
+        ProviderFixture {
+            manifest: discord_manifest(),
+            capability: "discord.oauth",
+            provider: "discord",
+            label: "Discord",
+            secret_name: "discord.oauth.client_secret",
+            purpose: "Discord OAuth client configuration",
+            secret: "fixture-discord-secret",
+        },
+        &signing_key,
+    );
+    assert!(
+        served
+            .iter()
+            .any(|url| url == "https://discord.com/api/oauth2/token"),
+        "the provider's token endpoint was never called: {served:?}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|url| url == "https://discord.com/api/v10/users/@me"),
+        "the provider's profile endpoint was never called: {served:?}"
+    );
+}
+
+#[test]
+fn github_sign_in_still_reaches_the_repository_route_group() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let served = sign_in_through_action_route(
+        ProviderFixture {
+            manifest: github_manifest(),
+            capability: "github.oauth",
+            provider: "github",
+            label: "GitHub",
+            secret_name: "github.oauth.client_secret",
+            purpose: "GitHub OAuth client configuration",
+            secret: "fixture-github-secret",
+        },
+        &signing_key,
+    );
+    assert!(
+        served
+            .iter()
+            .any(|url| url == "https://github.com/login/oauth/access_token"),
+        "the provider's token endpoint was never called: {served:?}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|url| url.starts_with("https://api.github.com/user/repos?")),
+        "the repository route group was never called: {served:?}"
+    );
+}
+
+/// A declared issuer signs in through the same host action route a maintained provider uses.
+///
+/// The host pins the issuer it was given: it fetches that issuer's own discovery document,
+/// builds the authorization request from the endpoints the document published, and exchanges
+/// the code at the issuer's own token endpoint as a public client. The signed ID token itself
+/// is the OAuth engine's business, so this test stops at the exchange the host really made.
+#[test]
+fn a_declared_issuer_signs_in_through_the_generic_action_route() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let traffic = run_provider_sign_in(
+        declared_issuer_manifest(),
+        "oidc-acme.oauth",
+        "oidc-acme",
+        "Acme",
+        None,
+        &signing_key,
+    );
+    assert!(
+        traffic
+            .urls
+            .iter()
+            .any(|url| { url == "https://acme.example.com/.well-known/openid-configuration" }),
+        "the issuer's discovery document was never fetched: {traffic:?}"
+    );
+    assert!(
+        traffic
+            .urls
+            .iter()
+            .any(|url| url == "https://acme.example.com/token"),
+        "the issuer's token endpoint was never called: {traffic:?}"
+    );
+    let authorization = traffic
+        .authorization
+        .as_deref()
+        .expect("the host never opened an authorization request");
+    assert!(
+        authorization.starts_with("https://acme.example.com/authorize?"),
+        "the authorization request did not use the issuer's own endpoint: {authorization}"
+    );
+    assert!(
+        authorization.contains("client_id=fixture-client"),
+        "the authorization request did not name the declared client id: {authorization}"
+    );
+    assert!(
+        authorization.contains("&scope=openid%20profile&"),
+        "the authorization request did not ask for exactly the declared scopes: {authorization}"
+    );
+    let exchange = traffic
+        .bodies
+        .iter()
+        .find(|body| body.contains("grant_type=authorization_code"))
+        .expect("the token exchange was never sent");
+    assert!(
+        exchange.contains("client_id=fixture-client"),
+        "the exchange did not name the declared client id: {exchange}"
+    );
+    assert!(
+        exchange.contains("code_verifier="),
+        "the exchange was not bound by PKCE: {exchange}"
+    );
+    assert!(
+        !exchange.contains("client_secret"),
+        "a declared issuer is a public client, so the exchange carried a secret: {exchange}"
+    );
+}
+
+#[test]
+fn a_declared_issuer_that_names_another_issuer_fails_the_launch_closed() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let fixtures = FixtureDirectory::new();
+    let path = fixtures.write(
+        "declared.studio",
+        &provider_signed_bundle(declared_issuer_manifest(), plugin_module(), &signing_key),
+    );
+    let host = StudioHost::new(
+        HostConfig::new(trust(&signing_key)),
+        WaylandAvailability::Available,
+    )
+    .with_https_client(Arc::new(MismatchedIssuerHttpsClient));
+    assert_eq!(
+        host.prepare(production_request(&path)).unwrap_err().code(),
+        LaunchErrorCode::ProviderConfigurationInvalid
+    );
+}
+
+#[test]
+fn a_declared_issuer_whose_discovery_cannot_be_fetched_fails_the_launch_closed() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let fixtures = FixtureDirectory::new();
+    let path = fixtures.write(
+        "declared.studio",
+        &provider_signed_bundle(declared_issuer_manifest(), plugin_module(), &signing_key),
+    );
+    let host = StudioHost::new(
+        HostConfig::new(trust(&signing_key)),
+        WaylandAvailability::Available,
+    )
+    .with_https_client(Arc::new(UnreachableHttpsClient));
+    assert_eq!(
+        host.prepare(production_request(&path)).unwrap_err().code(),
+        LaunchErrorCode::ProviderConfigurationInvalid
+    );
+}
+
+#[test]
+fn a_declared_issuer_needs_a_client_that_can_reach_its_issuer() {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let fixtures = FixtureDirectory::new();
+    let path = fixtures.write(
+        "declared.studio",
+        &provider_signed_bundle(declared_issuer_manifest(), plugin_module(), &signing_key),
+    );
+    let host = StudioHost::new(
+        HostConfig::new(trust(&signing_key)),
+        WaylandAvailability::Available,
+    );
+    assert_eq!(
+        host.prepare(production_request(&path)).unwrap_err().code(),
+        LaunchErrorCode::ProviderConfigurationInvalid
+    );
 }

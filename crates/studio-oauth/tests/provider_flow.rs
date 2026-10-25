@@ -61,23 +61,46 @@ v7aKng5qCemoTA6DgDsDkMeE
 -----END PRIVATE KEY-----";
 
 const APPLE_TEST_KEY_ID: &str = "apple-test-key-1";
+const MICROSOFT_TEST_KEY_ID: &str = "microsoft-test-key-1";
+const SPOTIFY_TEST_KEY_ID: &str = "spotify-test-key-1";
+
+/// The key-set document URIs the maintained ID-token providers publish.
+const APPLE_TEST_JWKS_URI: &str = "https://appleid.apple.com/auth/keys";
+const MICROSOFT_TEST_JWKS_URI: &str =
+    "https://login.microsoftonline.com/common/discovery/v2.0/keys";
+const SPOTIFY_TEST_JWKS_URI: &str = "https://accounts.spotify.com/oidc/certs/v1";
+
+/// The tenant issuers the fake Microsoft upstream issues tokens for.
+const MICROSOFT_TENANT_A_ISSUER: &str = "https://login.microsoftonline.com/tenant-a/v2.0";
+const MICROSOFT_TENANT_B_ISSUER: &str = "https://login.microsoftonline.com/tenant-b/v2.0";
+
+/// The RSA modulus every fake provider publishes under its own key id.
+///
+/// The modulus is shared so one signing helper serves every provider, and the key id is what
+/// tells them apart: a verifier selects the key the token names, so a token signed for one
+/// provider cannot be verified against another provider's published key set.
+const TEST_RSA_MODULUS: &str = "rF-THfT-H0i5uzGfYUF0EpgkEXEMXQockH6Lpu2Q-o4kU1s00zCV1nNhxKS9ZmtaWNm2hHjRb_kWtdgtiiuVjtwLN0rbseyZa17fkVqtzb1TcBnR7nqNXMVtp-crDbTqCP_dn5zZovWSkdkexFXf9S56B2p_bkFY3MVHq1qqAfNOQ7I99fx-W11GyFw9HG6GVr4jokMuz9IaoLts2J5HNnoQ54k5AnNqzTcSBhjXryV5jb9JWnv0DIwZn__lpmRRwBRLmV9r4_MGzFjN-qrU3vkBG4OGu2KEkFP08w_618XrsW3tb3lBdpAQFpm_J6gl8zUn8uTHyIXdEmtVpOk6kQ";
+const TEST_RSA_EXPONENT: &str = "AQAB";
 
 /// The published key set the fake provider serves, matching [`APPLE_TEST_SIGNING_KEY`].
-fn apple_test_jwks() -> JwkSet {
+fn test_jwks(key_id: &str) -> JwkSet {
     serde_json::from_value(json!({
         "keys": [{
             "kty": "RSA",
-            "kid": APPLE_TEST_KEY_ID,
+            "kid": key_id,
             "use": "sig",
             "alg": "RS256",
-            "n": "rF-THfT-H0i5uzGfYUF0EpgkEXEMXQockH6Lpu2Q-o4kU1s00zCV1nNhxKS9ZmtaWNm2hHjRb_kWtdgtiiuVjtwLN0rbseyZa17fkVqtzb1TcBnR7nqNXMVtp-crDbTqCP_dn5zZovWSkdkexFXf9S56B2p_bkFY3MVHq1qqAfNOQ7I99fx-W11GyFw9HG6GVr4jokMuz9IaoLts2J5HNnoQ54k5AnNqzTcSBhjXryV5jb9JWnv0DIwZn__lpmRRwBRLmV9r4_MGzFjN-qrU3vkBG4OGu2KEkFP08w_618XrsW3tb3lBdpAQFpm_J6gl8zUn8uTHyIXdEmtVpOk6kQ",
-            "e": "AQAB"
+            "n": TEST_RSA_MODULUS,
+            "e": TEST_RSA_EXPONENT
         }]
     }))
     .expect("test key set parses")
 }
 
-/// Deterministic key-set source standing in for Apple's published JWKS endpoint.
+/// Deterministic key-set source standing in for the maintained providers' JWKS endpoints.
+///
+/// Each provider publishes its own key id, so a key set fetched for one provider cannot satisfy
+/// a token that names another provider's key.
 #[derive(Default)]
 struct TestJwksProvider {
     fetches: Mutex<usize>,
@@ -85,35 +108,66 @@ struct TestJwksProvider {
 
 impl JwksProvider for TestJwksProvider {
     fn fetch(&self, uri: &str) -> Result<JwkSet, studio_oauth::OAuthError> {
-        assert_eq!(uri, "https://appleid.apple.com/auth/keys");
         *self.fetches.lock() += 1;
-        Ok(apple_test_jwks())
+        Ok(match uri {
+            APPLE_TEST_JWKS_URI => test_jwks(APPLE_TEST_KEY_ID),
+            MICROSOFT_TEST_JWKS_URI => test_jwks(MICROSOFT_TEST_KEY_ID),
+            SPOTIFY_TEST_JWKS_URI => test_jwks(SPOTIFY_TEST_KEY_ID),
+            other => panic!("the fake key-set source publishes no document at {other}"),
+        })
     }
+}
+
+/// Sign an RS256 ID token for an arbitrary issuer, audience, nonce, key id, and claim set.
+///
+/// The claims are the provider's own; the claims every ID token must carry are added here so a
+/// test states only what its provider actually publishes.
+fn test_id_token(
+    issuer: &str,
+    audience: &str,
+    nonce: &str,
+    key_id: &str,
+    claims: &Value,
+) -> String {
+    let now = i64::try_from(jsonwebtoken::get_current_timestamp()).unwrap();
+    let mut payload = json!({
+        "iss": issuer,
+        "aud": audience,
+        "exp": now + 3600,
+        "iat": now,
+        "nonce": nonce,
+    });
+    if let (Some(target), Some(source)) = (payload.as_object_mut(), claims.as_object()) {
+        for (name, value) in source {
+            target.insert(name.clone(), value.clone());
+        }
+    }
+    encode(
+        &Header {
+            alg: Algorithm::RS256,
+            kid: Some(String::from(key_id)),
+            ..Header::new(Algorithm::RS256)
+        },
+        &payload,
+        &EncodingKey::from_rsa_pem(APPLE_TEST_SIGNING_KEY.as_bytes()).unwrap(),
+    )
+    .expect("test ID token signs")
 }
 
 /// Sign an Apple-shaped ID token bound to the nonce the host generated for this request.
 fn apple_test_id_token(client_id: &str, nonce: &str) -> String {
-    let now = i64::try_from(jsonwebtoken::get_current_timestamp()).unwrap();
-    encode(
-        &Header {
-            alg: Algorithm::RS256,
-            kid: Some(String::from(APPLE_TEST_KEY_ID)),
-            ..Header::new(Algorithm::RS256)
-        },
+    test_id_token(
+        "https://appleid.apple.com",
+        client_id,
+        nonce,
+        APPLE_TEST_KEY_ID,
         &json!({
-            "iss": "https://appleid.apple.com",
-            "aud": client_id,
-            "exp": now + 3600,
-            "iat": now,
             "sub": "001234.abcdef0123456789abcdef",
-            "nonce": nonce,
             "email": "avery@example.test",
             // Apple states verification as a string, not a boolean.
             "email_verified": "true",
         }),
-        &EncodingKey::from_rsa_pem(APPLE_TEST_SIGNING_KEY.as_bytes()).unwrap(),
     )
-    .expect("test ID token signs")
 }
 #[derive(Clone, Default)]
 struct MemoryBackend {
@@ -365,6 +419,11 @@ fn route(
         .or_else(|| google_route(request))
         .or_else(|| facebook_route(request))
         .or_else(|| apple_route(request, nonces))
+        .or_else(|| discord_route(request))
+        .or_else(|| gitlab_route(request))
+        .or_else(|| linkedin_route(request))
+        .or_else(|| microsoft_route(request, nonces))
+        .or_else(|| spotify_route(request, nonces))
         .ok_or(TransportError::ConnectionFailure)
 }
 
@@ -537,17 +596,20 @@ fn facebook_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
             // A client id ending in `-verified` models an account that proved its address, the
             // one case where the host must surface the email rather than withhold it.
             let provider_supplied = !token.ends_with("client-id-verified");
-            response(
-                200,
-                &json!({
-                    "id": "10841234567890123",
-                    "name": "Sam Okafor",
-                    "email": "sam@example.test",
-                    "oauth_provided_email": provider_supplied,
-                    "picture": { "data": { "url": "https://cdn.example/sam.png" } },
-                    "link": "https://facebook.example/sam"
-                }),
-            )
+            let mut document = json!({
+                "id": "10841234567890123",
+                "name": "Sam Okafor",
+                "oauth_provided_email": provider_supplied,
+                "picture": { "data": { "url": "https://cdn.example/sam.png" } },
+                "link": "https://facebook.example/sam"
+            });
+            // Facebook publishes no per-address verification claim, so the account whose
+            // address was never proved is the one the upstream does not publish an address
+            // for, and nothing unproven can reach a guest.
+            if !provider_supplied {
+                document["email"] = Value::String(String::from("sam@example.test"));
+            }
+            response(200, &document)
         }
         _ => return None,
     };
@@ -595,6 +657,316 @@ fn apple_route(request: &OutgoingRequest, nonces: &Mutex<Vec<String>>) -> Option
             "token_type": "Bearer",
             "expires_in": 3600,
             "id_token": apple_test_id_token(&client_id, &nonce),
+        })
+    };
+    Some(response(200, &document))
+}
+
+fn discord_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
+    let response = match (request.method, request.url.as_str()) {
+        (HttpMethod::Post, "https://discord.com/api/oauth2/token") => {
+            let body = form_body(request);
+            assert!(body.contains("grant_type=authorization_code"));
+            assert!(body.contains("code_verifier="));
+            assert!(body.contains("client_secret=host-only-client-secret-sentinel"));
+            let client_id = body
+                .split("client_id=")
+                .nth(1)
+                .and_then(|rest| rest.split('&').next())
+                .expect("client id present in token exchange")
+                .to_owned();
+            assert!(
+                client_id.starts_with("discord-client-id"),
+                "unexpected discord client id {client_id}"
+            );
+            // The client id is echoed into the opaque access token so the profile call can
+            // model the two upstream cases through the host exactly as a real token would.
+            response(
+                200,
+                &json!({
+                    "access_token": format!("host-only-discord-token-{client_id}"),
+                    "token_type": "Bearer",
+                    "expires_in": 604_800
+                }),
+            )
+        }
+        (HttpMethod::Get, "https://discord.com/api/v10/users/@me") => {
+            let token = header(request, "authorization");
+            assert!(
+                token.starts_with("Bearer host-only-discord-token-"),
+                "profile call carried {token}"
+            );
+            // Discord's `verified` field means the address on this account has been verified.
+            // A client id ending in `-unverified` models an account that never proved its
+            // address, so the descriptor's trust rule must withhold the address it still
+            // returns.
+            let verified = !token.ends_with("client-id-unverified");
+            response(
+                200,
+                &json!({
+                    "id": "80351110224678912",
+                    "username": "avery",
+                    "global_name": "Avery Rivera",
+                    "email": "avery@example.test",
+                    "verified": verified,
+                    // The avatar is a hash rather than a URL, so no avatar may be surfaced.
+                    "avatar": "8342729096ea3675442027381ff50dfe"
+                }),
+            )
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+fn gitlab_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
+    let response = match (request.method, request.url.as_str()) {
+        (HttpMethod::Post, "https://gitlab.com/oauth/token") => {
+            let body = form_body(request);
+            assert!(body.contains("grant_type=authorization_code"));
+            assert!(body.contains("code_verifier="));
+            assert!(body.contains("client_secret=host-only-client-secret-sentinel"));
+            let client_id = body
+                .split("client_id=")
+                .nth(1)
+                .and_then(|rest| rest.split('&').next())
+                .expect("client id present in token exchange")
+                .to_owned();
+            assert!(
+                client_id.starts_with("gitlab-client-id"),
+                "unexpected gitlab client id {client_id}"
+            );
+            response(
+                200,
+                &json!({
+                    "access_token": format!("host-only-gitlab-token-{client_id}"),
+                    "token_type": "Bearer",
+                    "expires_in": 7200
+                }),
+            )
+        }
+        (HttpMethod::Get, "https://gitlab.com/oauth/userinfo") => {
+            let token = header(request, "authorization");
+            assert!(
+                token.starts_with("Bearer host-only-gitlab-token-"),
+                "profile call carried {token}"
+            );
+            // GitLab states verification as a boolean, so a client id ending in `-unverified`
+            // models the one account whose address the provider has not vouched for.
+            let verified = !token.ends_with("client-id-unverified");
+            response(
+                200,
+                &json!({
+                    "sub": "gitlab-subject-1",
+                    "preferred_username": "avery",
+                    "name": "Avery Rivera",
+                    "email": "avery@example.test",
+                    "email_verified": verified,
+                    "picture": "https://avatars.example/avery.png",
+                    "profile": "https://gitlab.example/avery"
+                }),
+            )
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+fn linkedin_route(request: &OutgoingRequest) -> Option<IncomingResponse> {
+    let response = match (request.method, request.url.as_str()) {
+        (HttpMethod::Post, "https://www.linkedin.com/oauth/v2/accessToken") => {
+            let body = form_body(request);
+            assert!(body.contains("grant_type=authorization_code"));
+            assert!(body.contains("code_verifier="));
+            assert!(body.contains("client_secret=host-only-client-secret-sentinel"));
+            let client_id = body
+                .split("client_id=")
+                .nth(1)
+                .and_then(|rest| rest.split('&').next())
+                .expect("client id present in token exchange")
+                .to_owned();
+            assert!(
+                client_id.starts_with("linkedin-client-id"),
+                "unexpected linkedin client id {client_id}"
+            );
+            response(
+                200,
+                &json!({
+                    "access_token": format!("host-only-linkedin-token-{client_id}"),
+                    "token_type": "Bearer",
+                    "expires_in": 518_400
+                }),
+            )
+        }
+        (HttpMethod::Get, "https://api.linkedin.com/v2/userinfo") => {
+            let token = header(request, "authorization");
+            assert!(
+                token.starts_with("Bearer host-only-linkedin-token-"),
+                "profile call carried {token}"
+            );
+            // LinkedIn's userinfo states verification as a boolean, and only when the field is
+            // present, so a client id ending in `-unverified` models the account whose address
+            // the provider will not vouch for.
+            let verified = !token.ends_with("client-id-unverified");
+            response(
+                200,
+                &json!({
+                    "sub": "linkedin-subject-1",
+                    "name": "Avery Rivera",
+                    "email": "avery@example.test",
+                    "email_verified": verified,
+                    "picture": "https://avatars.example/avery.png"
+                }),
+            )
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+/// The tenant issuer the fake Microsoft upstream issues a token for.
+///
+/// Each client id is an app registration against one tenant, so the tenant that issued the
+/// token follows the registration the exchange was made with.
+fn microsoft_tenant_issuer(client_id: &str) -> &'static str {
+    // A client id ending in `-replayed` is the same registration; only the nonce the token is
+    // bound to differs from the one the host sent.
+    let registration = client_id.strip_suffix("-replayed").unwrap_or(client_id);
+    match registration {
+        "microsoft-client-id-tenant-a" => MICROSOFT_TENANT_A_ISSUER,
+        "microsoft-client-id-tenant-b" => MICROSOFT_TENANT_B_ISSUER,
+        other => panic!("the fake Microsoft upstream has no tenant for client id {other}"),
+    }
+}
+
+fn microsoft_route(
+    request: &OutgoingRequest,
+    nonces: &Mutex<Vec<String>>,
+) -> Option<IncomingResponse> {
+    let (HttpMethod::Post, "https://login.microsoftonline.com/common/oauth2/v2.0/token") =
+        (request.method, request.url.as_str())
+    else {
+        return None;
+    };
+    let body = form_body(request);
+    assert!(body.contains("client_secret=host-only-client-secret-sentinel"));
+    let client_id = body
+        .split("client_id=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("client id present in token exchange")
+        .to_owned();
+    // The token is signed with the nonce the host actually generated for this request, so the
+    // host's nonce assertion is exercised end to end rather than against a fixed literal.
+    let nonce = nonces.lock().last().cloned().unwrap_or_default();
+    // A client id ending in `-replayed` models a token captured from a different authorization:
+    // correctly signed, right issuer and audience, but bound to a nonce this host never sent.
+    let nonce = if client_id.ends_with("-replayed") {
+        format!("{nonce}-from-another-session")
+    } else {
+        nonce
+    };
+    let issuer = microsoft_tenant_issuer(&client_id);
+    let id_token = test_id_token(
+        issuer,
+        &client_id,
+        &nonce,
+        MICROSOFT_TEST_KEY_ID,
+        &json!({
+            // Microsoft names the subject `oid`; `sub` is carried too because a token that
+            // omits it fails the specification claims an ID token must carry.
+            "sub": format!("microsoft-subject-for-{client_id}"),
+            "oid": format!("microsoft-object-id-for-{client_id}"),
+            "preferred_username": "avery@contoso.example.test",
+            "name": "Avery Rivera",
+            "email": "avery@example.test"
+        }),
+    );
+    let document = if body.contains("grant_type=authorization_code") {
+        assert!(body.contains("code_verifier="));
+        json!({
+            "access_token": "host-only-access-token-sentinel",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "host-only-refresh-token-sentinel",
+            "id_token": id_token,
+        })
+    } else {
+        assert!(body.contains("grant_type=refresh_token"));
+        json!({
+            "access_token": "host-only-access-token-sentinel",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "id_token": id_token,
+        })
+    };
+    Some(response(200, &document))
+}
+
+fn spotify_route(
+    request: &OutgoingRequest,
+    nonces: &Mutex<Vec<String>>,
+) -> Option<IncomingResponse> {
+    let (HttpMethod::Post, "https://accounts.spotify.com/api/token") =
+        (request.method, request.url.as_str())
+    else {
+        return None;
+    };
+    let body = form_body(request);
+    assert!(body.contains("client_secret=host-only-client-secret-sentinel"));
+    let client_id = body
+        .split("client_id=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("client id present in token exchange")
+        .to_owned();
+    assert!(
+        client_id.starts_with("spotify-client-id"),
+        "unexpected spotify client id {client_id}"
+    );
+    // The token is signed with the nonce the host actually generated for this request, so the
+    // host's nonce assertion is exercised end to end rather than against a fixed literal.
+    let nonce = nonces.lock().last().cloned().unwrap_or_default();
+    // A client id ending in `-replayed` models a token captured from a different authorization:
+    // correctly signed, right issuer and audience, but bound to a nonce this host never sent.
+    let nonce = if client_id.ends_with("-replayed") {
+        format!("{nonce}-from-another-session")
+    } else {
+        nonce
+    };
+    // Spotify states verification as a boolean, so a client id ending in `-unverified` models
+    // the one account whose address the provider has not vouched for.
+    let verified = !client_id.ends_with("-unverified");
+    let id_token = test_id_token(
+        "https://accounts.spotify.com",
+        &client_id,
+        &nonce,
+        SPOTIFY_TEST_KEY_ID,
+        &json!({
+            "sub": "spotify-subject-1",
+            "preferred_username": "avery",
+            "name": "Avery Rivera",
+            "email": "avery@example.test",
+            "email_verified": verified,
+            "picture": "https://avatars.example/avery.png"
+        }),
+    );
+    let document = if body.contains("grant_type=authorization_code") {
+        assert!(body.contains("code_verifier="));
+        json!({
+            "access_token": "host-only-access-token-sentinel",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "host-only-refresh-token-sentinel",
+            "id_token": id_token,
+        })
+    } else {
+        assert!(body.contains("grant_type=refresh_token"));
+        json!({
+            "access_token": "host-only-access-token-sentinel",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "id_token": id_token,
         })
     };
     Some(response(200, &document))
@@ -654,6 +1026,33 @@ fn manager_for(
     client_id: &str,
     registry: ProviderRegistry,
 ) -> (OAuthManager, Arc<TestJwksProvider>) {
+    let jwks = Arc::new(TestJwksProvider::default());
+    let manager = manager_for_package(browser, provider, client_id, None, registry, &jwks);
+    (manager, jwks)
+}
+
+/// Build a manager whose package declares the issuer its signed tokens must name.
+fn manager_for_issuer(
+    browser: &Arc<CallbackBrowser>,
+    provider: &str,
+    client_id: &str,
+    issuer: &str,
+    registry: ProviderRegistry,
+) -> (OAuthManager, Arc<TestJwksProvider>) {
+    let jwks = Arc::new(TestJwksProvider::default());
+    let manager = manager_for_package(browser, provider, client_id, Some(issuer), registry, &jwks);
+    (manager, jwks)
+}
+
+/// Build a manager over an existing key-set source, so two managers can share one.
+fn manager_for_package(
+    browser: &Arc<CallbackBrowser>,
+    provider: &str,
+    client_id: &str,
+    issuer: Option<&str>,
+    registry: ProviderRegistry,
+    jwks: &Arc<TestJwksProvider>,
+) -> OAuthManager {
     let secret_name = format!("{provider}.oauth.client_secret");
     let secret_purpose = format!("{provider} OAuth client configuration");
     let protected_store = ProtectedSecretStore::new(MemoryBackend::default());
@@ -673,12 +1072,14 @@ fn manager_for(
         principal,
         ApplicationEnvironment::Production,
     );
-    let jwks = Arc::new(TestJwksProvider::default());
-    let package =
+    let mut package =
         ProviderPackage::latest(provider, client_id).with_client_secret(ProtectedSecretReference {
             name: secret_name,
             purpose: secret_purpose,
         });
+    if let Some(issuer) = issuer {
+        package = package.with_issuer(issuer);
+    }
     let mut manager = OAuthManager::new(
         registry,
         [package],
@@ -689,10 +1090,20 @@ fn manager_for(
         Arc::new(HttpsOAuthTransport::new(Arc::new(TestHttpsClient {
             nonces: Arc::clone(&browser.nonces),
         }))),
-        Arc::clone(&jwks) as Arc<dyn JwksProvider>,
+        Arc::clone(jwks) as Arc<dyn JwksProvider>,
     );
     manager.set_callback_timeout(Duration::from_secs(30));
-    (manager, jwks)
+    manager
+}
+
+/// The confidential-client package one Microsoft tenant declares.
+fn microsoft_package(client_id: &str, issuer: &str) -> ProviderPackage {
+    ProviderPackage::latest("microsoft", client_id)
+        .with_client_secret(ProtectedSecretReference {
+            name: String::from("microsoft.oauth.client_secret"),
+            purpose: String::from("microsoft OAuth client configuration"),
+        })
+        .with_issuer(issuer)
 }
 
 #[test]
@@ -923,8 +1334,8 @@ fn facebook_sign_in_maps_nested_claims_and_withholds_provider_supplied_email() {
         claims.profile_url.as_deref(),
         Some("https://facebook.example/sam")
     );
-    // `oauth_provided_email: true` means Facebook never verified this address, so the host must
-    // not hand it to a guest as a verified claim.
+    // Facebook publishes no per-address verification claim, so the upstream does not publish an
+    // address for an account it has never proved, and nothing unproven reaches a guest.
     assert_eq!(claims.email, None);
 
     let authorization_url = browser.authorization_urls.lock()[0].clone();
@@ -979,9 +1390,9 @@ fn facebook_surfaces_the_email_when_the_provider_vouches_for_it() {
     let signed_in = manager.sign_in("facebook");
     browser.join_callbacks();
     assert!(signed_in.is_success());
-    // Same descriptor, same mapping, same flag path: only the upstream flag value differs. The
-    // address surviving here proves the first test's `None` came from the flag, not a broken
-    // claim path.
+    // Same descriptor and same mapping: only the upstream account differs. The address
+    // surviving here proves the first test's `None` came from the upstream, not a broken claim
+    // path.
     assert_eq!(
         signed_in.claims.as_ref().unwrap().email.as_deref(),
         Some("sam@example.test")
@@ -1073,6 +1484,407 @@ fn apple_rejects_an_id_token_bound_to_a_different_nonce() {
     assert_eq!(result.status, studio_oauth::OAuthStatus::Unavailable);
     assert_eq!(
         manager.status("apple"),
+        studio_oauth::OAuthStatus::SignedOut
+    );
+}
+
+#[test]
+fn discord_sign_in_maps_claims_and_withholds_an_unverified_address() {
+    let browser = Arc::new(CallbackBrowser::default());
+    let manager = manager_for(
+        &browser,
+        "discord",
+        "discord-client-id",
+        ProviderRegistry::maintained(),
+    )
+    .0;
+
+    let signed_in = manager.sign_in("discord");
+    browser.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "discord sign-in failed: {signed_in:?}"
+    );
+
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "80351110224678912");
+    assert_eq!(claims.login.as_deref(), Some("avery"));
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    // Discord's `verified` flag affirms the address, so the host surfaces it.
+    assert_eq!(claims.email.as_deref(), Some("avery@example.test"));
+    // Discord's avatar is a hash rather than a URL, so no avatar may be surfaced.
+    assert_eq!(claims.avatar_url, None);
+    assert_eq!(claims.profile_url, None);
+
+    let authorization_url = browser.authorization_urls.lock()[0].clone();
+    assert!(authorization_url.starts_with("https://discord.com/oauth2/authorize?"));
+    assert!(authorization_url.contains("scope=email%20identify"));
+    // Discord asserts identity over the access token, so it needs neither a nonce nor a form
+    // post to bind the answer to this request.
+    assert!(!authorization_url.contains("nonce="));
+    assert!(!authorization_url.contains("response_mode="));
+
+    // The same descriptor against an account Discord has not verified withholds the address the
+    // upstream still returns.
+    let unverified_browser = Arc::new(CallbackBrowser::default());
+    let unverified = manager_for(
+        &unverified_browser,
+        "discord",
+        "discord-client-id-unverified",
+        ProviderRegistry::maintained(),
+    )
+    .0;
+    let signed_in = unverified.sign_in("discord");
+    unverified_browser.join_callbacks();
+    assert!(signed_in.is_success());
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "80351110224678912");
+    assert_eq!(claims.login.as_deref(), Some("avery"));
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    assert_eq!(claims.email, None);
+}
+
+#[test]
+fn gitlab_sign_in_maps_userinfo_claims_and_withholds_an_unverified_address() {
+    let browser = Arc::new(CallbackBrowser::default());
+    let manager = manager_for(
+        &browser,
+        "gitlab",
+        "gitlab-client-id",
+        ProviderRegistry::maintained(),
+    )
+    .0;
+
+    let signed_in = manager.sign_in("gitlab");
+    browser.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "gitlab sign-in failed: {signed_in:?}"
+    );
+
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "gitlab-subject-1");
+    assert_eq!(claims.login.as_deref(), Some("avery"));
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    // GitLab's userinfo affirms the address, so the host surfaces it.
+    assert_eq!(claims.email.as_deref(), Some("avery@example.test"));
+    assert_eq!(
+        claims.avatar_url.as_deref(),
+        Some("https://avatars.example/avery.png")
+    );
+    assert_eq!(
+        claims.profile_url.as_deref(),
+        Some("https://gitlab.example/avery")
+    );
+
+    let authorization_url = browser.authorization_urls.lock()[0].clone();
+    assert!(authorization_url.starts_with("https://gitlab.com/oauth/authorize?"));
+    assert!(authorization_url.contains("scope=email%20openid%20profile"));
+
+    // The same descriptor against an account GitLab has not verified withholds the address.
+    let unverified_browser = Arc::new(CallbackBrowser::default());
+    let unverified = manager_for(
+        &unverified_browser,
+        "gitlab",
+        "gitlab-client-id-unverified",
+        ProviderRegistry::maintained(),
+    )
+    .0;
+    let signed_in = unverified.sign_in("gitlab");
+    unverified_browser.join_callbacks();
+    assert!(signed_in.is_success());
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "gitlab-subject-1");
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    assert_eq!(claims.email, None);
+}
+
+#[test]
+fn linkedin_sign_in_maps_userinfo_claims_and_withholds_an_unverified_address() {
+    let browser = Arc::new(CallbackBrowser::default());
+    let manager = manager_for(
+        &browser,
+        "linkedin",
+        "linkedin-client-id",
+        ProviderRegistry::maintained(),
+    )
+    .0;
+
+    let signed_in = manager.sign_in("linkedin");
+    browser.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "linkedin sign-in failed: {signed_in:?}"
+    );
+
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "linkedin-subject-1");
+    // LinkedIn publishes no login handle, so nothing is mapped to one.
+    assert_eq!(claims.login, None);
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    // LinkedIn's userinfo affirms the address, so the host surfaces it.
+    assert_eq!(claims.email.as_deref(), Some("avery@example.test"));
+    assert_eq!(
+        claims.avatar_url.as_deref(),
+        Some("https://avatars.example/avery.png")
+    );
+    assert_eq!(claims.profile_url, None);
+
+    let authorization_url = browser.authorization_urls.lock()[0].clone();
+    assert!(authorization_url.starts_with("https://www.linkedin.com/oauth/v2/authorization?"));
+    assert!(authorization_url.contains("scope=email%20openid%20profile"));
+
+    // The same descriptor against an account LinkedIn has not verified withholds the address.
+    let unverified_browser = Arc::new(CallbackBrowser::default());
+    let unverified = manager_for(
+        &unverified_browser,
+        "linkedin",
+        "linkedin-client-id-unverified",
+        ProviderRegistry::maintained(),
+    )
+    .0;
+    let signed_in = unverified.sign_in("linkedin");
+    unverified_browser.join_callbacks();
+    assert!(signed_in.is_success());
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "linkedin-subject-1");
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    assert_eq!(claims.email, None);
+}
+
+#[test]
+fn microsoft_sign_in_verifies_the_id_token_against_the_declared_tenant_issuer() {
+    let browser = Arc::new(CallbackBrowser::default());
+    let (manager, jwks) = manager_for_issuer(
+        &browser,
+        "microsoft",
+        "microsoft-client-id-tenant-a",
+        MICROSOFT_TENANT_A_ISSUER,
+        ProviderRegistry::maintained(),
+    );
+
+    let signed_in = manager.sign_in("microsoft");
+    browser.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "microsoft sign-in failed: {signed_in:?}"
+    );
+
+    let claims = signed_in.claims.as_ref().unwrap();
+    // Microsoft names the subject `oid`, and the token carries a different `sub`.
+    assert_eq!(
+        claims.subject,
+        "microsoft-object-id-for-microsoft-client-id-tenant-a"
+    );
+    assert_eq!(claims.login.as_deref(), Some("avery@contoso.example.test"));
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    // Microsoft publishes no email-verification claim, so there is nothing to gate on and the
+    // address is surfaced as returned.
+    assert_eq!(claims.email.as_deref(), Some("avery@example.test"));
+    assert_eq!(claims.avatar_url, None);
+    assert_eq!(claims.profile_url, None);
+
+    let authorization_url = browser.authorization_urls.lock()[0].clone();
+    assert!(
+        authorization_url
+            .starts_with("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?")
+    );
+    assert!(authorization_url.contains("scope=email%20offline_access%20openid%20profile"));
+    // The ID token is bound to this request by a host-generated nonce.
+    assert!(!browser.last_nonce().is_empty());
+
+    // One key-set retrieval serves the sign-in.
+    assert_eq!(*jwks.fetches.lock(), 1);
+}
+
+#[test]
+fn microsoft_tenants_use_their_own_issuer_and_never_each_others_token() {
+    // One key-set source serves both tenants, so the fetch count shows how many distinct
+    // issuer-keyed verifications actually happened.
+    let jwks = Arc::new(TestJwksProvider::default());
+    let browser_a = Arc::new(CallbackBrowser::default());
+    let browser_b = Arc::new(CallbackBrowser::default());
+    let manager_a = manager_for_package(
+        &browser_a,
+        "microsoft",
+        "microsoft-client-id-tenant-a",
+        Some(MICROSOFT_TENANT_A_ISSUER),
+        ProviderRegistry::maintained(),
+        &jwks,
+    );
+    let manager_b = manager_for_package(
+        &browser_b,
+        "microsoft",
+        "microsoft-client-id-tenant-b",
+        Some(MICROSOFT_TENANT_B_ISSUER),
+        ProviderRegistry::maintained(),
+        &jwks,
+    );
+
+    let signed_in = manager_a.sign_in("microsoft");
+    browser_a.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "tenant A sign-in failed: {signed_in:?}"
+    );
+    assert_eq!(
+        signed_in.claims.as_ref().unwrap().subject,
+        "microsoft-object-id-for-microsoft-client-id-tenant-a"
+    );
+    assert_eq!(*jwks.fetches.lock(), 1);
+
+    let signed_in = manager_b.sign_in("microsoft");
+    browser_b.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "tenant B sign-in failed: {signed_in:?}"
+    );
+    assert_eq!(
+        signed_in.claims.as_ref().unwrap().subject,
+        "microsoft-object-id-for-microsoft-client-id-tenant-b"
+    );
+    // One key-set retrieval per issuer, not one retrieval shared between two tenants.
+    assert_eq!(*jwks.fetches.lock(), 2);
+
+    // Inside one manager the key-set cache is keyed by the issuer in force, so declaring
+    // another tenant must not inherit the keys fetched for the first one. A cache keyed only
+    // by the descriptor version would reuse them, and this sign-in would fail.
+    manager_a
+        .enable_package(microsoft_package(
+            "microsoft-client-id-tenant-b",
+            MICROSOFT_TENANT_B_ISSUER,
+        ))
+        .unwrap();
+    let signed_in = manager_a.sign_in("microsoft");
+    browser_a.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "tenant B sign-in on the first manager failed: {signed_in:?}"
+    );
+    assert_eq!(
+        signed_in.claims.as_ref().unwrap().subject,
+        "microsoft-object-id-for-microsoft-client-id-tenant-b"
+    );
+    assert_eq!(*jwks.fetches.lock(), 3);
+}
+
+#[test]
+fn microsoft_rejects_an_id_token_issued_by_another_tenant() {
+    let browser = Arc::new(CallbackBrowser::default());
+    // The app is registered against tenant B, so the upstream returns a token that names
+    // tenant B, while the package declares that it expects tenant A's issuer.
+    let (manager, _jwks) = manager_for_issuer(
+        &browser,
+        "microsoft",
+        "microsoft-client-id-tenant-b",
+        MICROSOFT_TENANT_A_ISSUER,
+        ProviderRegistry::maintained(),
+    );
+
+    let result = manager.sign_in("microsoft");
+    browser.join_callbacks();
+    assert!(!result.is_success());
+    assert_eq!(result.code_str(), OAuthErrorCode::IdTokenInvalid.as_str());
+    assert_eq!(result.status, studio_oauth::OAuthStatus::Unavailable);
+    assert_eq!(
+        manager.status("microsoft"),
+        studio_oauth::OAuthStatus::SignedOut
+    );
+}
+
+#[test]
+fn spotify_sign_in_verifies_the_id_token_and_withholds_an_unverified_address() {
+    let browser = Arc::new(CallbackBrowser::default());
+    let (manager, jwks) = manager_for(
+        &browser,
+        "spotify",
+        "spotify-client-id",
+        ProviderRegistry::maintained(),
+    );
+
+    let signed_in = manager.sign_in("spotify");
+    browser.join_callbacks();
+    assert!(
+        signed_in.is_success(),
+        "spotify sign-in failed: {signed_in:?}"
+    );
+
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "spotify-subject-1");
+    assert_eq!(claims.login.as_deref(), Some("avery"));
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    // Spotify's `email_verified` affirms the address, so the host surfaces it.
+    assert_eq!(claims.email.as_deref(), Some("avery@example.test"));
+    assert_eq!(
+        claims.avatar_url.as_deref(),
+        Some("https://avatars.example/avery.png")
+    );
+    assert_eq!(claims.profile_url, None);
+
+    let authorization_url = browser.authorization_urls.lock()[0].clone();
+    assert!(authorization_url.starts_with("https://accounts.spotify.com/oauth2/v2/auth?"));
+    assert!(authorization_url.contains("scope=email%20openid%20profile"));
+    // The ID token is bound to this request by a host-generated nonce.
+    assert!(!browser.last_nonce().is_empty());
+
+    // One key-set retrieval serves the sign-in.
+    assert_eq!(*jwks.fetches.lock(), 1);
+
+    // The same descriptor against an account Spotify has not verified withholds the address.
+    let unverified_browser = Arc::new(CallbackBrowser::default());
+    let (unverified, unverified_jwks) = manager_for(
+        &unverified_browser,
+        "spotify",
+        "spotify-client-id-unverified",
+        ProviderRegistry::maintained(),
+    );
+    let signed_in = unverified.sign_in("spotify");
+    unverified_browser.join_callbacks();
+    assert!(signed_in.is_success());
+    let claims = signed_in.claims.as_ref().unwrap();
+    assert_eq!(claims.subject, "spotify-subject-1");
+    assert_eq!(claims.display_name.as_deref(), Some("Avery Rivera"));
+    assert_eq!(claims.email, None);
+    assert_eq!(*unverified_jwks.fetches.lock(), 1);
+}
+
+#[test]
+fn id_tokens_bound_to_a_nonce_the_host_never_sent_are_rejected() {
+    // These client ids make the fake upstreams sign correctly but bind the token to a nonce
+    // this host never sent, which is exactly what a token captured from another session
+    // looks like.
+    let spotify_browser = Arc::new(CallbackBrowser::default());
+    let (spotify, _spotify_jwks) = manager_for(
+        &spotify_browser,
+        "spotify",
+        "spotify-client-id-replayed",
+        ProviderRegistry::maintained(),
+    );
+    let result = spotify.sign_in("spotify");
+    spotify_browser.join_callbacks();
+    assert!(!result.is_success());
+    assert_eq!(result.code_str(), OAuthErrorCode::IdTokenInvalid.as_str());
+    assert_eq!(result.status, studio_oauth::OAuthStatus::Unavailable);
+    assert_eq!(
+        spotify.status("spotify"),
+        studio_oauth::OAuthStatus::SignedOut
+    );
+
+    let microsoft_browser = Arc::new(CallbackBrowser::default());
+    let (microsoft, _microsoft_jwks) = manager_for_issuer(
+        &microsoft_browser,
+        "microsoft",
+        "microsoft-client-id-tenant-a-replayed",
+        MICROSOFT_TENANT_A_ISSUER,
+        ProviderRegistry::maintained(),
+    );
+    let result = microsoft.sign_in("microsoft");
+    microsoft_browser.join_callbacks();
+    assert!(!result.is_success());
+    assert_eq!(result.code_str(), OAuthErrorCode::IdTokenInvalid.as_str());
+    assert_eq!(result.status, studio_oauth::OAuthStatus::Unavailable);
+    assert_eq!(
+        microsoft.status("microsoft"),
         studio_oauth::OAuthStatus::SignedOut
     );
 }

@@ -90,11 +90,81 @@ impl JwksProvider for HttpsJwksProvider {
     }
 }
 
+/// The largest discovery document the host reads.
+const MAX_DISCOVERY_BYTES: usize = 64 * 1024;
+
+/// How long a discovery fetch may take.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Host-owned retrieval of an issuer's OpenID Connect discovery document.
+///
+/// Implementations own the transport and must never expose a document to guests.
+pub trait OidcDiscoveryProvider: Send + Sync {
+    /// Fetch the discovery document published by one issuer.
+    fn fetch(&self, issuer: &str) -> Result<Value, OAuthError>;
+}
+
+/// Discovery retrieval over the host's certificate-validating HTTPS client.
+pub struct HttpsOidcDiscovery {
+    http: ProductionHttpTransport,
+}
+
+impl std::fmt::Debug for HttpsOidcDiscovery {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HttpsOidcDiscovery")
+    }
+}
+
+impl HttpsOidcDiscovery {
+    /// Construct the adapter over a host-provided TLS client.
+    #[must_use]
+    pub fn new(client: Arc<dyn HttpsClient>) -> Self {
+        Self {
+            http: ProductionHttpTransport::new(
+                client,
+                TransportLimits {
+                    max_response_bytes: MAX_DISCOVERY_BYTES,
+                    ..TransportLimits::default()
+                },
+            ),
+        }
+    }
+}
+
+impl OidcDiscoveryProvider for HttpsOidcDiscovery {
+    fn fetch(&self, issuer: &str) -> Result<Value, OAuthError> {
+        if !https_url(issuer) {
+            return Err(OAuthError::new(OAuthErrorCode::DescriptorInvalid));
+        }
+        let url = format!(
+            "{}/.well-known/openid-configuration",
+            issuer.trim_end_matches('/')
+        );
+        let response = self
+            .http
+            .execute(OutgoingRequest {
+                method: HttpMethod::Get,
+                url,
+                headers: vec![
+                    (String::from("accept"), String::from("application/json")),
+                    (String::from("user-agent"), String::from("studio-oauth/1.0")),
+                ],
+                body: None,
+                timeout: DISCOVERY_TIMEOUT,
+            })
+            .map_err(|_| OAuthError::new(OAuthErrorCode::DescriptorInvalid))?;
+        if !(200..300).contains(&response.status) || response.body.len() > MAX_DISCOVERY_BYTES {
+            return Err(OAuthError::new(OAuthErrorCode::DescriptorInvalid));
+        }
+        serde_json::from_slice(&response.body)
+            .map_err(|_| OAuthError::new(OAuthErrorCode::DescriptorInvalid))
+    }
+}
+
 struct CachedKeys {
     fetched: Instant,
     keys: JwkSet,
 }
-
 /// Verifies ID tokens against one provider's published key set.
 pub struct IdTokenVerifier {
     issuer: String,

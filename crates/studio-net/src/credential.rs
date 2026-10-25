@@ -18,6 +18,13 @@ use studio_security::{
 use crate::declaration::CompiledRouteGroup;
 use crate::error::{BrokerError, BrokerErrorCode};
 
+/// The authorization scheme an OAuth session credential rides in.
+///
+/// RFC 6750's bearer scheme is what a provider's API expects, and it is the same scheme the
+/// OAuth transport already uses for its own profile requests. A bare token is not a valid
+/// credential header, so the broker sends the scheme with it.
+const SESSION_AUTHORIZATION_PREFIX: &str = "Bearer ";
+
 /// Object-safe adapter around the sealed [`studio_security::BrokerSecretInjector`] capability so
 /// the broker can hold one injector behind an `Arc<dyn ...>` without carrying credential-backend
 /// generics.
@@ -127,8 +134,12 @@ pub fn resolve(
             let Some(resolver) = oauth else {
                 return Err(BrokerError::new(BrokerErrorCode::OauthSessionUnavailable));
             };
-            let mut sink =
-                HeaderInjectionSink::new(headers, String::from("authorization"), None, filter);
+            let mut sink = HeaderInjectionSink::new(
+                headers,
+                String::from("authorization"),
+                Some(String::from(SESSION_AUTHORIZATION_PREFIX)),
+                filter,
+            );
             resolver.inject_session(
                 group.oauth_provider().unwrap_or_default(),
                 group.id(),

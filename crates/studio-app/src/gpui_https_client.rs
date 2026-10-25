@@ -133,14 +133,11 @@ impl HttpsClient for GpuiHttpsClient {
                     let mut body = response.into_body();
                     let mut total = 0_usize;
                     loop {
-                        let chunk_size = limits.max_stream_chunk_bytes.min(64 * 1024).max(1);
+                        let chunk_size = limits.max_stream_chunk_bytes.clamp(1, 64 * 1024);
                         let mut chunk = vec![0_u8; chunk_size];
-                        let count = match body.read(&mut chunk).await {
-                            Ok(count) => count,
-                            Err(_) => {
-                                chunk.zeroize();
-                                return Err(TransportError::ConnectionFailure);
-                            }
+                        let Ok(count) = body.read(&mut chunk).await else {
+                            chunk.zeroize();
+                            return Err(TransportError::ConnectionFailure);
                         };
                         if count == 0 {
                             let _ = worker_sender.send(Ok(None));

@@ -14,11 +14,13 @@ serde_json.workspace = true
 semver.workspace = true
 sha2.workspace = true
 studio-net = { path = "../studio-net" }
+studio-oauth-redirect = { path = "../studio-oauth-redirect" }
 studio-security = { path = "../studio-security" }
 thiserror.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 parking_lot = "0.12.5"
+studio-oauth-broker = { path = "../studio-oauth-broker" }
 [lints]
 workspace = true

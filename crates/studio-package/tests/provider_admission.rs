@@ -125,6 +125,7 @@ fn github_fixture_resolves_exact_routes_and_capabilities() {
         .expect("maintained GitHub provider admits fixture");
     assert_eq!(plan.providers()[0].id, "github");
     assert_eq!(plan.providers()[0].version, "1.1.0");
+    assert_eq!(plan.providers()[0].issuer, None);
     assert_eq!(plan.capabilities(), &[Capability::DataSurrealQuery]);
     assert_eq!(plan.route_groups().len(), 1);
 }
@@ -235,4 +236,199 @@ fn route_and_secret_rejections_are_value_free() {
         .expect_err("route and secret mismatch must fail closed");
     assert_eq!(error.code(), ProviderAdmissionErrorCode::RouteNotAllowed);
     assert!(!error.to_string().contains("super-secret-value"));
+}
+
+fn declared_issuer_integration(config: serde_json::Value) -> IntegrationReference {
+    IntegrationReference {
+        id: "oidc-acme".to_owned(),
+        version: "1.0.0".to_owned(),
+        config: Some(config),
+    }
+}
+
+#[test]
+fn declared_issuer_admits_with_its_own_issuer_and_standard_scopes() {
+    let package = manifest(
+        vec![declared_issuer_integration(json!({
+            "issuer": "https://acme.example.com",
+            "clientId": "acme-client",
+            "scopes": ["openid", "profile"]
+        }))],
+        Vec::new(),
+    );
+    let plan = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect("a declared issuer admits with the issuer it declared");
+    let provider = &plan.providers()[0];
+    assert_eq!(provider.id, "oidc-acme");
+    assert_eq!(provider.version, "1.0.0");
+    assert_eq!(provider.issuer.as_deref(), Some("https://acme.example.com"));
+    assert_eq!(
+        provider.scopes,
+        vec!["openid".to_owned(), "profile".to_owned()]
+    );
+    assert!(provider.secrets.is_empty());
+    assert!(plan.route_groups().is_empty());
+}
+
+#[test]
+fn declared_issuer_scope_outside_the_standard_ceiling_is_refused() {
+    let package = manifest(
+        vec![declared_issuer_integration(json!({
+            "issuer": "https://acme.example.com",
+            "clientId": "acme-client",
+            "scopes": ["openid", "acme.api.read"]
+        }))],
+        Vec::new(),
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("a scope outside the host ceiling must fail closed");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::ScopeNotAllowed);
+}
+
+#[test]
+fn declared_issuer_with_a_non_https_issuer_is_refused() {
+    let package = manifest(
+        vec![declared_issuer_integration(json!({
+            "issuer": "http://acme.example.com",
+            "clientId": "acme-client"
+        }))],
+        Vec::new(),
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("an issuer that is not an HTTPS URL must fail closed");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::IntegrationInvalid);
+}
+
+#[test]
+fn declared_issuer_without_a_client_id_is_refused() {
+    let package = manifest(
+        vec![declared_issuer_integration(json!({
+            "issuer": "https://acme.example.com"
+        }))],
+        Vec::new(),
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("a declared issuer without a client id must fail closed");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::IntegrationInvalid);
+}
+
+#[test]
+fn declared_issuer_naming_a_secret_is_refused() {
+    let package = manifest(
+        vec![declared_issuer_integration(json!({
+            "issuer": "https://acme.example.com",
+            "clientId": "acme-client",
+            "clientSecretName": "acme.oauth.client_secret"
+        }))],
+        Vec::new(),
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("a declared issuer carries no secret");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::SecretNotAllowed);
+}
+
+#[test]
+fn declared_issuer_id_may_not_shadow_a_maintained_provider() {
+    let package = manifest(
+        vec![IntegrationReference {
+            id: "oidc-google".to_owned(),
+            version: "1.0.0".to_owned(),
+            config: Some(json!({
+                "issuer": "https://acme.example.com",
+                "clientId": "acme-client"
+            })),
+        }],
+        Vec::new(),
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("a declared issuer may not take a maintained provider name");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::IntegrationInvalid);
+}
+
+#[test]
+fn declared_issuer_with_an_uninstalled_version_is_refused() {
+    let package = manifest(
+        vec![IntegrationReference {
+            id: "oidc-acme".to_owned(),
+            version: "2.0.0".to_owned(),
+            config: Some(json!({
+                "issuer": "https://acme.example.com",
+                "clientId": "acme-client"
+            })),
+        }],
+        Vec::new(),
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("a declared issuer has one descriptor version");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::OutdatedProvider);
+}
+
+#[test]
+fn declared_issuer_grants_no_route_group() {
+    let package = manifest(
+        vec![declared_issuer_integration(json!({
+            "issuer": "https://acme.example.com",
+            "clientId": "acme-client"
+        }))],
+        vec![RouteGroupDeclaration {
+            id: "oidc-acme.user".to_owned(),
+            origins: vec!["https://acme.example.com".to_owned()],
+            methods: vec![HttpMethod::Get],
+            paths: vec!["/user".to_owned()],
+            allowed_headers: vec!["accept".to_owned()],
+            credential: CredentialSource::OauthProviderSession {
+                provider: "oidc-acme".to_owned(),
+            },
+            request_schema: None,
+            response_schema: None,
+            streaming: None,
+            limits: Default::default(),
+        }],
+    );
+    let error = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect_err("a declared issuer grants no route group");
+    assert_eq!(error.code(), ProviderAdmissionErrorCode::RouteNotAllowed);
+}
+
+#[test]
+fn maintained_provider_admits_without_a_declared_issuer() {
+    let mut package = manifest(
+        vec![IntegrationReference {
+            id: "google".to_owned(),
+            version: "1.0.0".to_owned(),
+            config: Some(json!({
+                "clientId": "fixture-client",
+                "clientSecretName": "google.oauth.client_secret",
+                "scopes": ["openid", "email", "profile"]
+            })),
+        }],
+        Vec::new(),
+    );
+    package.secrets = vec![SecretDeclaration {
+        name: "google.oauth.client_secret".to_owned(),
+        purpose: "Google OAuth client configuration".to_owned(),
+    }];
+    let plan = ProviderRegistry::maintained()
+        .admit(&package, &Default::default())
+        .expect("a maintained first-party provider still admits");
+    let provider = &plan.providers()[0];
+    assert_eq!(provider.id, "google");
+    assert_eq!(provider.version, "1.0.0");
+    assert_eq!(provider.issuer, None);
+    assert_eq!(
+        provider.scopes,
+        vec![
+            "openid".to_owned(),
+            "email".to_owned(),
+            "profile".to_owned()
+        ]
+    );
 }

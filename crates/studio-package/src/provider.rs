@@ -25,10 +25,70 @@ pub const PROVIDER_DESCRIPTOR_SCHEMA_VERSION: u16 = 1;
 pub const GITHUB_PROVIDER_ID: &str = "github";
 /// Maintained GitHub integration descriptor version.
 pub const GITHUB_PROVIDER_VERSION: &str = "1.1.0";
+/// Maintained Apple integration id.
+pub const APPLE_PROVIDER_ID: &str = "apple";
+/// Maintained Apple integration descriptor version.
+pub const APPLE_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained Apple descriptor version may request.
+pub const APPLE_ALLOWED_SCOPES: &[&str] = &["name", "email"];
+/// Maintained Discord integration id.
+pub const DISCORD_PROVIDER_ID: &str = "discord";
+/// Maintained Discord integration descriptor version.
+pub const DISCORD_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained Discord descriptor version may request.
+pub const DISCORD_ALLOWED_SCOPES: &[&str] = &["email", "identify"];
+/// Maintained Facebook integration id.
+pub const FACEBOOK_PROVIDER_ID: &str = "facebook";
+/// Maintained Facebook integration descriptor version.
+pub const FACEBOOK_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained Facebook descriptor version may request.
+pub const FACEBOOK_ALLOWED_SCOPES: &[&str] = &["email", "public_profile"];
+/// Maintained GitLab integration id.
+pub const GITLAB_PROVIDER_ID: &str = "gitlab";
+/// Maintained GitLab integration descriptor version.
+pub const GITLAB_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained GitLab descriptor version may request.
+pub const GITLAB_ALLOWED_SCOPES: &[&str] = &["email", "openid", "profile"];
+/// Maintained Google integration id.
+pub const GOOGLE_PROVIDER_ID: &str = "google";
+/// Maintained Google integration descriptor version.
+pub const GOOGLE_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained Google descriptor version may request.
+pub const GOOGLE_ALLOWED_SCOPES: &[&str] = &["openid", "email", "profile"];
+/// Maintained `LinkedIn` integration id.
+pub const LINKEDIN_PROVIDER_ID: &str = "linkedin";
+/// Maintained `LinkedIn` integration descriptor version.
+pub const LINKEDIN_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained `LinkedIn` descriptor version may request.
+pub const LINKEDIN_ALLOWED_SCOPES: &[&str] = &["email", "openid", "profile"];
+/// Maintained Microsoft identity integration id.
+pub const MICROSOFT_PROVIDER_ID: &str = "microsoft";
+/// Maintained Microsoft identity integration descriptor version.
+pub const MICROSOFT_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained Microsoft identity descriptor version may request.
+pub const MICROSOFT_ALLOWED_SCOPES: &[&str] = &["email", "offline_access", "openid", "profile"];
+/// Maintained Spotify integration id.
+pub const SPOTIFY_PROVIDER_ID: &str = "spotify";
+/// Maintained Spotify integration descriptor version.
+pub const SPOTIFY_PROVIDER_VERSION: &str = "1.0.0";
+/// Scopes any maintained Spotify descriptor version may request.
+pub const SPOTIFY_ALLOWED_SCOPES: &[&str] = &["email", "openid", "profile"];
 /// Maintained provider-neutral AI integration id.
 pub const AI_PROVIDER_ID: &str = "ai";
 /// Maintained provider-neutral AI integration descriptor version.
 pub const AI_PROVIDER_VERSION: &str = "1.0.0";
+/// Reserved integration id prefix for an application-declared `OpenID` Connect issuer.
+///
+/// A declared issuer is not in the maintained provider catalog: the application names the
+/// issuer it wants to sign in with, and the host admits it as a public, identity-only client.
+pub const DECLARED_OIDC_ID_PREFIX: &str = "oidc-";
+/// The one descriptor version a declared issuer integration may declare.
+pub const DECLARED_OIDC_DESCRIPTOR_VERSION: &str = "1.0.0";
+/// The `OpenID` Connect standard scopes the host grants a declared issuer.
+///
+/// The host owns this ceiling: a declared issuer's own API scopes are not reachable, however
+/// the application asks for them.
+pub const DECLARED_OIDC_ALLOWED_SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
 
 /// Host state of an installed descriptor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,6 +152,8 @@ pub struct ProviderDescriptor {
     pub version: String,
     /// Admission state.
     pub state: ProviderDescriptorState,
+    /// Whether the provider enables sign-in without granting any REST route group.
+    pub identity_only: bool,
     /// Provider route policies.
     pub routes: Vec<ProviderRouteDescriptor>,
     /// Scopes accepted in integration configuration.
@@ -121,6 +183,7 @@ impl ProviderDescriptor {
             id: id.into(),
             version: version.into(),
             state: ProviderDescriptorState::Active,
+            identity_only: false,
             routes,
             scopes: Vec::new(),
             required_secret_names: Vec::new(),
@@ -155,6 +218,97 @@ impl ProviderDescriptor {
         descriptor.secret_config_key = Some("clientSecretName".to_owned());
         descriptor.client_id_config_key = Some("clientId".to_owned());
         descriptor
+    }
+
+    /// Return the maintained Apple identity descriptor.
+    ///
+    /// Apple grants identity only: the descriptor declares no REST route group, so an
+    /// application may sign in but cannot call the provider's API through the host broker.
+    #[must_use]
+    pub fn apple() -> Self {
+        identity_descriptor(
+            APPLE_PROVIDER_ID,
+            APPLE_PROVIDER_VERSION,
+            APPLE_ALLOWED_SCOPES,
+            "Apple OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained Discord identity descriptor.
+    #[must_use]
+    pub fn discord() -> Self {
+        identity_descriptor(
+            DISCORD_PROVIDER_ID,
+            DISCORD_PROVIDER_VERSION,
+            DISCORD_ALLOWED_SCOPES,
+            "Discord OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained Facebook identity descriptor.
+    #[must_use]
+    pub fn facebook() -> Self {
+        identity_descriptor(
+            FACEBOOK_PROVIDER_ID,
+            FACEBOOK_PROVIDER_VERSION,
+            FACEBOOK_ALLOWED_SCOPES,
+            "Facebook OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained GitLab identity descriptor.
+    #[must_use]
+    pub fn gitlab() -> Self {
+        identity_descriptor(
+            GITLAB_PROVIDER_ID,
+            GITLAB_PROVIDER_VERSION,
+            GITLAB_ALLOWED_SCOPES,
+            "GitLab OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained Google identity descriptor.
+    #[must_use]
+    pub fn google() -> Self {
+        identity_descriptor(
+            GOOGLE_PROVIDER_ID,
+            GOOGLE_PROVIDER_VERSION,
+            GOOGLE_ALLOWED_SCOPES,
+            "Google OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained `LinkedIn` identity descriptor.
+    #[must_use]
+    pub fn linkedin() -> Self {
+        identity_descriptor(
+            LINKEDIN_PROVIDER_ID,
+            LINKEDIN_PROVIDER_VERSION,
+            LINKEDIN_ALLOWED_SCOPES,
+            "LinkedIn OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained Microsoft identity descriptor.
+    #[must_use]
+    pub fn microsoft() -> Self {
+        identity_descriptor(
+            MICROSOFT_PROVIDER_ID,
+            MICROSOFT_PROVIDER_VERSION,
+            MICROSOFT_ALLOWED_SCOPES,
+            "Microsoft OAuth client configuration",
+        )
+    }
+
+    /// Return the maintained Spotify identity descriptor.
+    #[must_use]
+    pub fn spotify() -> Self {
+        identity_descriptor(
+            SPOTIFY_PROVIDER_ID,
+            SPOTIFY_PROVIDER_VERSION,
+            SPOTIFY_ALLOWED_SCOPES,
+            "Spotify OAuth client configuration",
+        )
     }
 
     /// Return the maintained provider-neutral AI descriptor.
@@ -197,11 +351,38 @@ impl ProviderDescriptor {
         descriptor
     }
 
+    /// Construct the admission descriptor for an application-declared `OpenID` Connect issuer.
+    ///
+    /// A declared issuer is a public client: the application holds a client id and no secret, so
+    /// the descriptor requires no protected secret. It grants no route group either, because the
+    /// host does not know the issuer's API surface, and the scopes it accepts are the `OpenID`
+    /// Connect standard set the host owns.
+    #[must_use]
+    pub fn declared_oidc(id: &str, version: &str) -> Self {
+        let mut descriptor = Self::new(id, version, Vec::new());
+        descriptor.identity_only = true;
+        descriptor.scopes = DECLARED_OIDC_ALLOWED_SCOPES
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect();
+        descriptor.client_id_config_key = Some("clientId".to_owned());
+        descriptor
+    }
+
     fn validate(&self) -> Result<(), ProviderAdmissionError> {
+        // An identity-only provider declares no route group at all, and a provider that grants
+        // REST access must declare at least one. Either way, a declared route has to be
+        // well-formed: the route policy is compiled into the broker, so a malformed one is
+        // refused rather than admitted and rejected later at request time.
+        let route_count_matches = if self.identity_only {
+            self.routes.is_empty()
+        } else {
+            !self.routes.is_empty()
+        };
         if self.schema_version != PROVIDER_DESCRIPTOR_SCHEMA_VERSION
             || !valid_identifier(&self.id)
             || Version::parse(&self.version).is_err()
-            || self.routes.is_empty()
+            || !route_count_matches
             || self.routes.iter().any(|route| {
                 route.id.is_empty()
                     || route.origins.is_empty()
@@ -216,6 +397,50 @@ impl ProviderDescriptor {
         }
         Ok(())
     }
+}
+
+/// Build the maintained identity-only admission descriptor for one OAuth provider.
+///
+/// An identity-only provider enables sign-in without granting any REST surface: the
+/// application authenticates the account and reads the approved claims, but the host broker
+/// holds no route group for the provider, so the provider's API is unreachable from the guest.
+fn identity_descriptor(
+    id: &str,
+    version: &str,
+    scopes: &[&str],
+    purpose: &str,
+) -> ProviderDescriptor {
+    let mut descriptor = ProviderDescriptor::new(id, version, Vec::new());
+    descriptor.identity_only = true;
+    descriptor.scopes = scopes.iter().map(|scope| (*scope).to_owned()).collect();
+    let secret_name = format!("{id}.oauth.client_secret");
+    descriptor.required_secret_names = vec![secret_name.clone()];
+    descriptor
+        .required_secret_purposes
+        .insert(secret_name, purpose.to_owned());
+    descriptor.secret_config_key = Some("clientSecretName".to_owned());
+    descriptor.client_id_config_key = Some("clientId".to_owned());
+    descriptor
+}
+
+/// Return the maintained OAuth admission descriptors in stable order.
+///
+/// The host uses this list to provision one protected client secret per provider without
+/// re-spelling any provider id, secret name, or purpose, so the admission policy and the
+/// host's secret provisioning cannot drift apart.
+#[must_use]
+pub fn maintained_oauth_descriptors() -> Vec<ProviderDescriptor> {
+    vec![
+        ProviderDescriptor::github(),
+        ProviderDescriptor::apple(),
+        ProviderDescriptor::discord(),
+        ProviderDescriptor::facebook(),
+        ProviderDescriptor::gitlab(),
+        ProviderDescriptor::google(),
+        ProviderDescriptor::linkedin(),
+        ProviderDescriptor::microsoft(),
+        ProviderDescriptor::spotify(),
+    ]
 }
 
 fn github_route(id: &str, path: &str) -> ProviderRouteDescriptor {
@@ -358,15 +583,17 @@ impl Default for ProviderRegistry {
 }
 
 impl ProviderRegistry {
-    /// Construct a registry with maintained GitHub and AI descriptors.
+    /// Construct a registry with the maintained OAuth and AI descriptors.
     #[must_use]
     pub fn maintained() -> Self {
         let mut registry = Self {
             descriptors: BTreeMap::new(),
         };
-        registry
-            .register(ProviderDescriptor::github())
-            .expect("maintained GitHub descriptor is valid");
+        for descriptor in maintained_oauth_descriptors() {
+            registry
+                .register(descriptor)
+                .expect("maintained OAuth descriptor is valid");
+        }
         registry
             .register(ProviderDescriptor::ai())
             .expect("maintained AI descriptor is valid");
@@ -492,6 +719,52 @@ impl ProviderRegistry {
         self.resolve(&integration.id, &integration.version)
     }
 
+    /// Build the admission descriptor of one application-declared `OpenID` Connect issuer.
+    ///
+    /// A declared issuer has no maintained descriptor, so the registry synthesizes one from
+    /// what the application declared. The declared id must be a valid identifier that names no
+    /// maintained provider, because a first-party id is never shadowed by a declared issuer, and
+    /// the declared version must be the one descriptor version a declared issuer has.
+    fn declared_descriptor(
+        &self,
+        integration: &IntegrationReference,
+    ) -> Result<ProviderDescriptor, ProviderAdmissionError> {
+        if self.descriptors.contains_key(&integration.id) {
+            return Err(integration_invalid(
+                integration,
+                "declared issuer id is already installed as a provider descriptor",
+            ));
+        }
+        let suffix = integration
+            .id
+            .strip_prefix(DECLARED_OIDC_ID_PREFIX)
+            .unwrap_or_default();
+        if suffix.is_empty() || !valid_identifier(suffix) {
+            return Err(integration_invalid(
+                integration,
+                "declared issuer id is not a valid provider identifier",
+            ));
+        }
+        if is_maintained_provider_id(suffix) {
+            return Err(integration_invalid(
+                integration,
+                "declared issuer id names a maintained provider",
+            ));
+        }
+        if integration.version != DECLARED_OIDC_DESCRIPTOR_VERSION {
+            return Err(ProviderAdmissionError::new(
+                ProviderAdmissionErrorCode::OutdatedProvider,
+                "declared issuer descriptor version is not installed",
+                Some(&integration.id),
+                Some(&integration.version),
+                None,
+            ));
+        }
+        let descriptor = ProviderDescriptor::declared_oidc(&integration.id, &integration.version);
+        descriptor.validate()?;
+        Ok(descriptor)
+    }
+
     /// Resolve and admit all integrations and routes in a parsed manifest.
     pub fn admit(
         &self,
@@ -503,7 +776,16 @@ impl ProviderRegistry {
         let mut integration_ids = BTreeSet::new();
 
         for integration in &manifest.integrations {
-            let descriptor = self.resolve(&integration.id, &integration.version)?;
+            // A declared issuer is not in the maintained catalog, so the registry synthesizes
+            // its descriptor from what the application declared instead of resolving one.
+            let synthesized;
+            let (descriptor, issuer) = if is_declared_oidc_id(&integration.id) {
+                synthesized = self.declared_descriptor(integration)?;
+                let issuer = declared_issuer(integration)?;
+                (&synthesized, Some(issuer))
+            } else {
+                (self.resolve(&integration.id, &integration.version)?, None)
+            };
             if !integration_ids.insert(integration.id.as_str()) {
                 return Err(ProviderAdmissionError::new(
                     ProviderAdmissionErrorCode::IntegrationInvalid,
@@ -519,10 +801,20 @@ impl ProviderRegistry {
                 version: descriptor.version.clone(),
                 scopes: configured_scopes(integration),
                 secrets: configured_secrets(integration, descriptor),
+                issuer,
             });
         }
 
         for route in &manifest.routes {
+            if is_declared_oidc_id(&route.id) {
+                return Err(ProviderAdmissionError::new(
+                    ProviderAdmissionErrorCode::RouteNotAllowed,
+                    "a declared issuer grants no route group",
+                    None,
+                    None,
+                    Some(&route.id),
+                ));
+            }
             let integration = manifest
                 .integrations
                 .iter()
@@ -586,11 +878,149 @@ impl ProviderRegistry {
     }
 }
 
+/// Whether one integration or route id names an application-declared `OpenID` Connect issuer.
+///
+/// The reserved prefix marks a declared issuer, which the host admits as a public, identity-only
+/// client with no route group.
+#[must_use]
+pub fn is_declared_oidc_id(id: &str) -> bool {
+    id.starts_with(DECLARED_OIDC_ID_PREFIX)
+}
+
+/// Reject one integration declaration that the host cannot admit.
+fn integration_invalid(
+    integration: &IntegrationReference,
+    detail: &'static str,
+) -> ProviderAdmissionError {
+    ProviderAdmissionError::new(
+        ProviderAdmissionErrorCode::IntegrationInvalid,
+        detail,
+        Some(&integration.id),
+        Some(&integration.version),
+        None,
+    )
+}
+
+/// Read and validate the issuer one declared issuer integration declared.
+///
+/// The issuer is the host's anchor: it must be an HTTPS URL the host can pin, and a declared
+/// issuer carries no secret, so a configuration that names one is refused outright.
+fn declared_issuer(integration: &IntegrationReference) -> Result<String, ProviderAdmissionError> {
+    let Some(config) = integration.config.as_ref() else {
+        return Err(integration_invalid(
+            integration,
+            "declared issuer configuration is required",
+        ));
+    };
+    let Some(config) = config.as_object() else {
+        return Err(integration_invalid(
+            integration,
+            "declared issuer configuration must be an object",
+        ));
+    };
+    if config.keys().any(|key| names_secret_config_key(key)) {
+        return Err(ProviderAdmissionError::new(
+            ProviderAdmissionErrorCode::SecretNotAllowed,
+            "a declared issuer carries no secret",
+            Some(&integration.id),
+            Some(&integration.version),
+            None,
+        ));
+    }
+    let Some(issuer) = config.get("issuer").and_then(|value| value.as_str()) else {
+        return Err(integration_invalid(
+            integration,
+            "declared issuer configuration is required",
+        ));
+    };
+    if !valid_issuer_url(issuer) {
+        return Err(integration_invalid(
+            integration,
+            "declared issuer configuration is invalid",
+        ));
+    }
+    Ok(issuer.to_owned())
+}
+
+/// Whether one configuration key names a protected secret.
+fn names_secret_config_key(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    lowered.contains("secret") || lowered.contains("apikey")
+}
+
+/// Whether one declared issuer is an HTTPS URL the host can pin.
+///
+/// The issuer has to name a host, because the host fetches the issuer's discovery document
+/// there, and it has to be an HTTPS URL, because the tokens it issues travel over TLS.
+fn valid_issuer_url(value: &str) -> bool {
+    const MAX_ISSUER_LENGTH: usize = 2048;
+    if value.is_empty()
+        || value.len() > MAX_ISSUER_LENGTH
+        || value.chars().any(char::is_whitespace)
+        || value.chars().any(char::is_control)
+    {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let (host, port) = if let Some(end) = authority.find(']') {
+        let host = &authority[..=end];
+        let remainder = &authority[end + 1..];
+        let port = match remainder.strip_prefix(':') {
+            Some(port) => port,
+            None if remainder.is_empty() => "",
+            None => return false,
+        };
+        (host, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) => (host, port),
+            None => (authority, ""),
+        }
+    };
+    let host_is_valid = if host.starts_with('[') {
+        host.ends_with(']') && host.len() > 2
+    } else {
+        !host.is_empty()
+            && host.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '.' | '-')
+            })
+    };
+    host_is_valid && (port.is_empty() || port.parse::<u16>().is_ok())
+}
+
+/// Whether one id names a maintained first-party provider.
+fn is_maintained_provider_id(id: &str) -> bool {
+    matches!(
+        id,
+        GITHUB_PROVIDER_ID
+            | APPLE_PROVIDER_ID
+            | DISCORD_PROVIDER_ID
+            | FACEBOOK_PROVIDER_ID
+            | GITLAB_PROVIDER_ID
+            | GOOGLE_PROVIDER_ID
+            | LINKEDIN_PROVIDER_ID
+            | MICROSOFT_PROVIDER_ID
+            | SPOTIFY_PROVIDER_ID
+            | AI_PROVIDER_ID
+    )
+}
+
 fn route_belongs_to_provider(
     route: &RouteGroupDeclaration,
     integration: &IntegrationReference,
     registry: &ProviderRegistry,
 ) -> bool {
+    // A declared issuer grants no route group, so it never owns one, and a maintained
+    // descriptor is never resolved in its place.
+    if is_declared_oidc_id(&integration.id) {
+        return false;
+    }
     registry
         .descriptors
         .get(&integration.id)
@@ -946,6 +1376,11 @@ pub struct ResolvedProvider {
     pub scopes: Vec<String>,
     /// Protected secret references admitted for this integration.
     pub secrets: Vec<String>,
+    /// Issuer URL of an application-declared `OpenID` Connect issuer.
+    ///
+    /// It is the issuer the application declared, for a declared issuer only. A maintained
+    /// first-party provider names no issuer, so it carries none.
+    pub issuer: Option<String>,
 }
 
 /// Immutable host-consumable result of provider capability admission.

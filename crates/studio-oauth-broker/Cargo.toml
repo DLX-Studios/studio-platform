@@ -1,0 +1,13 @@
+[package]
+name = "studio-oauth-broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+studio-oauth-redirect = { path = "../studio-oauth-redirect" }
+zeroize.workspace = true
+
+[lints]
+workspace = true

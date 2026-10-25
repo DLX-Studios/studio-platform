@@ -15,8 +15,9 @@ use studio_net::{
 };
 use studio_oauth::{
     BrowserHandoff, CallbackListener, EntropySource, HttpsJwksProvider, HttpsOAuthTransport,
-    OAuthManager, OsEntropy, ProtectedOAuthTokenStore, ProtectedSecretReference, ProviderPackage,
-    ProviderRegistry as OAuthProviderRegistry, SystemBrowser, TcpLoopbackListener,
+    HttpsOidcDiscovery, OAuthManager, OidcDiscoveryProvider, OsEntropy, ProtectedOAuthTokenStore,
+    ProtectedSecretReference, ProviderDescriptor, ProviderPackage,
+    ProviderRegistry as OAuthProviderRegistry, RedirectBroker, SystemBrowser, TcpLoopbackListener,
 };
 use studio_package::{
     ArchivePolicy, CanonicalBundleInput, ManifestPolicy, ProviderRegistry, TrustStore,
@@ -32,11 +33,34 @@ use studio_security::{
 use studio_ui::{InstanceId, UiRegistry};
 use studio_wasm::{ModulePolicy, PluginInstance, RuntimeBudgets, SandboxEngine};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{
     cli::{LaunchMode, LaunchRequest},
     plugin_surface::PluginSurface,
 };
+
+/// Provider ids the host's OAuth engine can sign in with.
+///
+/// The list mirrors the maintained catalog of the OAuth engine. A provider admitted for a
+/// different credential model, such as the provider-neutral API-key integration, is not an
+/// OAuth provider: it is skipped rather than failed.
+pub(crate) const OAUTH_PROVIDER_IDS: &[&str] = &[
+    studio_oauth::APPLE_PROVIDER_ID,
+    studio_oauth::DISCORD_PROVIDER_ID,
+    studio_oauth::FACEBOOK_PROVIDER_ID,
+    studio_oauth::GITLAB_PROVIDER_ID,
+    studio_oauth::GITHUB_PROVIDER_ID,
+    studio_oauth::GOOGLE_PROVIDER_ID,
+    studio_oauth::LINKEDIN_PROVIDER_ID,
+    studio_oauth::MICROSOFT_PROVIDER_ID,
+    studio_oauth::SPOTIFY_PROVIDER_ID,
+];
+
+/// Whether the id names a provider the host can sign in with.
+pub(crate) fn is_oauth_provider(provider: &str) -> bool {
+    OAUTH_PROVIDER_IDS.contains(&provider)
+}
 
 /// Whether a native Wayland endpoint is available for this launch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,6 +141,8 @@ pub enum LaunchErrorCode {
     MigrationRequired,
     /// A required application migration failed or was quarantined.
     MigrationInvalid,
+    /// Operator provider configuration is absent or unusable.
+    ProviderConfigurationInvalid,
 }
 
 /// Detailed host-owned startup rejection.
@@ -152,6 +178,9 @@ pub enum LaunchError {
     /// Migration failed safely; the application remains unavailable until recovery.
     #[error("plugin application migration failed: {0}")]
     MigrationInvalid(MigrationError),
+    /// Provider configuration an operator supplied is unusable.
+    #[error("provider configuration rejected: {0}")]
+    ProviderConfigurationInvalid(String),
 }
 
 impl LaunchError {
@@ -169,6 +198,7 @@ impl LaunchError {
             Self::UiInvalid(_) => LaunchErrorCode::UiInvalid,
             Self::MigrationRequired => LaunchErrorCode::MigrationRequired,
             Self::MigrationInvalid(_) => LaunchErrorCode::MigrationInvalid,
+            Self::ProviderConfigurationInvalid(_) => LaunchErrorCode::ProviderConfigurationInvalid,
         }
     }
 }
@@ -184,6 +214,53 @@ pub struct StudioHost {
     browser: Arc<dyn BrowserHandoff>,
     callback_listener: Arc<dyn CallbackListener>,
     entropy: Arc<dyn EntropySource>,
+    redirect_broker: Option<RedirectBrokerConfig>,
+}
+
+/// The hosted redirect broker a launch signs in through.
+///
+/// The broker stands between the provider and the loopback listener: the provider redirects to
+/// the broker, and the broker forwards the redirect to the listener this host binds. The
+/// application identifier is the manifest's own id, so two applications never share a redirect
+/// URI. The secret is the one the broker was deployed with; it authorizes the loopback port the
+/// broker is asked to forward to, and is never written to the protected store.
+#[derive(Clone)]
+pub struct RedirectBrokerConfig {
+    base_url: String,
+    secret: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for RedirectBrokerConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RedirectBrokerConfig")
+            .field("base_url", &self.base_url)
+            .field("secret", &"[redacted]")
+            .finish()
+    }
+}
+
+impl RedirectBrokerConfig {
+    /// Configure a broker from the values an operator deploys it with.
+    #[must_use]
+    pub fn new(base_url: impl Into<String>, secret: impl Into<Vec<u8>>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            secret: Zeroizing::new(secret.into()),
+        }
+    }
+
+    /// The public origin of the broker.
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// The secret this host and the broker share.
+    #[must_use]
+    pub fn secret(&self) -> &[u8] {
+        self.secret.as_slice()
+    }
 }
 
 impl std::fmt::Debug for StudioHost {
@@ -231,7 +308,19 @@ impl StudioHost {
             browser: Arc::new(SystemBrowser),
             callback_listener: Arc::new(TcpLoopbackListener),
             entropy: Arc::new(OsEntropy),
+            redirect_broker: None,
         }
+    }
+
+    /// Sign in through a hosted redirect broker instead of a bare loopback redirect.
+    ///
+    /// A provider that insists on an exact registered redirect URI needs one. The broker
+    /// forwards the provider's redirect to the loopback listener this host binds, and the
+    /// shared secret authorizes the port the broker is asked to forward to.
+    #[must_use]
+    pub fn with_redirect_broker(mut self, broker: RedirectBrokerConfig) -> Self {
+        self.redirect_broker = Some(broker);
+        self
     }
 
     /// Bind the platform HTTPS client used by provider OAuth and REST sessions.
@@ -444,7 +533,7 @@ impl StudioHost {
             .admit(&manifest, &studio_net::limits::BrokerLimits::default())
             .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
 
-        let github_services = prepare_github_services(
+        let provider_services = prepare_provider_services(
             &manifest,
             &archive_bytes,
             mode,
@@ -455,6 +544,7 @@ impl StudioHost {
             Arc::clone(&self.browser),
             Arc::clone(&self.callback_listener),
             Arc::clone(&self.entropy),
+            self.redirect_broker.clone(),
         )?;
 
         let engine =
@@ -497,7 +587,7 @@ impl StudioHost {
             render_assets,
             self.config.protocol_limits,
             provider_plan,
-            github_services,
+            provider_services,
         ))
     }
 }
@@ -526,7 +616,143 @@ impl CredentialBackend for SharedCredentialBackend {
     }
 }
 
-fn prepare_github_services(
+/// Build the OAuth package one admitted provider needs.
+///
+/// The client id and the protected secret reference come from the application's own manifest
+/// integration, and the descriptor version comes from the admitted plan, so the host enables
+/// exactly the descriptor version the package was admitted against. A declared issuer is a
+/// public client, so it carries a client id and no secret at all.
+fn provider_package(
+    manifest: &studio_package::ManifestV1,
+    provider: &studio_package::ResolvedProvider,
+) -> Result<ProviderPackage, LaunchError> {
+    let integration = manifest
+        .integrations
+        .iter()
+        .find(|integration| integration.id == provider.id)
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(format!("provider integration is missing: {}", provider.id))
+        })?;
+    let config = integration.config.as_ref().ok_or_else(|| {
+        LaunchError::BundleInvalid(format!(
+            "provider integration configuration is missing: {}",
+            provider.id
+        ))
+    })?;
+    let client_id = config
+        .get("clientId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(format!("provider client id is missing: {}", provider.id))
+        })?;
+    let mut package =
+        ProviderPackage::new(provider.id.clone(), provider.version.clone(), client_id);
+    // A declared issuer is a public client: the developer holds a client id and no secret, so
+    // there is nothing for them to keep. The descriptor built from the issuer's discovery
+    // document already carries the issuer that document published, which is the one the ID
+    // token is checked against.
+    if provider.issuer.is_some() {
+        return Ok(package);
+    }
+    let secret_name = config
+        .get("clientSecretName")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(format!(
+                "provider secret reference is missing: {}",
+                provider.id
+            ))
+        })?;
+    let secret_declaration = manifest
+        .secrets
+        .iter()
+        .find(|secret| secret.name == secret_name)
+        .ok_or_else(|| {
+            LaunchError::BundleInvalid(format!(
+                "provider secret declaration is missing: {}",
+                provider.id
+            ))
+        })?;
+    package = package.with_client_secret(ProtectedSecretReference {
+        name: secret_name.to_owned(),
+        purpose: secret_declaration.purpose.clone(),
+    });
+    // A provider whose tokens name the tenant that issued them cannot have one maintained
+    // descriptor name every valid issuer, so the application states the one it expects in its
+    // integration configuration.
+    if let Some(issuer) = config.get("issuer").and_then(Value::as_str) {
+        package = package.with_issuer(issuer);
+    }
+    Ok(package)
+}
+
+/// Configure one declared OpenID Connect issuer and enable it on the host catalog.
+///
+/// The host fetches the issuer's discovery document over its certificate-validating client and
+/// builds the runtime descriptor from it. The descriptor pins the issuer, so a document that
+/// names another issuer or publishes endpoints elsewhere is refused rather than followed. The
+/// scope ceiling the application declared is installed before the descriptor, because the
+/// catalog refuses to hold a descriptor its own policy would refuse.
+fn prepare_declared_issuer(
+    manifest: &studio_package::ManifestV1,
+    provider: &studio_package::ResolvedProvider,
+    issuer: &str,
+    https_client: &Arc<dyn HttpsClient>,
+    registry: &mut OAuthProviderRegistry,
+) -> Result<ProviderPackage, LaunchError> {
+    let discovery = HttpsOidcDiscovery::new(Arc::clone(https_client))
+        .fetch(issuer)
+        .map_err(|_| {
+            LaunchError::ProviderConfigurationInvalid(format!(
+                "declared issuer discovery is unavailable: {}",
+                provider.id
+            ))
+        })?;
+    let descriptor = ProviderDescriptor::generic_oidc(
+        &provider.id,
+        &provider.version,
+        issuer,
+        &discovery,
+        &provider.scopes,
+    )
+    .map_err(|_| {
+        LaunchError::ProviderConfigurationInvalid(format!(
+            "declared issuer is not usable: {}",
+            provider.id
+        ))
+    })?;
+    let ceiling = provider
+        .scopes
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    registry
+        .install_scope_policy(&provider.id, &ceiling)
+        .map_err(|_| {
+            LaunchError::ProviderConfigurationInvalid(format!(
+                "declared issuer scopes are invalid: {}",
+                provider.id
+            ))
+        })?;
+    registry.register(descriptor).map_err(|_| {
+        LaunchError::ProviderConfigurationInvalid(format!(
+            "declared issuer descriptor is invalid: {}",
+            provider.id
+        ))
+    })?;
+    provider_package(manifest, provider)
+}
+
+/// Prepare the OAuth manager and REST broker for every admitted OAuth provider.
+///
+/// One manager holds every enabled provider, so a guest reaches each of them through the same
+/// host action route. A maintained provider that cannot be configured from the manifest is left
+/// out of the manager rather than taking the other providers down with it; when no provider
+/// could be enabled at all, the launch fails with a safe rejection. A declared OpenID Connect
+/// issuer is different: it is configured from the issuer's own discovery document, and an
+/// issuer the host cannot pin fails the launch closed rather than leaving the application with
+/// a provider it declared but cannot use.
+fn prepare_provider_services(
     manifest: &studio_package::ManifestV1,
     archive_bytes: &[u8],
     mode: LaunchMode,
@@ -537,51 +763,60 @@ fn prepare_github_services(
     browser: Arc<dyn BrowserHandoff>,
     callback_listener: Arc<dyn CallbackListener>,
     entropy: Arc<dyn EntropySource>,
+    redirect_broker: Option<RedirectBrokerConfig>,
 ) -> Result<Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>, LaunchError> {
-    if !provider_plan
+    let admitted = provider_plan
         .providers()
         .iter()
-        .any(|provider| provider.id == "github")
-    {
+        .filter(|provider| is_oauth_provider(&provider.id) || provider.issuer.is_some())
+        .collect::<Vec<_>>();
+    if admitted.is_empty() {
         return Ok(None);
     }
     let Some(https_client) = https_client else {
+        // A declared issuer is configured from its own discovery document, so a host without a
+        // certificate-validating client cannot enable it. The launch fails closed rather than
+        // dropping the provider the application declared.
+        if admitted.iter().any(|provider| provider.issuer.is_some()) {
+            return Err(LaunchError::ProviderConfigurationInvalid(String::from(
+                "declared issuer needs a certificate-validating HTTPS client",
+            )));
+        }
         return Ok(None);
     };
-    let integration = manifest
-        .integrations
-        .iter()
-        .find(|integration| integration.id == "github")
-        .ok_or_else(|| {
-            LaunchError::BundleInvalid(String::from("GitHub integration config missing"))
-        })?;
-    let config = integration.config.as_ref().ok_or_else(|| {
-        LaunchError::BundleInvalid(String::from("GitHub integration config missing"))
-    })?;
-    let client_id = config
-        .get("clientId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| LaunchError::BundleInvalid(String::from("GitHub client id missing")))?;
-    let secret_name = config
-        .get("clientSecretName")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            LaunchError::BundleInvalid(String::from("GitHub secret reference missing"))
-        })?;
-    let secret_declaration = manifest
-        .secrets
-        .iter()
-        .find(|secret| secret.name == secret_name)
-        .ok_or_else(|| {
-            LaunchError::BundleInvalid(String::from("GitHub secret declaration missing"))
-        })?;
-    let provider = provider_plan
-        .providers()
-        .iter()
-        .find(|provider| provider.id == "github")
-        .ok_or_else(|| {
-            LaunchError::BundleInvalid(String::from("GitHub provider was not admitted"))
-        })?;
+    // The catalog holds the maintained first-party descriptors plus the descriptor each declared
+    // issuer's own discovery document justifies.
+    let mut registry = OAuthProviderRegistry::maintained();
+    let mut packages = Vec::with_capacity(admitted.len());
+    let mut rejection: Option<LaunchError> = None;
+    for provider in admitted {
+        if let Some(issuer) = provider.issuer.as_deref() {
+            // A declared issuer is configured from the issuer's own discovery document, and an
+            // issuer that cannot be configured fails the launch closed rather than leaving the
+            // application with a provider it declared but cannot use.
+            packages.push(prepare_declared_issuer(
+                manifest,
+                provider,
+                issuer,
+                &https_client,
+                &mut registry,
+            )?);
+            continue;
+        }
+        match provider_package(manifest, provider) {
+            Ok(package) => packages.push(package),
+            Err(error) => {
+                if rejection.is_none() {
+                    rejection = Some(error);
+                }
+            }
+        }
+    }
+    if packages.is_empty() {
+        return Err(rejection.unwrap_or_else(|| {
+            LaunchError::BundleInvalid(String::from("provider configuration is invalid"))
+        }));
+    }
 
     let mut instance_id = [0_u8; 16];
     getrandom::fill(&mut instance_id)
@@ -626,14 +861,23 @@ fn prepare_github_services(
         }
     }
     drop(scope);
-    let package = ProviderPackage::new("github", provider.version.clone(), client_id)
-        .with_client_secret(ProtectedSecretReference {
-            name: secret_name.to_owned(),
-            purpose: secret_declaration.purpose.clone(),
-        });
-    let manager = Arc::new(OAuthManager::new(
-        OAuthProviderRegistry::maintained(),
-        [package],
+    // A hosted broker stands between the provider and the loopback listener. Its application
+    // identifier is this manifest's own id, so two applications never share a redirect URI.
+    let redirect = match &redirect_broker {
+        Some(config) => Some(
+            RedirectBroker::new(config.base_url(), manifest.id.as_str(), config.secret()).map_err(
+                |_| {
+                    LaunchError::ProviderConfigurationInvalid(String::from(
+                        "redirect broker configuration is invalid",
+                    ))
+                },
+            )?,
+        ),
+        None => None,
+    };
+    let mut manager = OAuthManager::new(
+        registry,
+        packages,
         Arc::new(ProtectedOAuthTokenStore::new(
             protected_store,
             principal,
@@ -646,7 +890,11 @@ fn prepare_github_services(
         // OpenID Connect providers publish their signing keys; the host verifies the ID token
         // signature itself rather than trusting the token because it arrived over TLS.
         Arc::new(HttpsJwksProvider::new(Arc::clone(&https_client))),
-    ));
+    );
+    if let Some(redirect) = redirect {
+        manager = manager.with_redirect_broker(redirect);
+    }
+    let manager = Arc::new(manager);
     let transport = Arc::new(ProductionHttpTransport::new(
         https_client,
         TransportLimits::default(),
@@ -654,7 +902,7 @@ fn prepare_github_services(
     let mut broker = RestBroker::new(transport, BrokerLimits::default());
     provider_plan
         .install_into(&mut broker)
-        .map_err(|_| LaunchError::BundleInvalid(String::from("GitHub routes invalid")))?;
+        .map_err(|_| LaunchError::BundleInvalid(String::from("provider routes invalid")))?;
     let resolver: Arc<dyn studio_net::credential::OAuthSessionResolver> = manager.clone();
     broker.set_oauth_resolver(resolver);
     Ok(Some((manager, Arc::new(broker))))

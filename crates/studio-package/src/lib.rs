@@ -28,10 +28,17 @@ pub use manifest::{
 pub use migration::{MigrationAdmissionError, VerifiedMigrationBundle};
 pub use pack::{PackError, PackInput, PackMode, pack_bundle};
 pub use provider::{
-    AI_PROVIDER_ID, AI_PROVIDER_VERSION, GITHUB_PROVIDER_ID, GITHUB_PROVIDER_VERSION,
+    AI_PROVIDER_ID, AI_PROVIDER_VERSION, APPLE_ALLOWED_SCOPES, APPLE_PROVIDER_ID,
+    APPLE_PROVIDER_VERSION, DECLARED_OIDC_ALLOWED_SCOPES, DECLARED_OIDC_DESCRIPTOR_VERSION,
+    DECLARED_OIDC_ID_PREFIX, DISCORD_ALLOWED_SCOPES, DISCORD_PROVIDER_ID, DISCORD_PROVIDER_VERSION,
+    GITHUB_PROVIDER_ID, GITHUB_PROVIDER_VERSION, GITLAB_ALLOWED_SCOPES, GITLAB_PROVIDER_ID,
+    GITLAB_PROVIDER_VERSION, GOOGLE_ALLOWED_SCOPES, GOOGLE_PROVIDER_ID, GOOGLE_PROVIDER_VERSION,
+    LINKEDIN_ALLOWED_SCOPES, LINKEDIN_PROVIDER_ID, LINKEDIN_PROVIDER_VERSION,
+    MICROSOFT_ALLOWED_SCOPES, MICROSOFT_PROVIDER_ID, MICROSOFT_PROVIDER_VERSION,
     PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAdmissionError, ProviderAdmissionErrorCode,
     ProviderAdmissionPlan, ProviderCredentialPolicy, ProviderDescriptor, ProviderDescriptorState,
-    ProviderRegistry, ProviderRouteDescriptor, ResolvedProvider,
+    ProviderRegistry, ProviderRouteDescriptor, ResolvedProvider, is_declared_oidc_id,
+    maintained_oauth_descriptors,
 };
 pub use sign::{sign_bundle, sign_document};
 pub use template::{InspectedTemplate, TemplateFiles, inspect_template, pack_template};

@@ -45,7 +45,11 @@ use zeroize::{Zeroize, Zeroizing};
 pub mod https_transport;
 pub use https_transport::HttpsOAuthTransport;
 pub mod oidc;
-pub use oidc::{HttpsJwksProvider, IdTokenVerifier, JwksProvider};
+pub use oidc::{
+    HttpsJwksProvider, HttpsOidcDiscovery, IdTokenVerifier, JwksProvider, OidcDiscoveryProvider,
+};
+use studio_oauth_redirect::STATE_ENTROPY_BYTES;
+pub use studio_oauth_redirect::{CALLBACK_PATH, RedirectBroker};
 
 /// The descriptor wire schema implemented by this host.
 pub const DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
@@ -71,6 +75,10 @@ pub const LINKEDIN_DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const MICROSOFT_PROVIDER_ID: &str = "microsoft";
 /// The current first-party Microsoft identity descriptor version.
 pub const MICROSOFT_DESCRIPTOR_VERSION: &str = "1.0.0";
+/// The first-party Spotify provider identifier.
+pub const SPOTIFY_PROVIDER_ID: &str = "spotify";
+/// The current first-party Spotify descriptor version.
+pub const SPOTIFY_DESCRIPTOR_VERSION: &str = "1.0.0";
 /// The first-party Facebook provider identifier.
 pub const FACEBOOK_PROVIDER_ID: &str = "facebook";
 /// The current first-party Facebook descriptor version.
@@ -92,11 +100,13 @@ pub const GOOGLE_ALLOWED_SCOPES: &[&str] = &["openid", "email", "profile"];
 /// Scopes any maintained Discord descriptor version may request.
 pub const DISCORD_ALLOWED_SCOPES: &[&str] = &["email", "identify"];
 /// Scopes any maintained GitLab descriptor version may request.
-pub const GITLAB_ALLOWED_SCOPES: &[&str] = &["read_user"];
+pub const GITLAB_ALLOWED_SCOPES: &[&str] = &["email", "openid", "profile"];
 /// Scopes any maintained LinkedIn descriptor version may request.
 pub const LINKEDIN_ALLOWED_SCOPES: &[&str] = &["email", "openid", "profile"];
 /// Scopes any maintained Microsoft identity descriptor version may request.
 pub const MICROSOFT_ALLOWED_SCOPES: &[&str] = &["email", "offline_access", "openid", "profile"];
+/// Scopes any maintained Spotify descriptor version may request.
+pub const SPOTIFY_ALLOWED_SCOPES: &[&str] = &["email", "openid", "profile"];
 /// Authorization-request parameters the host generates; a descriptor must never supply them.
 const HOST_AUTHORIZATION_PARAMS: &[&str] = &[
     "response_type",
@@ -109,9 +119,7 @@ const HOST_AUTHORIZATION_PARAMS: &[&str] = &[
     "response_mode",
     "code_challenge_method",
 ];
-const CALLBACK_PATH: &str = "/oauth/callback";
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
-const MAX_CALLBACK_VALUE_BYTES: usize = 8 * 1024;
 const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_BYTES: usize = 4096;
 const TOKEN_RECORD_PREFIX: &[u8] = b"studio.oauth.tokens.v2\0";
@@ -229,12 +237,28 @@ pub enum ClientAuthentication {
     PkceConfidentialClient,
 }
 
+/// How a provider authenticates the client at its token endpoint.
+///
+/// Providers disagree here. Most accept the secret in the request body, but a provider that
+/// publishes only `client_secret_basic` rejects a body secret outright, and one that publishes
+/// only `client_secret_post` rejects a header secret. The descriptor states which the provider
+/// documented so the host sends the credential the way that provider accepts it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TokenEndpointAuthentication {
+    /// The client secret is sent as a form field in the request body.
+    #[default]
+    RequestBody,
+    /// The client id and secret are sent as an HTTP `Basic` authorization header.
+    Basic,
+}
+
 /// How a provider states whether a returned email address can be trusted.
 ///
 /// Providers disagree on shape, so the descriptor names which one applies rather than the host
-/// guessing per provider. Google answers `email_verified: true`, Apple sends the string
-/// `"true"`, and Facebook inverts the question entirely with `oauth_provided_email`. Anything
-/// other than an affirmative verification answer withholds the address.
+/// guessing per provider. Google, Apple, LinkedIn, GitLab, and Spotify answer `email_verified`;
+/// Google sends a boolean, Apple the string `"true"`. Facebook, GitHub, and Microsoft publish no
+/// verification claim at all, so their descriptors say so rather than implying a check happened.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EmailTrust {
@@ -242,11 +266,9 @@ pub enum EmailTrust {
     #[default]
     Unstated,
     /// The address is trusted only when this claim affirmatively says so. A boolean `true` and
-    /// the string `"true"` both qualify, covering the two forms providers actually send.
+    /// the string `"true"` both qualify, covering the two forms providers actually send. A
+    /// missing claim is not an affirmative answer, so the address is withheld.
     Verified(ClaimPath),
-    /// The address is untrusted whenever this claim is true, matching providers that report an
-    /// address they supplied themselves and never verified.
-    UnverifiedWhenSet(ClaimPath),
 }
 
 /// Where a provider's approved claims come from.
@@ -399,6 +421,8 @@ pub struct ProviderDescriptor {
     pub authorization_params: Vec<(String, String)>,
     /// Client authentication behavior.
     pub client_authentication: ClientAuthentication,
+    /// How the client authenticates at the token endpoint.
+    pub token_endpoint_authentication: TokenEndpointAuthentication,
     /// Provider-specific, declarative behavior.
     pub quirks: ProviderQuirks,
 }
@@ -443,6 +467,7 @@ impl ProviderDescriptor {
             scopes: vec![String::from("read:user"), String::from("user:email")],
             authorization_params: Vec::new(),
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 no_refresh_tokens: true,
                 private_email_fallback: true,
@@ -499,6 +524,7 @@ impl ProviderDescriptor {
                 (String::from("include_granted_scopes"), String::from("true")),
             ],
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 no_refresh_tokens: false,
                 private_email_fallback: false,
@@ -513,10 +539,9 @@ impl ProviderDescriptor {
     ///
     /// Facebook's dialog returns only `id` and `name` without a scope, so the approved claims
     /// are reachable as plain descriptor data: `public_profile` for the profile link and nested
-    /// picture object, `email` for the address. The address Facebook supplies from its own
-    /// account arrives with `oauth_provided_email: true`, which means Facebook never verified it,
-    /// so `EmailTrust` withholds it rather than passing an unproven address to a guest as the
-    /// verified claim it is not.
+    /// picture object, `email` for the address. Facebook publishes no per-address verification
+    /// claim, so the address is used as returned rather than implying a check that did not
+    /// happen.
     #[must_use]
     pub fn facebook() -> Self {
         Self {
@@ -557,11 +582,18 @@ impl ProviderDescriptor {
             // nothing the descriptor does not already declare and list here.
             authorization_params: Vec::new(),
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 // Long-lived access requires Facebook's separate token-exchange endpoint.
                 no_refresh_tokens: true,
                 private_email_fallback: false,
-                email_trust: EmailTrust::UnverifiedWhenSet(ClaimPath::new("oauth_provided_email")),
+                // Facebook's `email` field is the address the account was created with, and
+                // Facebook publishes no per-address verification claim: `oauth_provided_email`
+                // is absent from the current Graph API field list, and `verified` is a deprecated
+                // account-level flag (mobile registration, SMS, credit card) rather than an
+                // email verification. So there is no claim to gate on, and the address is used as
+                // returned rather than implying a check that did not happen.
+                email_trust: EmailTrust::Unstated,
             },
         }
     }
@@ -619,6 +651,7 @@ impl ProviderDescriptor {
             // PKCE protects an intercepted authorization code even though Apple also accepts
             // the confidential secret on this endpoint.
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 no_refresh_tokens: false,
                 private_email_fallback: false,
@@ -675,19 +708,25 @@ impl ProviderDescriptor {
                 .collect(),
             authorization_params: Vec::new(),
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 // `offline_access` is what makes Microsoft return a refresh token.
                 no_refresh_tokens: false,
                 private_email_fallback: false,
-                email_trust: EmailTrust::Verified(ClaimPath::new("email_verified")),
+                // Microsoft publishes no email-verification claim: `email_verified` is absent
+                // from the discovery metadata and from the ID token claim reference, and the
+                // platform documents the address as mutable and not guaranteed correct. So there
+                // is no claim to gate on.
+                email_trust: EmailTrust::Unstated,
             },
         }
     }
 
     /// The maintained LinkedIn descriptor.
     ///
-    /// LinkedIn issues identity as an OpenID Connect ID token, so claims come from the verified
-    /// token rather than a profile request.
+    /// LinkedIn's ID token carries only `iss`, `sub`, `aud`, `iat`, and `exp`; the name, picture,
+    /// and email live in the userinfo response. So the claims come from userinfo under the
+    /// verified access token, and `sub` is the subject in both.
     #[must_use]
     pub fn linkedin() -> Self {
         Self {
@@ -698,22 +737,21 @@ impl ProviderDescriptor {
             token_endpoint: String::from("https://www.linkedin.com/oauth/v2/accessToken"),
             revocation_endpoint: None,
             profile: ProfileMapping {
-                endpoint: String::new(),
-                accept: String::new(),
+                endpoint: String::from("https://api.linkedin.com/v2/userinfo"),
+                accept: String::from("application/json"),
                 subject: ClaimPath::new("sub"),
                 login: None,
                 display_name: Some(ClaimPath::new("name")),
                 email: Some(ClaimPath::new("email")),
-                // The avatar lives on the profile API, not in the ID token.
-                avatar_url: None,
+                avatar_url: Some(ClaimPath::new("picture")),
                 profile_url: None,
                 email_fallback: None,
                 one_time_payload_field: None,
                 name_composition: None,
             },
-            claim_source: ClaimSource::IdToken,
-            issuer: Some(String::from("https://www.linkedin.com")),
-            jwks_uri: Some(String::from("https://www.linkedin.com/oauth/openid/jwks")),
+            claim_source: ClaimSource::ProfileEndpoint,
+            issuer: None,
+            jwks_uri: None,
             response_mode: ResponseMode::Query,
             scopes: LINKEDIN_ALLOWED_SCOPES
                 .iter()
@@ -721,11 +759,14 @@ impl ProviderDescriptor {
                 .collect(),
             authorization_params: Vec::new(),
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 // Refresh tokens are issued only when the app asks for offline access, which
                 // this descriptor does not grant. Failing closed beats discovering it later.
                 no_refresh_tokens: true,
                 private_email_fallback: false,
+                // LinkedIn's userinfo states verification as a boolean, but only when the field
+                // is present; a missing `email_verified` is not an affirmative answer.
                 email_trust: EmailTrust::Verified(ClaimPath::new("email_verified")),
             },
         }
@@ -769,17 +810,23 @@ impl ProviderDescriptor {
                 .collect(),
             authorization_params: Vec::new(),
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 no_refresh_tokens: true,
                 private_email_fallback: false,
-                // Discord reports verification with a `verified` boolean: the same intent as
-                // Facebook's phrasing and the inverse of Google's.
-                email_trust: EmailTrust::UnverifiedWhenSet(ClaimPath::new("verified")),
+                // Discord's `verified` field means "the email on this account has been verified",
+                // so `true` is the affirmative answer. It is present only under the `email`
+                // scope, so a missing field is not an affirmative answer and withholds.
+                email_trust: EmailTrust::Verified(ClaimPath::new("verified")),
             },
         }
     }
 
     /// The maintained GitLab descriptor.
+    ///
+    /// GitLab publishes a full OpenID Connect surface, so the claims come from its userinfo
+    /// endpoint rather than the REST API: userinfo carries `email_verified`, which the REST
+    /// `/api/v4/user` response does not, and it names the subject `sub` consistently.
     #[must_use]
     pub fn gitlab() -> Self {
         Self {
@@ -790,14 +837,14 @@ impl ProviderDescriptor {
             token_endpoint: String::from("https://gitlab.com/oauth/token"),
             revocation_endpoint: None,
             profile: ProfileMapping {
-                endpoint: String::from("https://gitlab.com/api/v4/user"),
+                endpoint: String::from("https://gitlab.com/oauth/userinfo"),
                 accept: String::from("application/json"),
-                subject: ClaimPath::new("id"),
-                login: Some(ClaimPath::new("username")),
+                subject: ClaimPath::new("sub"),
+                login: Some(ClaimPath::new("preferred_username")),
                 display_name: Some(ClaimPath::new("name")),
                 email: Some(ClaimPath::new("email")),
-                avatar_url: Some(ClaimPath::new("avatar_url")),
-                profile_url: Some(ClaimPath::new("web_url")),
+                avatar_url: Some(ClaimPath::new("picture")),
+                profile_url: Some(ClaimPath::new("profile")),
                 email_fallback: None,
                 one_time_payload_field: None,
                 name_composition: None,
@@ -812,13 +859,161 @@ impl ProviderDescriptor {
                 .collect(),
             authorization_params: Vec::new(),
             client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
             quirks: ProviderQuirks {
                 no_refresh_tokens: true,
                 private_email_fallback: false,
-                // GitLab verifies addresses itself and publishes no verification claim.
-                email_trust: EmailTrust::Unstated,
+                // GitLab states verification as a boolean in userinfo.
+                email_trust: EmailTrust::Verified(ClaimPath::new("email_verified")),
             },
         }
+    }
+
+    /// The maintained Spotify descriptor.
+    ///
+    /// Spotify publishes a full OpenID Connect surface, so identity comes from a verified ID
+    /// token: the discovery document names `https://accounts.spotify.com` as the issuer and
+    /// publishes its key set, and the token carries `email_verified`.
+    ///
+    /// The token endpoint accepts the client secret in the request body, which is what the host
+    /// sends for every provider here; the descriptor still states the style so a provider that
+    /// accepts only HTTP Basic is expressible without another transport.
+    #[must_use]
+    pub fn spotify() -> Self {
+        Self {
+            schema_version: DESCRIPTOR_SCHEMA_VERSION,
+            id: SPOTIFY_PROVIDER_ID.to_owned(),
+            version: SPOTIFY_DESCRIPTOR_VERSION.to_owned(),
+            authorization_endpoint: String::from("https://accounts.spotify.com/oauth2/v2/auth"),
+            token_endpoint: String::from("https://accounts.spotify.com/api/token"),
+            // Revocation is a form POST of the token, not the authenticated JSON `DELETE` this
+            // adapter implements.
+            revocation_endpoint: None,
+            profile: ProfileMapping {
+                endpoint: String::new(),
+                accept: String::new(),
+                subject: ClaimPath::new("sub"),
+                login: Some(ClaimPath::new("preferred_username")),
+                display_name: Some(ClaimPath::new("name")),
+                email: Some(ClaimPath::new("email")),
+                avatar_url: Some(ClaimPath::new("picture")),
+                profile_url: None,
+                email_fallback: None,
+                one_time_payload_field: None,
+                name_composition: None,
+            },
+            claim_source: ClaimSource::IdToken,
+            issuer: Some(String::from("https://accounts.spotify.com")),
+            jwks_uri: Some(String::from("https://accounts.spotify.com/oidc/certs/v1")),
+            response_mode: ResponseMode::Query,
+            scopes: SPOTIFY_ALLOWED_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect(),
+            authorization_params: Vec::new(),
+            client_authentication: ClientAuthentication::PkceConfidentialClient,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
+            quirks: ProviderQuirks {
+                // The authorization code flow issues a refresh token.
+                no_refresh_tokens: false,
+                private_email_fallback: false,
+                // Spotify states verification as a boolean.
+                email_trust: EmailTrust::Verified(ClaimPath::new("email_verified")),
+            },
+        }
+    }
+
+    /// Build a descriptor for a declared OpenID Connect issuer.
+    ///
+    /// The declared issuer is pinned three ways. The discovery document must name exactly that
+    /// issuer, every endpoint the document publishes must be an HTTPS URL under the issuer's own
+    /// origin, and the descriptor carries the issuer the document itself published, so the ID
+    /// token is checked against the same string the issuer uses. A document that points anywhere
+    /// else is refused rather than followed.
+    ///
+    /// The claim mapping is the one OpenID Connect standardizes: `sub` identifies the subject,
+    /// and `name`, `preferred_username`, `email`, `email_verified`, and `picture` carry the
+    /// profile. The address is only surfaced when the issuer says it is verified.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OAuthErrorCode::DescriptorInvalid`] when the declared issuer is not an HTTPS
+    /// origin, when the discovery document names a different issuer, or when it publishes an
+    /// endpoint that is not an HTTPS URL under the issuer's own origin.
+    pub fn generic_oidc(
+        id: &str,
+        version: &str,
+        declared_issuer: &str,
+        discovery: &Value,
+        scopes: &[String],
+    ) -> Result<Self, OAuthError> {
+        let invalid = || OAuthError::new(OAuthErrorCode::DescriptorInvalid);
+        let issuer_origin = https_origin(declared_issuer).ok_or_else(invalid)?;
+        let discovered = discovery
+            .get("issuer")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        // The issuer is compared without a trailing slash, because an issuer that publishes one
+        // and an application that omits it still name the same issuer. The string the issuer
+        // published is what the descriptor carries, so the token is checked against it exactly.
+        if normalize_issuer(discovered) != normalize_issuer(declared_issuer) {
+            return Err(invalid());
+        }
+        let endpoint = |name: &str| -> Result<String, OAuthError> {
+            let value = discovery
+                .get(name)
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let origin = https_origin(value).ok_or_else(invalid)?;
+            if origin != issuer_origin {
+                return Err(invalid());
+            }
+            Ok(value.to_owned())
+        };
+        let authorization_endpoint = endpoint("authorization_endpoint")?;
+        let token_endpoint = endpoint("token_endpoint")?;
+        let jwks_uri = endpoint("jwks_uri")?;
+        Ok(Self {
+            schema_version: DESCRIPTOR_SCHEMA_VERSION,
+            id: id.to_owned(),
+            version: version.to_owned(),
+            authorization_endpoint,
+            token_endpoint,
+            // Revocation is a provider-specific form post; a declared issuer does not declare
+            // one, and local revocation still clears protected material.
+            revocation_endpoint: None,
+            profile: ProfileMapping {
+                // A declared issuer publishes no profile endpoint: identity is the signed ID
+                // token and nothing else.
+                endpoint: String::new(),
+                accept: String::new(),
+                subject: ClaimPath::new("sub"),
+                login: Some(ClaimPath::new("preferred_username")),
+                display_name: Some(ClaimPath::new("name")),
+                email: Some(ClaimPath::new("email")),
+                avatar_url: Some(ClaimPath::new("picture")),
+                profile_url: None,
+                email_fallback: None,
+                one_time_payload_field: None,
+                name_composition: None,
+            },
+            claim_source: ClaimSource::IdToken,
+            issuer: Some(discovered.to_owned()),
+            jwks_uri: Some(jwks_uri),
+            response_mode: ResponseMode::Query,
+            scopes: scopes.to_vec(),
+            authorization_params: Vec::new(),
+            // A declared issuer is a public client: the developer holds no secret, so there is
+            // nothing for them to keep.
+            client_authentication: ClientAuthentication::Pkce,
+            token_endpoint_authentication: TokenEndpointAuthentication::RequestBody,
+            quirks: ProviderQuirks {
+                no_refresh_tokens: false,
+                private_email_fallback: false,
+                // OpenID Connect states verification as a boolean in `email_verified`.
+                email_trust: EmailTrust::Verified(ClaimPath::new("email_verified")),
+            },
+        })
     }
 
     /// Validate the closed descriptor before installation.
@@ -912,7 +1107,7 @@ impl ProviderDescriptor {
                 })
             || matches!(
                 &self.quirks.email_trust,
-                EmailTrust::Verified(path) | EmailTrust::UnverifiedWhenSet(path)
+                EmailTrust::Verified(path)
                     if !valid_claim_path(path)
                         // A trust rule only means something next to a mapped address.
                         || self.profile.email.is_none()
@@ -1140,6 +1335,11 @@ impl ProviderRegistry {
                 MICROSOFT_PROVIDER_ID,
                 MICROSOFT_ALLOWED_SCOPES,
                 ProviderDescriptor::microsoft(),
+            ),
+            (
+                SPOTIFY_PROVIDER_ID,
+                SPOTIFY_ALLOWED_SCOPES,
+                ProviderDescriptor::spotify(),
             ),
         ];
         for (provider, allowed_scopes, descriptor) in maintained {
@@ -1546,6 +1746,8 @@ pub struct CodeExchangeRequest<'a> {
     pub client_secret: Option<SecretToken<'a>>,
     /// Host-owned loopback redirect URI.
     pub redirect_uri: &'a str,
+    /// How the client authenticates at this token endpoint.
+    pub authentication: TokenEndpointAuthentication,
 }
 
 impl fmt::Debug for CodeExchangeRequest<'_> {
@@ -1574,6 +1776,8 @@ pub struct RefreshRequest<'a> {
     pub refresh_token: SecretToken<'a>,
     /// Confidential client secret, when configured.
     pub client_secret: Option<SecretToken<'a>>,
+    /// How the client authenticates at this token endpoint.
+    pub authentication: TokenEndpointAuthentication,
 }
 
 /// Host-only profile request.
@@ -1714,25 +1918,12 @@ fn content_length(head: &str) -> Option<usize> {
 }
 
 /// Parse form-encoded pairs into an ordered map, rejecting duplicates and control bytes.
+///
+/// The rules come from the shared redirect contract, so a payload a broker wrote is parsed
+/// exactly the way the broker wrote it.
 fn parse_form_pairs(pairs: &str) -> Result<BTreeMap<String, String>, OAuthError> {
-    let failed = || OAuthError::new(OAuthErrorCode::CallbackFailed);
-    let mut parsed = BTreeMap::new();
-    for part in pairs.split('&') {
-        if part.is_empty() {
-            continue;
-        }
-        let (key, value) = part.split_once('=').ok_or_else(failed)?;
-        let key = percent_decode(key)?;
-        let value = percent_decode(value)?;
-        if !valid_form_field(&key)
-            || value.len() > MAX_CALLBACK_VALUE_BYTES
-            || value.chars().any(char::is_control)
-            || parsed.insert(key, value).is_some()
-        {
-            return Err(failed());
-        }
-    }
-    Ok(parsed)
+    studio_oauth_redirect::parse_redirect_params(pairs)
+        .map_err(|_| OAuthError::new(OAuthErrorCode::CallbackFailed))
 }
 
 fn parse_callback(stream: &mut TcpStream) -> Result<Callback, OAuthError> {
@@ -2156,21 +2347,22 @@ fn valid_media_type(value: &str) -> bool {
 }
 
 fn valid_form_field(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    studio_oauth_redirect::valid_field_name(value)
 }
 
+/// The port a loopback redirect URI names.
+fn loopback_port(value: &str) -> Option<u16> {
+    let port_and_path = value.strip_prefix("http://127.0.0.1:")?;
+    let (port, path) = port_and_path.split_once(CALLBACK_PATH)?;
+    if !path.is_empty() {
+        return None;
+    }
+    port.parse::<u16>().ok().filter(|port| *port != 0)
+}
+
+/// Whether a redirect URI names the loopback callback a host may bind.
 fn valid_loopback_redirect_uri(value: &str) -> bool {
-    let Some(port_and_path) = value.strip_prefix("http://127.0.0.1:") else {
-        return false;
-    };
-    let Some((port, path)) = port_and_path.split_once(CALLBACK_PATH) else {
-        return false;
-    };
-    !port.is_empty() && port.parse::<u16>().is_ok_and(|port| port != 0) && path.is_empty()
+    loopback_port(value).is_some()
 }
 
 fn valid_claim_path(path: &ClaimPath) -> bool {
@@ -2191,6 +2383,52 @@ fn https_url(value: &str) -> bool {
         && value[8..].contains('.')
 }
 
+/// The origin an HTTPS URL names: the host it resolves to and the port it uses.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HttpsOrigin {
+    host: String,
+    port: u16,
+}
+
+/// The origin an HTTPS URL names, if it names one.
+///
+/// The default port is resolved, so `https://host` and `https://host:443` are one origin, and an
+/// IPv6 literal keeps the colons that belong to it.
+fn https_origin(value: &str) -> Option<HttpsOrigin> {
+    let rest = value.strip_prefix("https://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = if let Some(end) = authority.find(']') {
+        let host = &authority[..=end];
+        let remainder = &authority[end + 1..];
+        let port = match remainder.strip_prefix(':') {
+            Some(port) => port.parse::<u16>().ok()?,
+            None if remainder.is_empty() => 443,
+            None => return None,
+        };
+        (host, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) => (host, port.parse::<u16>().ok()?),
+            None => (authority, 443),
+        }
+    };
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(HttpsOrigin {
+        host: host.to_ascii_lowercase(),
+        port,
+    })
+}
+
+/// An issuer without its trailing slash, for comparing two spellings of one issuer.
+fn normalize_issuer(value: &str) -> &str {
+    value.strip_suffix('/').unwrap_or(value)
+}
+
 fn percent_encode(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for byte in value.bytes() {
@@ -2204,38 +2442,8 @@ fn percent_encode(value: &str) -> String {
     output
 }
 
-fn percent_decode(value: &str) -> Result<String, OAuthError> {
-    let mut output = Vec::with_capacity(value.len());
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) else {
-                return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
-            };
-            output.push(high * 16 + low);
-            index += 3;
-            continue;
-        } else if bytes[index] == b'%' {
-            return Err(OAuthError::new(OAuthErrorCode::CallbackFailed));
-        }
-        output.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8(output).map_err(|_| OAuthError::new(OAuthErrorCode::CallbackFailed))
-}
-
 fn valid_callback_value(value: &str) -> bool {
     !value.is_empty() && value.len() <= 2048 && !value.chars().any(char::is_control)
-}
-
-fn hex(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
 }
 
 /// Host-generated PKCE material. The verifier is never rendered, serialized, or logged.
@@ -2333,6 +2541,8 @@ pub struct OAuthManager {
     entropy: Arc<dyn EntropySource>,
     transport: Arc<dyn OAuthTransport>,
     jwks: Arc<dyn JwksProvider>,
+    /// Optional hosted redirect broker standing between the provider and the listener.
+    broker: Option<RedirectBroker>,
     /// One verifier per descriptor version, each holding its own key-set cache.
     verifiers: Mutex<BTreeMap<String, Arc<IdTokenVerifier>>>,
     callback_timeout: Duration,
@@ -2380,6 +2590,7 @@ impl OAuthManager {
             entropy,
             transport,
             jwks,
+            broker: None,
             verifiers: Mutex::new(BTreeMap::new()),
             callback_timeout: Duration::from_secs(300),
             sessions: Mutex::new(BTreeMap::new()),
@@ -2407,6 +2618,17 @@ impl OAuthManager {
         )
     }
 
+    /// Configure a hosted redirect broker for this manager.
+    ///
+    /// With a broker configured, the provider redirects to the broker, which forwards the
+    /// redirect to the loopback listener this host binds. Without one, the provider
+    /// redirects straight to that listener, which is what an offline RFC 8252 flow needs.
+    #[must_use]
+    pub fn with_redirect_broker(mut self, broker: RedirectBroker) -> Self {
+        self.broker = Some(broker);
+        self
+    }
+
     /// Set the maximum time spent waiting for a host-owned callback.
     pub fn set_callback_timeout(&mut self, timeout: Duration) {
         self.callback_timeout = timeout;
@@ -2432,6 +2654,17 @@ impl OAuthManager {
             .map_err(|_| OAuthError::new(OAuthErrorCode::PackageInvalid))?
             .insert(package.provider.clone(), package);
         Ok(())
+    }
+
+    /// Whether a provider is enabled on this manager.
+    ///
+    /// A declared provider is enabled by the launch that admitted it, so this is how a host
+    /// learns that a capability names a provider it can sign in with.
+    #[must_use]
+    pub fn supports(&self, provider: &str) -> bool {
+        self.packages
+            .read()
+            .is_ok_and(|packages| packages.contains_key(provider))
     }
 
     /// Read current guest-safe status for one provider.
@@ -2500,7 +2733,22 @@ impl OAuthManager {
             }
             ClientAuthentication::ConfidentialClient => None,
         };
-        let state = self.generate_state()?;
+        // A broker, when one is configured, is the redirect URI the provider sees: it
+        // forwards the provider's redirect to the loopback listener this host bound. The
+        // state carries the bound port, authenticated with the shared secret, so a broker
+        // only ever forwards to a listener this application chose.
+        let listener_port = loopback_port(&redirect_uri)
+            .ok_or_else(|| OAuthError::new(OAuthErrorCode::CallbackBindFailed))?;
+        let (state, authorize_redirect) = match self.broker.as_ref() {
+            Some(broker) => {
+                let mut entropy = [0_u8; STATE_ENTROPY_BYTES];
+                self.entropy.fill(&mut entropy)?;
+                let state = broker.state(listener_port, &entropy);
+                entropy.zeroize();
+                (state, broker.redirect_uri())
+            }
+            None => (self.generate_state()?, redirect_uri.clone()),
+        };
         // An ID token is bound to this request by a nonce the host generates, so a token
         // captured from another authorization cannot be replayed into this session.
         let nonce = (descriptor.claim_source == ClaimSource::IdToken)
@@ -2509,7 +2757,7 @@ impl OAuthManager {
         let url = authorization_url(
             &descriptor,
             &package,
-            &redirect_uri,
+            &authorize_redirect,
             &state,
             pkce.as_ref(),
             nonce.as_deref(),
@@ -2527,6 +2775,13 @@ impl OAuthManager {
         if response.state.as_deref() != Some(state.as_str()) {
             return Err(OAuthError::new(OAuthErrorCode::StateMismatch));
         }
+        // With a broker in the path the state is what binds the callback to this listener:
+        // the port it names must be the port this listener bound.
+        if let Some(broker) = self.broker.as_ref()
+            && broker.decode(response.state.as_deref().unwrap_or_default()) != Ok(listener_port)
+        {
+            return Err(OAuthError::new(OAuthErrorCode::StateMismatch));
+        }
         if response.denied || response.code.is_none() {
             return Err(OAuthError::new(OAuthErrorCode::AuthorizationDenied));
         }
@@ -2535,7 +2790,7 @@ impl OAuthManager {
             &package,
             response.code.as_deref().unwrap_or_default(),
             pkce.as_ref(),
-            &redirect_uri,
+            &authorize_redirect,
         )?;
         validate_granted_scopes(&descriptor, &token_response)?;
         let claims = self.map_claims_for(
@@ -2619,6 +2874,7 @@ impl OAuthManager {
                     verifier,
                     client_secret: Some(secret),
                     redirect_uri,
+                    authentication: descriptor.token_endpoint_authentication,
                 }));
                 Ok(())
             })?;
@@ -2631,6 +2887,7 @@ impl OAuthManager {
                 verifier,
                 client_secret: None,
                 redirect_uri,
+                authentication: descriptor.token_endpoint_authentication,
             })
         }
     }
@@ -2689,7 +2946,12 @@ impl OAuthManager {
                 }));
                 Ok(())
             })?;
-            return profile.ok_or_else(|| OAuthError::new(OAuthErrorCode::ProfileFailed))?;
+            let mut document =
+                profile.ok_or_else(|| OAuthError::new(OAuthErrorCode::ProfileFailed))??;
+            // A provider that sends one-time identity data alongside its form POST means it
+            // whichever way the rest of the profile arrives, so the payload is merged here too.
+            merge_one_time_payload(&mut document, descriptor, form_fields);
+            return Ok(document);
         }
 
         let verifier = self.verifier_for(descriptor, package)?;
@@ -2788,6 +3050,7 @@ impl OAuthManager {
                         client_id: &package.client_id,
                         refresh_token,
                         client_secret: None,
+                        authentication: descriptor.token_endpoint_authentication,
                     }),
                     ClientAuthentication::ConfidentialClient
                     | ClientAuthentication::PkceConfidentialClient => {
@@ -2801,6 +3064,7 @@ impl OAuthManager {
                                 client_id: &package.client_id,
                                 refresh_token,
                                 client_secret: Some(secret),
+                                authentication: descriptor.token_endpoint_authentication,
                             }));
                             Ok(())
                         })?;
@@ -3055,11 +3319,12 @@ fn map_claims(mapping: &ProfileMapping, profile: &Value) -> Result<ApprovedClaim
     })
 }
 
-/// Merge a provider's one-time identity payload into a verified claim document.
+/// Merge a provider's one-time identity payload into a claim document.
 ///
-/// Values already present win: a signed ID token claim is never overridden by the unsigned data
-/// that arrived on the callback. The payload can only contribute a claim the provider did not
-/// sign, which is exactly the case Apple needs for the name it returns once.
+/// Values already present win: a signed ID token claim, or a claim the profile endpoint
+/// returned, is never overridden by the unsigned data that arrived on the callback. The
+/// payload can only contribute a claim the provider did not already state, which is exactly
+/// the case Apple needs for the name it returns once.
 fn merge_one_time_payload(
     document: &mut Value,
     descriptor: &ProviderDescriptor,
@@ -3099,9 +3364,9 @@ fn composed_name(mapping: &ProfileMapping, root: &Value) -> Option<String> {
 
 /// Whether the provider vouches for the returned address.
 ///
-/// Providers state verification as a boolean (Google) or the string `"true"` (Apple), and some
-/// invert the question entirely (Facebook). Anything short of an affirmative answer under the
-/// declared rule withholds the address.
+/// A `Verified` rule requires an affirmative answer: a boolean `true` or the string `"true"`,
+/// which covers the two forms providers send. A missing claim is not an affirmative answer, so
+/// the address is withheld rather than assumed good.
 fn email_is_trusted(trust: &EmailTrust, root: &Value) -> bool {
     let affirms = |value: Option<&Value>| match value {
         Some(Value::Bool(value)) => *value,
@@ -3111,7 +3376,6 @@ fn email_is_trusted(trust: &EmailTrust, root: &Value) -> bool {
     match trust {
         EmailTrust::Unstated => true,
         EmailTrust::Verified(path) => affirms(path.value(root)),
-        EmailTrust::UnverifiedWhenSet(path) => !affirms(path.value(root)),
     }
 }
 
@@ -3226,7 +3490,7 @@ mod tests {
     }
 
     #[test]
-    fn facebook_descriptor_is_admitted_and_its_email_rule_needs_a_mapped_email() {
+    fn facebook_descriptor_is_admitted_without_claiming_email_verification() {
         let registry = ProviderRegistry::maintained();
         let package = ProviderPackage::new("facebook", FACEBOOK_DESCRIPTOR_VERSION, "client")
             .with_client_secret(ProtectedSecretReference {
@@ -3240,10 +3504,9 @@ mod tests {
             descriptor.profile.avatar_url,
             Some(ClaimPath::new("picture.data.url"))
         );
-        assert_eq!(
-            descriptor.quirks.email_trust,
-            EmailTrust::UnverifiedWhenSet(ClaimPath::new("oauth_provided_email"))
-        );
+        // Graph publishes no per-address verification flag, so the descriptor claims none: the
+        // address is surfaced as the provider returned it, and the host states no more.
+        assert_eq!(descriptor.quirks.email_trust, EmailTrust::Unstated);
 
         // Facebook's grants must not be admitted under Google's ceiling.
         let mut cross_wired = ProviderDescriptor::facebook();
@@ -3256,14 +3519,142 @@ mod tests {
                 .code(),
             OAuthErrorCode::DescriptorInvalid
         );
+    }
 
-        // A withholding flag with nothing to withhold is an incoherent descriptor.
-        let mut unmapped = ProviderDescriptor::facebook();
+    #[test]
+    fn a_verification_rule_with_no_mapped_address_is_refused() {
+        // A rule that checks an address the descriptor never maps would silently pass every
+        // request, which reads as verification without being any.
+        let mut unmapped = ProviderDescriptor::google();
         unmapped.profile.email = None;
         assert_eq!(
             unmapped.validate().unwrap_err().code(),
             OAuthErrorCode::DescriptorInvalid
         );
+    }
+
+    /// A discovery document for a conforming issuer.
+    fn discovery_document(issuer: &str) -> serde_json::Value {
+        serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+            "jwks_uri": format!("{issuer}/jwks"),
+            "response_types_supported": ["code"],
+            "id_token_signing_alg_values_supported": ["RS256"],
+            "subject_types_supported": ["public"]
+        })
+    }
+
+    /// The scopes a declared issuer asks for.
+    fn declared_scopes() -> Vec<String> {
+        vec![String::from("openid"), String::from("profile")]
+    }
+
+    #[test]
+    fn a_declared_issuer_maps_the_standard_claim_set() {
+        let issuer = "https://acme.example.com";
+        let descriptor = ProviderDescriptor::generic_oidc(
+            "oidc-acme",
+            "1.0.0",
+            issuer,
+            &discovery_document(issuer),
+            &declared_scopes(),
+        )
+        .expect("the declared issuer is admitted");
+        assert_eq!(descriptor.claim_source, ClaimSource::IdToken);
+        assert_eq!(descriptor.issuer.as_deref(), Some(issuer));
+        assert_eq!(
+            descriptor.jwks_uri.as_deref(),
+            Some("https://acme.example.com/jwks")
+        );
+        assert_eq!(descriptor.profile.subject, ClaimPath::new("sub"));
+        assert_eq!(
+            descriptor.profile.display_name,
+            Some(ClaimPath::new("name"))
+        );
+        assert_eq!(descriptor.profile.email, Some(ClaimPath::new("email")));
+        assert_eq!(
+            descriptor.quirks.email_trust,
+            EmailTrust::Verified(ClaimPath::new("email_verified"))
+        );
+        // A declared issuer is a public client: the developer keeps no secret.
+        assert_eq!(descriptor.client_authentication, ClientAuthentication::Pkce);
+        descriptor.validate().expect("the descriptor is valid");
+    }
+
+    #[test]
+    fn a_declared_issuer_is_refused_when_the_document_names_another_issuer() {
+        let error = ProviderDescriptor::generic_oidc(
+            "oidc-acme",
+            "1.0.0",
+            "https://acme.example.com",
+            &discovery_document("https://elsewhere.example.com"),
+            &declared_scopes(),
+        )
+        .expect_err("a document naming another issuer is refused");
+        assert_eq!(error.code(), OAuthErrorCode::DescriptorInvalid);
+    }
+
+    #[test]
+    fn a_declared_issuer_is_refused_when_an_endpoint_leaves_the_issuer_origin() {
+        let mut document = discovery_document("https://acme.example.com");
+        document["token_endpoint"] = serde_json::json!("https://attacker.example.net/token");
+        let error = ProviderDescriptor::generic_oidc(
+            "oidc-acme",
+            "1.0.0",
+            "https://acme.example.com",
+            &document,
+            &declared_scopes(),
+        )
+        .expect_err("an endpoint outside the issuer origin is refused");
+        assert_eq!(error.code(), OAuthErrorCode::DescriptorInvalid);
+    }
+
+    #[test]
+    fn a_declared_issuer_is_refused_when_an_endpoint_is_not_https() {
+        let mut document = discovery_document("https://acme.example.com");
+        document["jwks_uri"] = serde_json::json!("http://acme.example.com/jwks");
+        let error = ProviderDescriptor::generic_oidc(
+            "oidc-acme",
+            "1.0.0",
+            "https://acme.example.com",
+            &document,
+            &declared_scopes(),
+        )
+        .expect_err("a plain HTTP endpoint is refused");
+        assert_eq!(error.code(), OAuthErrorCode::DescriptorInvalid);
+    }
+
+    #[test]
+    fn a_declared_issuer_tolerates_a_trailing_slash_on_one_side_only() {
+        let descriptor = ProviderDescriptor::generic_oidc(
+            "oidc-acme",
+            "1.0.0",
+            "https://acme.example.com",
+            &discovery_document("https://acme.example.com/"),
+            &declared_scopes(),
+        )
+        .expect("the issuer is the same with or without its trailing slash");
+        // The descriptor carries the string the issuer published, so the token is checked
+        // against exactly that.
+        assert_eq!(
+            descriptor.issuer.as_deref(),
+            Some("https://acme.example.com/")
+        );
+    }
+
+    #[test]
+    fn a_declared_issuer_is_refused_when_the_issuer_is_not_https() {
+        let error = ProviderDescriptor::generic_oidc(
+            "oidc-acme",
+            "1.0.0",
+            "http://acme.example.com",
+            &discovery_document("http://acme.example.com"),
+            &declared_scopes(),
+        )
+        .expect_err("a plain HTTP issuer is refused");
+        assert_eq!(error.code(), OAuthErrorCode::DescriptorInvalid);
     }
 
     #[test]
@@ -3296,8 +3687,11 @@ mod tests {
 
     #[test]
     fn callback_decoding_is_strict_and_redirects_are_loopback_only() {
-        assert_eq!(percent_decode("read%3Auser").unwrap(), "read:user");
-        assert!(percent_decode("bad%2").is_err());
+        assert_eq!(
+            studio_oauth_redirect::percent_decode("read%3Auser"),
+            Some(String::from("read:user"))
+        );
+        assert!(studio_oauth_redirect::percent_decode("bad%2").is_none());
         assert!(valid_loopback_redirect_uri(
             "http://127.0.0.1:43121/oauth/callback"
         ));

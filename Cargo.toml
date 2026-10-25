@@ -13,6 +13,8 @@ members = [
     "crates/studio-navigation",
     "crates/studio-net",
     "crates/studio-oauth",
+    "crates/studio-oauth-broker",
+    "crates/studio-oauth-redirect",
     "crates/studio-package",
     "crates/studio-plugin-registry",
     "crates/studio-protocol",
@@ -58,6 +60,8 @@ ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fas
 serde_jcs = "=0.2.0"
 regex = "1.11"
 sha2 = "=0.11.0"
+hmac = "0.12"
+subtle = "2"
 getrandom = "=0.3.4"
 zeroize = "=1.9.0"
 pbkdf2 = "=0.12.2"

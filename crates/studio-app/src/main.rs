@@ -11,7 +11,7 @@ use gpui_kit::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions
 use studio_app::{
     cli::LaunchRequest,
     foundation::FoundationGallery,
-    host::{HostConfig, StudioHost, WaylandAvailability},
+    host::{HostConfig, RedirectBrokerConfig, StudioHost, WaylandAvailability},
     plugin_surface::PluginSurface,
 };
 use studio_package::TrustStore;
@@ -19,6 +19,24 @@ use studio_security::{ProtectedSecretKey, SecretInput};
 
 fn has_wayland_endpoint(display: Option<&OsStr>, socket: Option<&OsStr>) -> bool {
     display.is_some_and(|value| !value.is_empty()) || socket.is_some_and(|value| !value.is_empty())
+}
+
+/// Read the hosted redirect broker configuration from the environment.
+///
+/// A half-configured broker is a configuration error rather than a fallback: the host would
+/// sign in one way while the developer registered the redirect URI another.
+fn redirect_broker_from_environment() -> Result<Option<RedirectBrokerConfig>, String> {
+    match (
+        std::env::var("STUDIO_OAUTH_BROKER_URL").ok(),
+        std::env::var("STUDIO_OAUTH_BROKER_SECRET").ok(),
+    ) {
+        (None, None) => Ok(None),
+        (Some(url), Some(secret)) => Ok(Some(RedirectBrokerConfig::new(url, secret.into_bytes()))),
+        _ => Err(String::from(
+            "the OAuth redirect broker needs both STUDIO_OAUTH_BROKER_URL and \
+             STUDIO_OAUTH_BROKER_SECRET",
+        )),
+    }
 }
 
 fn run(
@@ -150,23 +168,38 @@ fn main() {
         let https_client = Arc::new(gpui_https_client::GpuiHttpsClient::default());
         let mut host = StudioHost::new(HostConfig::new(trust_store), wayland)
             .with_https_client(https_client.clone());
-        if let Ok(secret) = std::env::var("STUDIO_GITHUB_CLIENT_SECRET") {
-            let key = match ProtectedSecretKey::new(
-                "github.oauth.client_secret",
-                "GitHub OAuth client configuration",
-            ) {
-                Ok(key) => key,
-                Err(_) => {
-                    eprintln!("GitHub protected client secret declaration is invalid");
-                    std::process::exit(2);
-                }
+        // A hosted redirect broker is optional. Without one the host signs in over a loopback
+        // redirect exactly as it did before, and with half a configuration it refuses to start
+        // rather than silently signing in the other way.
+        match redirect_broker_from_environment() {
+            Ok(Some(broker)) => host = host.with_redirect_broker(broker),
+            Ok(None) => {}
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(2);
+            }
+        }
+        for descriptor in studio_package::maintained_oauth_descriptors() {
+            let Some(secret_name) = descriptor.required_secret_names.first() else {
+                continue;
             };
-            let value = match SecretInput::new(secret.into_bytes()) {
-                Ok(value) => value,
-                Err(_) => {
-                    eprintln!("GitHub protected client secret is invalid");
-                    std::process::exit(2);
-                }
+            let Some(purpose) = descriptor.required_secret_purposes.get(secret_name) else {
+                continue;
+            };
+            let variable = format!("STUDIO_{}_CLIENT_SECRET", descriptor.id.to_uppercase());
+            let Ok(secret) = std::env::var(variable) else {
+                continue;
+            };
+            let Ok(key) = ProtectedSecretKey::new(secret_name.clone(), purpose.clone()) else {
+                eprintln!(
+                    "protected client secret declaration is invalid: {}",
+                    descriptor.id
+                );
+                std::process::exit(2);
+            };
+            let Ok(value) = SecretInput::new(secret.into_bytes()) else {
+                eprintln!("protected client secret is invalid: {}", descriptor.id);
+                std::process::exit(2);
             };
             host = host.with_protected_secret(key, value);
         }

@@ -199,6 +199,7 @@ fn launch_outcome(error: &LaunchError) -> (ReloadStage, &'static str, String) {
         LaunchErrorCode::UiInvalid => "RELOAD_UI_INVALID",
         LaunchErrorCode::MigrationRequired => "RELOAD_MIGRATION_REQUIRED",
         LaunchErrorCode::MigrationInvalid => "RELOAD_MIGRATION_INVALID",
+        LaunchErrorCode::ProviderConfigurationInvalid => "RELOAD_PROVIDER_CONFIGURATION_INVALID",
     };
     (stage, code, error.to_string())
 }
