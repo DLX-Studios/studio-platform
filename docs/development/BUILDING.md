@@ -62,11 +62,19 @@ requires a graphical session (Wayland or X11 on Linux).
 
 ## Locked Validation
 
+Routine CI reuses the debug profile for its native startup probe, with debug symbols and
+incremental compilation disabled. It reports filesystem and artifact usage so exhaustion
+can be diagnosed without deleting unrelated caches. Set `STUDIO_APP_BINARY` to the actual
+configured target directory when using the shared development cache.
+
+Release builds belong to an explicit release checkpoint (`cargo build --locked --release -p studio-app`);
+the debug startup probe does not supply release size or packaging evidence.
+
 ```bash
 bun install --frozen-lockfile
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked -p studio-protocol --test component_catalog_v1
 cargo test --locked -p studio-components --test catalog_mapping
 cargo test --locked -p studio-components --test component_catalog
@@ -76,8 +84,8 @@ bun test sdk/assemblyscript/tests/component-catalog.test.ts
 bun run generate:protocol
 git diff --exit-code -- protocol sdk/assemblyscript/assembly/generated
 ./scripts/check-platform-features.sh
-cargo build --locked --release -p studio-app
-STUDIO_APP_BINARY=target/release/studio-app ./scripts/test-headless-wayland.sh
+cargo build --locked -p studio-app
+STUDIO_APP_BINARY=target/debug/studio-app ./scripts/test-headless-wayland.sh
 ```
 
 On VFAT/exFAT or another symlink-hostile checkout, replace `bun install --frozen-lockfile` with

@@ -67,7 +67,7 @@ describe("Phase 0 foundation", () => {
       "bun run check",
       "bun test",
       "./scripts/check-platform-features.sh",
-      "cargo build --locked --release -p studio-app",
+      "cargo build --locked -p studio-app",
       "./scripts/test-headless-wayland.sh",
     ]) {
       expect(workflow).toContain(command);

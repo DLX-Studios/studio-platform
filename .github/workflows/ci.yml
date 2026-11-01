@@ -36,7 +36,11 @@ jobs:
 
   validate:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -77,11 +81,20 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Lint Rust
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Record initial disk budget
+        run: df -h .
 
       - name: Test Rust
         run: cargo test --locked --workspace
+
+      - name: Lint Rust
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Record verification artifact size
+        if: always()
+        run: |
+          df -h .
+          du -sh target 2>/dev/null || true
 
       - name: Validate AssemblyScript and tooling
         run: bun run check
@@ -96,9 +109,9 @@ jobs:
         run: ./scripts/check-platform-features.sh
 
       - name: Build native probe
-        run: cargo build --locked --release -p studio-app
+        run: cargo build --locked -p studio-app
 
       - name: Test native headless Wayland startup
         env:
-          STUDIO_APP_BINARY: ${{ github.workspace }}/target/release/studio-app
+          STUDIO_APP_BINARY: ${{ github.workspace }}/target/debug/studio-app
         run: ./scripts/test-headless-wayland.sh
