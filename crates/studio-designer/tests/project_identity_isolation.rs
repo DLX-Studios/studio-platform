@@ -231,3 +231,106 @@ fn owned_source_survives_restart_and_foreign_or_expired_sessions_are_denied() {
     assert_ne!(alice_project, second);
     assert_eq!(reopened.dashboard().unwrap().snapshot().projects.len(), 2);
 }
+
+#[test]
+fn project_libraries_isolate_assets_and_expire_with_the_host_session() {
+    use studio_host::{AssetAdmission, AssetProvenance};
+    let directory = tempfile::tempdir().unwrap();
+    let mut bootstrap = NativeProductBootstrap::open(directory.path()).unwrap();
+    let alice = bootstrap
+        .create_identity_and_sign_in_blocking(
+            "Alice",
+            b"password".to_vec(),
+            b"password".to_vec(),
+            false,
+        )
+        .unwrap()
+        .identity_id;
+    let first = bootstrap.create_project_blocking("First").unwrap();
+    let second = bootstrap.create_project_blocking("Second").unwrap();
+    let persistence = bootstrap.project_persistence(&first).unwrap();
+    let library = block_on(persistence.project_library(&ProjectId::new(&first).unwrap())).unwrap();
+    let asset = block_on(library.admit(AssetAdmission::new(
+        "notes.md",
+        b"private notes".to_vec(),
+        AssetProvenance::new("import", "Alice"),
+    )))
+    .unwrap();
+    let other = block_on(
+        bootstrap
+            .project_persistence(&second)
+            .unwrap()
+            .project_library(&ProjectId::new(&second).unwrap()),
+    )
+    .unwrap();
+    assert!(block_on(other.list()).unwrap().is_empty());
+    assert!(block_on(other.read_original(&asset.id)).is_err());
+    let reopened = block_on(persistence.project_library(&ProjectId::new(&first).unwrap())).unwrap();
+    assert_eq!(
+        block_on(reopened.read_original(&asset.id)).unwrap().bytes,
+        b"private notes"
+    );
+    assert!(block_on(persistence.project_library(&ProjectId::new(&second).unwrap())).is_err());
+    bootstrap.sign_out().unwrap();
+    assert!(block_on(library.list()).is_err());
+    assert!(block_on(library.read_original(&asset.id)).is_err());
+    assert!(block_on(library.delete(&asset.id)).is_err());
+    assert!(
+        block_on(library.admit(AssetAdmission::new(
+            "expired.md",
+            b"must not persist".to_vec(),
+            AssetProvenance::new("import", "Alice")
+        )))
+        .is_err()
+    );
+    bootstrap
+        .create_identity_and_sign_in_blocking(
+            "Bob",
+            b"password".to_vec(),
+            b"password".to_vec(),
+            false,
+        )
+        .unwrap();
+    assert!(bootstrap.project_persistence(&first).is_err());
+    let bob = bootstrap.create_project_blocking("Bob").unwrap();
+    let bob_library = block_on(
+        bootstrap
+            .project_persistence(&bob)
+            .unwrap()
+            .project_library(&ProjectId::new(&bob).unwrap()),
+    )
+    .unwrap();
+    assert!(block_on(bob_library.list()).unwrap().is_empty());
+    assert!(block_on(bob_library.read_original(&asset.id)).is_err());
+    let same_bytes = block_on(bob_library.admit(AssetAdmission::new(
+        "notes.md",
+        b"private notes".to_vec(),
+        AssetProvenance::new("import", "Bob"),
+    )))
+    .unwrap();
+    assert_eq!(same_bytes.id, asset.id);
+    assert_eq!(same_bytes.provenance.len(), 1);
+    assert_eq!(same_bytes.provenance[0].actor, "Bob");
+    bootstrap.sign_out().unwrap();
+    bootstrap
+        .sign_in_blocking(&alice, b"password", false)
+        .unwrap();
+    let current = block_on(
+        bootstrap
+            .project_persistence(&first)
+            .unwrap()
+            .project_library(&ProjectId::new(&first).unwrap()),
+    )
+    .unwrap();
+    let assets = block_on(current.list()).unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].provenance[0].actor, "Alice");
+    assert_eq!(
+        block_on(current.read_original(&asset.id)).unwrap().bytes,
+        b"private notes"
+    );
+    assert!(
+        block_on(library.list()).is_err(),
+        "a new login must not revive an expired handle"
+    );
+}

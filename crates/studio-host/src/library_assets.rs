@@ -17,12 +17,12 @@ use std::{
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock, Weak},
 };
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use studio_design::LibraryAssetId;
+use studio_design::{LibraryAssetId, ProjectId};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -391,6 +391,7 @@ pub struct DeleteResult {
 /// Stable Library diagnostic categories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LibraryDiagnosticCode {
+    AccessDenied,
     InvalidAdmission,
     UnsupportedFormat,
     UnsupportedCodec,
@@ -571,6 +572,8 @@ pub struct LibraryAssetStore {
     store: Arc<EmbeddedLocalStore>,
     root: PathBuf,
     catalog_lock: Arc<Mutex<()>>,
+    catalog_batch_id: String,
+    access: Option<(crate::LocalStoreDesignerPersistence, ProjectId)>,
 }
 
 impl LibraryAssetStore {
@@ -587,6 +590,7 @@ impl LibraryAssetStore {
 
     /// Close the underlying LocalStore when this Library is its sole owner.
     pub async fn close(self) -> Result<(), LibraryAssetError> {
+        drop(self.access);
         let store = Arc::try_unwrap(self.store).map_err(|_| {
             LibraryAssetError::new(
                 LibraryDiagnosticCode::Storage,
@@ -604,19 +608,58 @@ impl LibraryAssetStore {
                 store,
                 root: self.root,
                 catalog_lock: self.catalog_lock,
+                catalog_batch_id: self.catalog_batch_id,
+                access: self.access,
             }),
         }
     }
 
-    /// Attach Library storage to an already opened host LocalStore.
+    /// Attach a trusted host-global Library to an already opened LocalStore.
+    /// Native project routes must use `LocalStoreDesignerPersistence::project_library`;
+    /// this constructor has no user-session authority boundary.
     #[must_use]
     pub fn from_store(store: Arc<EmbeddedLocalStore>) -> Self {
         let root = store.directory().join(LIBRARY_DIRECTORY);
         Self {
             store,
+            catalog_lock: shared_catalog_lock(&root),
             root,
-            catalog_lock: Arc::new(Mutex::new(())),
+            catalog_batch_id: CATALOG_BATCH_ID.to_owned(),
+            access: None,
         }
+    }
+
+    pub(crate) fn for_project(
+        store: Arc<EmbeddedLocalStore>,
+        persistence: crate::LocalStoreDesignerPersistence,
+        project: ProjectId,
+    ) -> Self {
+        // Hash the opaque project identity; it is never interpreted as a filesystem path.
+        let scope = hash_bytes(project.as_str().as_bytes());
+        let root = store
+            .directory()
+            .join(LIBRARY_DIRECTORY)
+            .join("projects")
+            .join(&scope);
+        Self {
+            store,
+            catalog_lock: shared_catalog_lock(&root),
+            root,
+            catalog_batch_id: format!("{CATALOG_BATCH_ID}-{scope}"),
+            access: Some((persistence, project)),
+        }
+    }
+
+    async fn authorize(&self) -> Result<(), LibraryAssetError> {
+        if let Some((persistence, project)) = &self.access {
+            persistence.authorize(project).await.map_err(|_| {
+                LibraryAssetError::new(
+                    LibraryDiagnosticCode::AccessDenied,
+                    "Library access denied. Sign in with the project owner.",
+                )
+            })?;
+        }
+        Ok(())
     }
 
     /// Attach Library storage to an owned LocalStore.
@@ -634,6 +677,7 @@ impl LibraryAssetStore {
     /// Admit an asset, deduplicating by the exact SHA-256 source bytes.
     pub async fn admit(&self, request: AssetAdmission) -> Result<AssetMetadata, LibraryAssetError> {
         let _catalog_guard = self.catalog_lock.lock().await;
+        self.authorize().await?;
         let name = display_name(&request.name)?;
         validate_text(&request.provenance.source)?;
         validate_text(&request.provenance.actor)?;
@@ -869,9 +913,10 @@ impl LibraryAssetStore {
     }
 
     async fn read_catalog(&self) -> Result<PersistedCatalog, LibraryAssetError> {
+        self.authorize().await?;
         let entries = self
             .store
-            .batch_entries(CATALOG_BATCH_ID)
+            .batch_entries(&self.catalog_batch_id)
             .await
             .map_err(map_store_error)?;
         if entries.is_empty() {
@@ -903,6 +948,7 @@ impl LibraryAssetStore {
     }
 
     async fn write_catalog(&self, catalog: &PersistedCatalog) -> Result<(), LibraryAssetError> {
+        self.authorize().await?;
         let payload = serde_json::to_value(catalog).map_err(|_| {
             LibraryAssetError::new(
                 LibraryDiagnosticCode::Storage,
@@ -910,7 +956,7 @@ impl LibraryAssetStore {
             )
         })?;
         let batch = StoreBatch::new(
-            CATALOG_BATCH_ID,
+            &self.catalog_batch_id,
             [StoreBatchEntry {
                 ordinal: 0,
                 payload,
@@ -1200,4 +1246,22 @@ fn map_store_error(error: LocalStoreError) -> LibraryAssetError {
         | LocalStoreDiagnosticCode::QueryTimedOut => LibraryDiagnosticCode::Storage,
     };
     LibraryAssetError::new(code, error.diagnostic().message())
+}
+
+// Reopening the same project must serialize catalog read-modify-write with existing handles.
+// LocalStore already owns cross-process exclusion; this registry joins independently created
+// Library adapters within that host process without retaining stores or sessions forever.
+fn shared_catalog_lock(root: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<std::sync::Mutex<BTreeMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| std::sync::Mutex::new(BTreeMap::new()))
+        .lock()
+        .expect("Library lock registry poisoned");
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(root).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(root.to_path_buf(), Arc::downgrade(&lock));
+    lock
 }

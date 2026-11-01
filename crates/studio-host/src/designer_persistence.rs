@@ -165,7 +165,22 @@ impl LocalStoreDesignerPersistence {
         Ok(persistence)
     }
 
-    async fn authorize(&self, project_id: &ProjectId) -> Result<(), PersistenceError> {
+    /// Open a project Library using this adapter's authority.
+    /// Session-bound adapters recheck active ownership on every Library operation;
+    /// trusted host adapters retain their existing unrestricted authority.
+    pub async fn project_library(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<crate::LibraryAssetStore, PersistenceError> {
+        self.authorize(project_id).await?;
+        Ok(crate::LibraryAssetStore::for_project(
+            Arc::clone(&self.store),
+            self.clone(),
+            project_id.clone(),
+        ))
+    }
+
+    pub(crate) async fn authorize(&self, project_id: &ProjectId) -> Result<(), PersistenceError> {
         let Some(access) = &self.access else {
             return Ok(());
         };

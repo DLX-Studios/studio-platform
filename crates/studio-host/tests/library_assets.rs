@@ -180,3 +180,39 @@ fn deletion_reports_usage_and_panel_traversal_is_keyboard_safe() {
             );
         });
 }
+
+#[test]
+fn independently_opened_adapters_serialize_catalog_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let store = std::sync::Arc::new(
+                studio_host::EmbeddedLocalStore::open(directory.path(), Durability::Every)
+                    .await
+                    .unwrap(),
+            );
+            let first = LibraryAssetStore::from_store(store.clone());
+            let second = LibraryAssetStore::from_store(store);
+            let (a, b) = tokio::join!(
+                first.admit(AssetAdmission::new(
+                    "a.txt",
+                    b"first".to_vec(),
+                    AssetProvenance::new("a", "author")
+                )),
+                second.admit(AssetAdmission::new(
+                    "b.txt",
+                    b"second".to_vec(),
+                    AssetProvenance::new("b", "author")
+                )),
+            );
+            let a = a.unwrap();
+            let b = b.unwrap();
+            let listed = first.list().await.unwrap();
+            assert_eq!(listed.len(), 2);
+            assert!(listed.iter().any(|asset| asset.id == a.id));
+            assert!(listed.iter().any(|asset| asset.id == b.id));
+        });
+}

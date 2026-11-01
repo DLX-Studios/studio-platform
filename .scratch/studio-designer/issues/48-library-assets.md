@@ -17,3 +17,21 @@
 ## Completion audit — 2026-11-01
 
 Current source/evidence assessment: F05 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).
+
+
+## Project authority follow-up — 2026-11-01
+
+`LocalStoreDesignerPersistence::project_library` now supplies a project-scoped Library using
+its authenticated ownership proof. Catalog and content-addressed blob locations are separate
+per project; retained handles recheck active authority for reads and writes. An expired handle
+does not revive on a later sign-in. Independently opened adapters share the catalog mutation
+lock so concurrent imports do not overwrite each other. The trusted host-global constructor
+remains for existing internal callers and is not the native project API. Existing global
+records are not silently assigned to a project.
+
+Validation: all three identity-isolation tests and four host Library tests pass, including
+re-login with old handles still denied, independent provenance for identical bytes in different
+projects, and concurrent catalog writes through independently opened adapters.
+
+Native import/browse/bind/delete and immutable preview-byte snapshots are still unconnected.
+The current variant implementation still copies originals; resizing/transcoding is not certified.
