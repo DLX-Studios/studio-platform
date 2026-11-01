@@ -4,7 +4,7 @@
 
 **Blocked by:** 21, 23
 
-**Status:** ready-for-agent
+**Status:** proof-app/provider/package foundations implemented/tested; live GitHub acceptance remains open
 
 - [ ] End-to-end sign-in and repo listing succeed against live GitHub
 - [ ] Requests outside declared routes are denied even with valid session
@@ -23,3 +23,7 @@
   broker ceilings before admission.
 - Live OAuth/API credentials, callback capture, and native Runtime launch were not exercised in
   this implementation pass; those external gates remain unchecked.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F14 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

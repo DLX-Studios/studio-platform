@@ -4,7 +4,7 @@
 
 **Blocked by:** 37, 22
 
-**Status:** ready-for-agent
+**Status:** partial — channel model exists; accepted conflict/undo semantics and real native/checker/transport integration remain open
 
 - [ ] Interleaved human and agent edits both land when independent
 - [ ] Overlapping stale agent batch resolves last-writer-wins at batch granularity (per #08 override; losing batch surfaces diagnostics only)
@@ -12,3 +12,7 @@
 - [ ] Cancellation prevents acceptance of subsequent batches only
 - [ ] Check failures flow back as machine-readable feedback enabling self-correction
 - [ ] Progress, accepted operations, warnings, and failures visible live in the editor dock
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F06/F07 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

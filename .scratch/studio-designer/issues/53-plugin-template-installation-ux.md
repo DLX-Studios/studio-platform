@@ -4,9 +4,13 @@
 
 **Blocked by:** 35, 50
 
-**Status:** ready-for-agent
+**Status:** partial — tracked install/settings APIs tested; native browse/install/settings surfaces remain open
 
 - [ ] Template instantiation applies ordinary tracked commands, undoable as one group
 - [ ] Rebranding swaps brand tokens only; layout untouched
 - [ ] Every settings field type renders generically; changes are tracked commands
 - [ ] Import review blocks execution until reviewed; applied nodes retain source provenance
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F08/F12 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

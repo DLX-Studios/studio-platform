@@ -3,6 +3,18 @@
 Checked items below retain their original milestone evidence; they do not certify the
 2026-10-31 dependency upgrade. Re-run target-platform release gates for a new release.
 
+## Current product completion gate — 2026-11-01
+
+The historical automated checks below do not establish a complete native Designer journey.
+The [completion audit](development/PROJECT_COMPLETION_AUDIT.md) found ownership/isolation,
+native canvas parity, build/sign/launch and other product-wiring gaps. Resolve the ordered
+[completion backlog](../.scratch/studio-designer/completion-tasks.md) and run the
+[Designer acceptance journey](development/DESIGNER_ACCEPTANCE_JOURNEY.md) before claiming
+Designer v1 release readiness. Current baseline: `e21ed734`; native Windows/macOS reload/CLI
+CI passes, while full applications/installers and manual release acceptance remain separate gates.
+The current Linux CI job failed with runner disk exhaustion during Rust tests (completion backlog
+C021); a completed green remote verification run is still required.
+
 ## Automated gates
 
 - [x] Ticket 59 flagship deterministic evidence report: `cargo run --locked -p studio-flagship --bin flagship-evidence`

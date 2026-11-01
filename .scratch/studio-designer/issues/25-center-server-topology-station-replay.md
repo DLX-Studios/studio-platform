@@ -4,7 +4,7 @@
 
 **Blocked by:** 15, 19
 
-**Status:** implemented-pending-verification
+**Status:** host topology and authenticated loopback protocol implemented/tested; physical deployment verification remains open
 
 - [ ] Two stations plus a hub converge identical shared table/check state
 - [ ] Writes queued during a disconnect replay exactly once logically after reconnect
@@ -40,3 +40,7 @@ offline replay, local-state boundaries, conflict preservation/resolution, and
 center restart replay. Integration with a production on-premises protocol
 server or Studio Cloud API remains a follow-up for the network service layer;
 the current branch deliberately proves the typed host seam in-process only.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F14 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

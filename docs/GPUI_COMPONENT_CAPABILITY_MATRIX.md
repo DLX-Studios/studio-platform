@@ -1,7 +1,11 @@
 # GPUI Component Capability Matrix
 
-This inventory is generated from the vendored `gpui-kit` source and is the source of truth
-for runtime adapter work. Components are grouped by the amount of host state they require.
+This inventory records upstream component families from the earlier vendored snapshot. Studio
+now consumes published GPUI Kit 0.8.1; refresh API details against that source before adapter work.
+The shipped kind/property contract is owned by `studio-protocol`, and current native certification
+is owned by `studio-components::COMPONENT_RENDERER_READINESS`. This document does not certify
+native Designer/Runtime preview parity. See the [completion audit](development/PROJECT_COMPLETION_AUDIT.md).
+Components below are grouped by the amount of host state they require.
 
 ## Direct, stateless elements
 

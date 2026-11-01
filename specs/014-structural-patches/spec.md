@@ -4,7 +4,11 @@
 
 **Created**: 2026-09-06
 
-**Status**: Draft
+**Status**: Partial implementation paths present; structural acceptance reconciliation pending (2026-11-01 audit)
+
+See the [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md) and
+completion backlog C017. This status records source/test evidence without certifying every
+acceptance scenario or changing the requirements below.
 
 **Input**: `.studio` handlers patch text today; lists cannot change
 length. Worse, `{#each}` ignores its key (`key: _`) and stamps every

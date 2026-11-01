@@ -4,7 +4,7 @@
 
 **Blocked by:** 14, 37
 
-**Status:** ready-for-agent
+**Status:** partial — native local identity forms exist; project ownership and full native acceptance remain open
 
 - [ ] Fresh-directory first launch walks welcome→chooser→create→project entry
 - [ ] Reopen honors dismissal memory
@@ -14,4 +14,8 @@
 
 ## Implementation notes
 
-Product welcome GPUI surface now follows application-shell Monolith (variant A): native title bar, split copy/board, canvas-mono tokens, `Get started →` dismisses to the identity chooser, `Open local identity` dismisses then routes to sign-in/unlock or create. Chooser, create, sign-in, and unlock screens are still the stub shell and remain in this ticket.
+Product welcome GPUI surface now follows application-shell Monolith (variant A): native title bar, split copy/board, canvas-mono tokens, `Get started →` dismisses to the identity chooser, `Open local identity` dismisses then routes to sign-in/unlock or create. That earlier stub-shell assessment is superseded: native chooser/create/sign-in/unlock inputs are wired in `bootstrap.rs`; ownership and complete native acceptance remain open.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F01/F09 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

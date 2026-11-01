@@ -4,7 +4,7 @@
 
 **Blocked by:** 18, 19
 
-**Status:** implemented-pending-live-GitHub-verification
+**Status:** maintained-provider host wiring implemented/tested; live provider verification remains open in ticket 64
 
 - [ ] Complete sign-in flow succeeds against live GitHub with tokens never present in guest memory or logs
 - [x] Loopback callback listener is host-owned; guests bind nothing
@@ -23,3 +23,7 @@
 - OpenID Connect providers (Apple, LinkedIn, Microsoft) are verified in the host: the host fetches the provider's published JWKS over the certificate-validating client, checks RS256 against the key the token names, and asserts issuer, audience, expiry, subject, and a host-generated nonce on fresh authorizations. Apple additionally returns its name once in a `form_post` body, which the loopback listener parses with a bounded read.
 - Live verification remains open for every provider, not only GitHub: this environment has no disposable OAuth applications for any of them.
 - `jsonwebtoken` is pinned to the `aws_lc_rs` backend because that is what `surrealdb-core` already selects. Cargo unifies features across a workspace build, so requesting `rust_crypto` here would enable *both* backends and jsonwebtoken panics at runtime with "Could not automatically determine the process-level CryptoProvider". This only reproduces under `cargo test --workspace`, not under `-p studio-oauth`, so the ID token tests must be exercised from the workspace suite.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F14 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

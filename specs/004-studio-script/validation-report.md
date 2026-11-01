@@ -1,5 +1,9 @@
 # Validation Report: Studio Script and Embedded Development Host
 
+**Current audit status (2026-11-01):** Partial: evaluator/compiler code exists, but the shipped `studio dev` IR interpretation/hot-swap integration required by FR-004/FR-011 remains open.
+
+The dated report below retains its historical scope; see the completion-audit note at the end.
+
 **Validation date:** 2026-09-03
 **Implementation result:** T001–T027 complete. `.studio` sources compile through the pinned
 `rsvelte` frontend into versioned typed IR with portable-subset validation; the Rust evaluator
@@ -37,3 +41,17 @@ loop. The vendored `rsvelte` crates carry manifest-only lint deltas (see
 `vendor/rsvelte/UPSTREAM.md`); sources are byte-identical to the pinned rev. Emitted `wasm`
 artifacts differ across ASC environments by toolchain drift, not by packaging; format
 equivalence was proven in feature 003.
+
+## Completion audit — 2026-11-01
+
+The implementation snapshot now at `e21ed734` has a recent local integration checkpoint:
+formatting, workspace Clippy with warnings denied, and 1,290 workspace tests passed (2 explicitly
+ignored). The root foundation/documentation suite also passed 27 tests. These are reused Rust
+checkpoints, not newly executed native/editor/live-service acceptance. The full feature gate's
+remaining Bun, graphical and external requirements must be reconciled separately.
+
+Source audit found a shipped-path gap despite the existing checked task list: `studio dev`
+uses `watch::run` to rebuild bundles and spawn the Runtime child, rather than wiring the Rust
+IR evaluator/hot swap required by FR-004/FR-011. This feature is not fully converged; see C016.
+
+See [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md) for source findings.

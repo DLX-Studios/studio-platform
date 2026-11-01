@@ -4,10 +4,14 @@
 
 **Blocked by:** 45, 50
 
-**Status:** ready-for-agent
+**Status:** partial — conversation/composer models tested; native floating/docked conversation/provider integration remains open
 
 - [ ] Prototype behaviors reproduced: welcome→first-message transition→floating persistence across view switches
 - [ ] Docking layouts float/left/right all function with keyboard support
 - [ ] Reference activation opens target; renamed target shows current label retaining identity
 - [ ] Deleted/denied targets remain visible chips with explanation
 - [ ] Model/run provenance recorded on messages, batches, and undo groups
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F06/F08 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

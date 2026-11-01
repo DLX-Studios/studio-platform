@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** implemented-code-only (awaiting serialized runner/fixer pass)
+**Status:** implemented/tested foundation; original code-only notes are historical (2026-11-01 audit)
 
 - [x] Store initializes schema metadata and reopens idempotently across process restarts
 - [x] Forced termination mid-write recovers to the last durable transaction with no partially committed batch
@@ -58,3 +58,7 @@ no cargo command was run in this worktree (host-safety rule), so every gate (`ca
    feature unification enabling `kv-mem` alongside `kv-rocksdb` during test builds.
 6. UNVERIFIED(runtime) — exotic batch IDs beyond the control-character check (record-key escaping)
    were not exercised; tighten `batch_id_is_valid` if the engine rejects any character class.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F16 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

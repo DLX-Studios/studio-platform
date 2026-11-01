@@ -4,7 +4,11 @@
 
 **Created**: 2026-09-05
 
-**Status**: Draft
+**Status**: Implementation paths present; acceptance reconciliation pending (2026-11-01 audit)
+
+See the [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md) and
+completion backlog C017. This status records source/test evidence without certifying every
+acceptance scenario or changing the requirements below.
 
 **Input**: Compiled `.studio` guests are static: handler `$state` mutations compile to
 nothing, `studio_event` returns fixed initial-value emissions of type `event`, and the

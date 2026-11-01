@@ -1,5 +1,9 @@
 # Validation Report: File-Based Routing
 
+**Current audit status (2026-11-01):** Routing implementation and Rust evidence are present; the full-gate task remains open.
+
+The dated report below retains its historical scope; see the completion-audit note at the end.
+
 **Validation date:** 2026-09-03
 **Implementation result:** T001–T011 complete (T012 full gate deferred to the
 post-008 verification phase per directive). `routes/` files map to a validated,
@@ -30,3 +34,13 @@ guest SDK, and the reload route policy.
 
 Route metadata is titles only; richer metadata belongs to future work, not new
 surface in this feature. Full workspace gates run in the post-008 phase.
+
+## Completion audit — 2026-11-01
+
+The implementation snapshot now at `e21ed734` has a recent local integration checkpoint:
+formatting, workspace Clippy with warnings denied, and 1,290 workspace tests passed (2 explicitly
+ignored). The root foundation/documentation suite also passed 27 tests. These are reused Rust
+checkpoints, not newly executed native/editor/live-service acceptance. The full feature gate's
+remaining Bun, graphical and external requirements must be reconciled separately.
+
+See [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md) for source findings.

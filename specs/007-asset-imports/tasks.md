@@ -37,7 +37,7 @@
 
 ## Phase 6: Polish and Cross-Cutting Validation
 
-- [ ] T011 [P] Update `docs/ROADMAP.md` feature 007 status and record evidence in `specs/007-asset-imports/validation-report.md`.
+- [X] T011 [P] Update `docs/ROADMAP.md` feature 007 status and record evidence in `specs/007-asset-imports/validation-report.md`.
 - [ ] T012 Full gate deferred to the post-008 verification phase.
 
 ## Dependencies and execution order
@@ -48,3 +48,10 @@ rewires the pipeline onto it; US3 records provenance and budget.
 ## MVP scope
 
 T001–T005 plus T007: typed collection proven by the matrix, wired into the real pipeline.
+
+## Completion-audit reconciliation — 2026-11-01
+
+The roadmap and validation evidence were updated by the project-wide audit. Only the
+documentation task above is closed here; unchecked acceptance/full-gate tasks remain open.
+Current Rust checkpoint evidence does not establish a new complete Bun/native/real-service gate.
+See [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md).

@@ -4,7 +4,7 @@
 
 **Blocked by:** 18
 
-**Status:** implemented-pending-staging-verification (focused package checks pass; full-workspace checks are blocked by missing `libclang`; approved staging endpoint not configured)
+**Status:** host broker implemented/tested; generic guest dispatch and live staging verification remain open
 
 - [x] Requests to undeclared origins or paths are denied with stable codes
 - [x] Responses failing declared schema validation never reach guest memory
@@ -85,3 +85,7 @@ typed delivery is declared host-side only.
 - `cargo clippy --locked -p studio-net --all-targets --all-features -- -D warnings`: passed; the staging response-header parser uses `.last()` over its forward-only iterator chain.
 - Full workspace tests and Clippy stop in `surrealdb-librocksdb-sys` because this environment has no `libclang.so`.
 - The approved REST staging endpoint and credential are not configured, so the real-endpoint acceptance criterion remains unchecked.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F11/F14 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

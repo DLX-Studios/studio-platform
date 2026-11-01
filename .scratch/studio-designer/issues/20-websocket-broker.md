@@ -4,7 +4,7 @@
 
 **Blocked by:** 19
 
-**Status:** implemented-pending-staging-verification (approved WSS endpoint not configured)
+**Status:** host broker implemented/tested; generic guest event delivery and live WSS verification remain open
 
 - [x] Session open/close/error lifecycle events reach the guest as typed inputs
 - [x] Inbound and outbound messages validate against declared schemas
@@ -18,3 +18,7 @@
 - `cargo clippy --locked -p studio-net --all-targets --all-features -- -D warnings`: passed, including the operator-gated WSS test target.
 - The real endpoint test was not run: `STUDIO_NET_REAL_WEBSOCKET_URL` is absent. Its staging contract and command are documented in `docs/net/STAGING_TRANSPORT.md`.
 - Full-workspace tests/Clippy remain blocked by missing `libclang.so` while building `surrealdb-librocksdb-sys`.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F11/F14 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

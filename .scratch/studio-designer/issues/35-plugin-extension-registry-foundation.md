@@ -6,10 +6,14 @@
 
 **Blocked by:** 18, 22
 
-**Status:** ready-for-agent
+**Status:** registry foundation implemented/tested; expanded contributions and native install UX remain partial
 
 - [ ] First-party vertical pack installs, providing compositions and settings groups to a project
 - [ ] Tampered or incompatible descriptors are rejected before activation
 - [ ] Capability requests require explicit consent, are recorded per project, and are revocable
 - [ ] A failing lifecycle hook is contained with bounded time/memory
 - [ ] Removal reports remaining artifacts owned by the extension before changing the project
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F08/F12 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

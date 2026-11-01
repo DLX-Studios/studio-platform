@@ -4,7 +4,7 @@
 
 **Blocked by:** 40
 
-**Status:** done
+**Status:** partial — layout/overlay command models implemented; actual native layout/preview parity remains open
 
 - [x] Badge-over-image composed from primitives with typed placement properties only
 - [x] Invalid layout combinations are explained at the selected node
@@ -16,4 +16,8 @@
 - [x] Invalid layout combinations explain the selected node — `crates/studio-design/tests/layout_overlay.rs:186-225`; diagnostics always carry node identity in `crates/studio-design/src/engine.rs:4602-4848`.
 - [x] Constraint changes respond across profile switches — `crates/studio-design/tests/layout_overlay.rs:227-335` exercises sparse merge, undo/redo, and profile switching without changing revision.
 
-Verdict: closed. Layout, overlay diagnostics, and responsive constraint evidence pass; no code gap was found.
+Historical closure verdict superseded by the 2026-11-01 completion audit; domain/model evidence alone does not close native acceptance.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F02 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

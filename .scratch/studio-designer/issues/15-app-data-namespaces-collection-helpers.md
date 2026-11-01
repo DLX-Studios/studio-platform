@@ -4,7 +4,7 @@
 
 **Blocked by:** 14
 
-**Status:** implemented-code-only (awaiting serialized runner/fixer pass)
+**Status:** implemented/tested host helpers; guest-path integration and throughput qualification remain open
 
 - [x] Namespace derives from signed publisher/app identity; two applications cannot observe each other's records through any guest interface
 - [x] Helpers cover full CRUD plus listing, enforcing declared record schemas
@@ -39,3 +39,7 @@ should target p95 ≤ 10 ms for select, p95 ≤ 25 ms for create/update/delete, 
 full ordered list after warmup. The serialized runner should record machine/storage details and at
 least 1,000 sampled operations per verb before treating these figures as qualification evidence.
 These are preliminary targets, not assertions in the automated suite.
+
+## Completion audit — 2026-11-01
+
+Current source/evidence assessment: F11/F16 in the [project completion audit](../../../docs/development/PROJECT_COMPLETION_AUDIT.md). The status above supersedes earlier code-only/closed/readiness wording. Existing checkboxes and older evidence describe their original test layer; they do not certify an unexecuted native or live-service journey. Remaining work is in the [ordered backlog](../completion-tasks.md).

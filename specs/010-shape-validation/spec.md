@@ -4,7 +4,11 @@
 
 **Created**: 2026-09-06
 
-**Status**: Draft
+**Status**: Implementation paths present; acceptance reconciliation pending (2026-11-01 audit)
+
+See the [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md) and
+completion backlog C017. This status records source/test evidence without certifying every
+acceptance scenario or changing the requirements below.
 
 **Input**: `studio check` passes screens that fail at mount: unknown props
 (`title` on `Card`), leaf nodes with element children (`Text` wrapping

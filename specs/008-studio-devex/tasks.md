@@ -38,7 +38,7 @@
 
 ## Phase 6: Polish and Cross-Cutting Validation
 
-- [ ] T012 [P] Update `docs/ROADMAP.md` feature 008 status and record evidence in `specs/008-studio-devex/validation-report.md`.
+- [X] T012 [P] Update `docs/ROADMAP.md` feature 008 status and record evidence in `specs/008-studio-devex/validation-report.md`.
 - [ ] T013 Full gate deferred to the post-008 verification phase.
 
 ## Dependencies and execution order
@@ -51,3 +51,10 @@ server works.
 
 T001–T008: vendored crates, formatted/linted/navigable server proven by goldens and
 protocol tests.
+
+## Completion-audit reconciliation — 2026-11-01
+
+The roadmap and validation evidence were updated by the project-wide audit. Only the
+documentation task above is closed here; unchecked acceptance/full-gate tasks remain open.
+Current Rust checkpoint evidence does not establish a new complete Bun/native/real-service gate.
+See [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md).

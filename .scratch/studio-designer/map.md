@@ -30,6 +30,23 @@ Reach a complete, implementation-ready decision set for specifying Studio Design
 - [Set quality and release gates](issues/12-set-quality-and-release-gates.md): measurable functional, performance, accessibility, recovery, security, synchronization, determinism, and end-to-end gates with recorded evidence; gaps become explicit waivers with named owners, never silent skips.
 - [Shape the specification and tracer-bullet handoff](issues/13-decompose-matt-delivery.md): synthesize through `/to-spec`, then decompose through `/to-tickets` into dependency-ordered, test-first tracer bullets landing through format, workspace-test, and Clippy integration checkpoints.
 
+## Implementation completion audit — 2026-11-01
+
+The decision set does not imply the native product is complete. See the
+[completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md),
+[ordered execution backlog](completion-tasks.md), and
+[local acceptance journey](../../docs/development/DESIGNER_ACCEPTANCE_JOURNEY.md).
+Current first blockers are:
+
+- [66: Project ownership/session isolation](issues/66-project-ownership-isolation.md)
+- [67: Native preview/Runtime parity](issues/67-native-preview-runtime-parity.md)
+- [68: Design build/sign/launch bridge](issues/68-design-build-sign-launch.md)
+- [69: Complete local acceptance journey](issues/69-designer-acceptance-journey.md)
+
+Existing implementation-ticket statuses were reconciled by test layer; prior closed/code-only
+judgments must not override source-confirmed missing native wiring. The historical Wayland-only
+platform restriction is superseded by constitution 2.0.0 and ADR-0004.
+
 ## Not yet specified
 
 - Exact cloud account, service, encryption, and deployment topology; synchronization semantics are settled in [09](issues/09-define-sync-conflict-model.md).
