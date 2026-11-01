@@ -30,3 +30,8 @@ fixture or independently authored Studio Script package for the Design under tes
 Expected scope: a shared Design build seam, existing `studio-script`/`studio-package`/host
 admission, Designer UI commands, and integration tests. Separate any multi-file cross-cutting
 contract work into the C004/C005/C006 slices in [completion tasks](../completion-tasks.md).
+
+## Build contract — 2026-11-01
+
+C004 is specified in [Design build contract v1](../../../docs/development/DESIGN_BUILD_CONTRACT.md).
+The backend/native commands and required signed-artifact acceptance remain open (C005/C006).

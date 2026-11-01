@@ -100,3 +100,11 @@ then [67](../../.scratch/studio-designer/issues/67-native-preview-runtime-parity
 [68](../../.scratch/studio-designer/issues/68-design-build-sign-launch.md), and
 [69](../../.scratch/studio-designer/issues/69-designer-acceptance-journey.md).
 The acceptance run is currently blocked by implementation gaps; this audit does not mark it passed.
+
+## Follow-up implementation evidence — 2026-11-01
+
+F01 is addressed by [ticket 66](../../.scratch/studio-designer/issues/66-project-ownership-isolation.md)
+and the [ownership contract](DESIGNER_PROJECT_OWNERSHIP.md): 51 Designer tests and three host
+persistence tests pass, including production authentication, foreign-ID denial and child-process
+cold reopen. Native GUI acceptance remains separately tracked. The historical findings above
+remain the baseline audit; the completion backlog records current implementation progress.

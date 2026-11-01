@@ -228,7 +228,7 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn submit_batch(&mut self, batch: CommandBatch) -> CommandOutcome {
+    async fn submit_batch(&mut self, mut batch: CommandBatch) -> CommandOutcome {
         if let Some(receipt) = self
             .state
             .receipts
@@ -238,7 +238,17 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             return CommandOutcome::Accepted(receipt.clone());
         }
         let current_revision = self.state.current.revision.id;
-        if batch.base_revision != current_revision {
+        let live_actor = matches!(
+            batch.actor.kind,
+            crate::ActorKind::Agent | crate::ActorKind::Mcp
+        );
+        if live_actor {
+            // Agent/MCP undo identity is owned by the batch, never by a multi-batch run.
+            batch.undo_group_id = UndoGroupId::new(batch.operation_id.as_str())
+                .expect("operation IDs and undo IDs share validation");
+        }
+        let stale_live_batch = live_actor && batch.base_revision < current_revision;
+        if batch.base_revision != current_revision && !stale_live_batch {
             return CommandOutcome::Conflict(stale_conflict(
                 batch.operation_id,
                 batch.base_revision,
@@ -289,6 +299,19 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
         candidate.current = snapshot.clone();
         candidate.revisions.push(snapshot);
         candidate.diagnostics = reference_diagnostics(&candidate.current);
+        if stale_live_batch {
+            let mut warning = diagnostic(
+                "DESIGN_STALE_BATCH_APPLIED",
+                format!(
+                    "Live batch from revision {} applied at revision {}; overlapping earlier intent was replaced.",
+                    batch.base_revision.get(),
+                    current_revision.get()
+                ),
+                None,
+            );
+            warning.severity = DiagnosticSeverity::Warning;
+            candidate.diagnostics.push(warning);
+        }
         candidate.receipts.push(receipt.clone());
         if candidate.history_cursor < candidate.history.len() {
             candidate.history.truncate(candidate.history_cursor);
@@ -298,11 +321,14 @@ impl<P: DesignerPersistence> DefaultDesignerSession<P> {
             inverse_commands,
             committed_revision,
         };
-        if candidate
-            .history
-            .last()
-            .is_some_and(|entry| entry.undo_group_id == batch.undo_group_id)
-        {
+        if candidate.history.last().is_some_and(|entry| {
+            !live_actor
+                && entry.undo_group_id == batch.undo_group_id
+                && entry
+                    .batches
+                    .last()
+                    .is_some_and(|previous| previous.batch.actor == batch.actor)
+        }) {
             candidate
                 .history
                 .last_mut()

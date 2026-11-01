@@ -25,7 +25,7 @@ The JSON report contains:
 - durable structured receipt and kitchen peripheral jobs with retry/cancel state;
 - a declared `/v1/payment_intents` Stripe sandbox route with host-only credential resolution and
   idempotent replay;
-- grouped agent authoring through `studio-design::DesignerSession` and named undo;
+- agent authoring through `studio-design::DesignerSession`, with one undo per accepted batch;
 - hash-chained audit, deterministic digest, recovery, security, accessibility, and capability-matrix
   evidence;
 - prerequisite integration status and blocking verification gaps.
@@ -48,3 +48,10 @@ The prerequisite list is now evidence-backed for the workspace state:
   false.
 - The `prerequisites` gap reason is derived from the actual prerequisite statuses, so it can no
   longer drift from the list it summarizes.
+
+## Evidence schema version 2 — 2026-11-01
+
+The authoring gate now follows decision 08: two agent edits must undo separately. Report
+fields `independent_undo`, `batch_name`, and `batches_undone` replace the version-1 grouped
+fields. The scenario checks the intermediate state after the first undo and complete reversal
+after the second. Billing and cloud stale-write conflicts keep their separate semantics.

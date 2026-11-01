@@ -9,8 +9,10 @@ Updated 2026-11-01 from source baseline `e21ed734`. Current evidence and remaini
 
 Deliver one native, offline-capable Designer journey from a new authenticated project through
 real native editing/preview to a deterministic signed application admitted by Studio Runtime.
-That journey is **not complete**: project ownership needs a regression/fix, the Focus canvas
-renders node labels, and no native Design build/sign/launch bridge is connected.
+That journey is **not complete**: the Focus canvas still renders node labels, and no native
+Design build/sign/launch bridge is connected. Project ownership/session isolation is now fixed
+with production-bootstrap and cold-restart regressions. Agent/MCP batch semantics now match
+decision 08; native transport wiring remains open.
 
 The original Wayland-only milestone is historical. Constitution 2.0.0 and
 [ADR-0004](architecture/ADR-0004-native-platforms.md) permit upstream native backends, including
@@ -44,10 +46,10 @@ in 004 do not override its source-confirmed shipped-path integration gap.
 
 ## Designer delivery order
 
-1. **C001 / ticket 66:** reproduce and fix project ownership, restart identity allocation and session disposal.
+1. **C001 / ticket 66 — implemented:** authenticated project ownership, restart-safe IDs and session disposal; 51 Designer and three host persistence tests pass.
 2. **C002–C003 / 67:** shared native Runtime preview, real input/layout/property behavior and TimePicker certification.
-3. **C004–C006 / 68:** immutable Design/Library build contract, production backend, signed artifact and native Build/Run flow.
-4. **C007–C013:** native Library/content/plugin/Workbench/support surfaces; agent/MCP transport/checker integration; accepted agent conflict/undo semantics; guest capability dispatch.
+3. **C004–C006 / 68:** immutable Design/Library build contract specified; production backend, signed artifact and native Build/Run remain open.
+4. **C007–C013:** native Library/content/plugin/Workbench/support surfaces; agent/MCP transport/checker integration; guest capability dispatch. Agent conflict/undo semantics are implemented at the domain boundary.
 5. **C014:** provision and integrate cloud identity/sync and recovery, preserving local/offline authority.
 6. **C015 / 69:** run the complete local acceptance journey through production seams with recorded native evidence.
 7. **C016–C019:** repair the IR development path, reconcile verification, run live services/hardware and close release gates.

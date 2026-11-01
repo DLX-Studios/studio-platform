@@ -12,8 +12,11 @@ native canvas parity, build/sign/launch and other product-wiring gaps. Resolve t
 [Designer acceptance journey](development/DESIGNER_ACCEPTANCE_JOURNEY.md) before claiming
 Designer v1 release readiness. Current baseline: `e21ed734`; native Windows/macOS reload/CLI
 CI passes, while full applications/installers and manual release acceptance remain separate gates.
-The current Linux CI job failed with runner disk exhaustion during Rust tests (completion backlog
-C021); a completed green remote verification run is still required.
+The original Linux CI job exhausted runner disk space (C021). The profile/storage fix completed
+Rust tests and Clippy with 12 GB of artifacts and 67 GB free; a stale display-message assertion
+was then corrected and passed the local headless Wayland test. A fresh green remote run remains
+required. Current local integration evidence: 1,293 workspace tests passed, two explicit
+qualification tests ignored, and workspace Clippy passed.
 
 ## Automated gates
 

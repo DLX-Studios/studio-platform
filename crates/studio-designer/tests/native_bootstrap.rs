@@ -160,21 +160,25 @@ fn native_identity_forms_and_dashboard_route_use_host_services() {
         .expect("locked identity unlocks");
     assert_eq!(bootstrap.state().route(), &ProductRoute::Dashboard);
 
-    let mut dashboard = bootstrap.dashboard().expect("dashboard opens");
-    dashboard
-        .add_project(studio_designer::project_dashboard::ProjectRecord::new(
-            "native-project",
-            "Native project",
-            studio_designer::project_dashboard::ProjectAuthority::Local,
-            1,
-        ))
-        .expect("project persists");
-    assert_eq!(dashboard.snapshot().projects.len(), 1);
-    assert!(bootstrap.state_mut().open_project("native-project"));
+    let project = bootstrap
+        .create_project_blocking("Native project")
+        .expect("owned project persists");
+    assert_eq!(
+        bootstrap
+            .dashboard()
+            .expect("dashboard opens")
+            .snapshot()
+            .projects
+            .len(),
+        1
+    );
+    bootstrap
+        .open_project(&project)
+        .expect("owned project opens");
     assert_eq!(
         bootstrap.state().route(),
         &ProductRoute::Project {
-            project_id: "native-project".to_owned()
+            project_id: project
         }
     );
 }

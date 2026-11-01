@@ -10,10 +10,10 @@ use std::{
 use studio_design::{
     Actor, ActorId, ActorKind, AgentBatchOutcome, AgentCheckFeedback, AgentCommandBatch,
     AgentEvent, AgentEventSink, AgentProgress, AgentReadResult, AgentReadScope, AgentRunId,
-    AgentRunRequest, Command, CommandBatch, DefaultDesignerSession, DesignNode, DesignerSession,
-    InMemoryDesignerPersistence, LiveAgentChannel, NodeId, NodeParent, OperationId, ProjectId,
-    PropertyValue, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, Screen, ScreenId, StudioDesign,
-    UndoGroupId,
+    AgentRunRequest, Command, CommandBatch, DefaultDesignerSession, DesignNode, DesignerQuery,
+    DesignerQueryResult, DesignerSession, InMemoryDesignerPersistence, LiveAgentChannel, NodeId,
+    NodeParent, OperationId, ProjectId, PropertyValue, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION,
+    Screen, ScreenId, StudioDesign, UndoGroupId,
 };
 use studio_protocol::NodeKind;
 
@@ -52,6 +52,13 @@ fn actor(kind: ActorKind, value: &str) -> Actor {
         id: ActorId::new(value).unwrap(),
         kind,
         display_name: value.to_owned(),
+    }
+}
+
+fn current_snapshot(session: &impl DesignerSession) -> studio_design::StudioDesignSnapshot {
+    match session.query(DesignerQuery::Snapshot) {
+        DesignerQueryResult::Snapshot(snapshot) => snapshot,
+        _ => panic!("snapshot query must be typed"),
     }
 }
 
@@ -207,7 +214,7 @@ fn scoped_reads_are_explicit_and_events_are_transport_free() {
 }
 
 #[test]
-fn independent_human_and_agent_edits_rebase_but_overlap_preserves_both_intents() {
+fn stale_agent_batches_apply_last_writer_wins_and_report_overwritten_intent() {
     let agent = actor(ActorKind::Agent, "agent");
     let human = actor(ActorKind::Human, "designer");
     let mut channel = LiveAgentChannel::new(created());
@@ -271,22 +278,34 @@ fn independent_human_and_agent_edits_rebase_but_overlap_preserves_both_intents()
         "run-edit",
         2,
     );
-    let conflict = block_on(channel.submit_batch(overlap));
-    match conflict.outcome {
-        AgentBatchOutcome::Conflict(conflict) => {
-            assert_eq!(conflict.attempted.operation_id, operation_id("agent-left"));
-            assert_eq!(conflict.intervening.len(), 2);
-            assert_eq!(
-                conflict.current.design.nodes[&node_id("left")].properties["text"],
-                PropertyValue::String("human".to_owned())
-            );
-        }
-        other => panic!("expected overlap conflict, got {other:?}"),
-    }
+    let accepted = block_on(channel.submit_batch(overlap));
+    assert!(matches!(accepted.outcome, AgentBatchOutcome::Accepted(_)));
+    assert!(
+        accepted
+            .check
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "AGENT_INTENT_REPLACED")
+    );
+    let snapshot = current_snapshot(channel.session());
+    assert_eq!(
+        snapshot.design.nodes[&node_id("left")].properties["text"],
+        PropertyValue::String("agent".to_owned())
+    );
+    let DesignerQueryResult::Diagnostics(diagnostics) =
+        channel.session().query(DesignerQuery::Diagnostics)
+    else {
+        panic!("diagnostics");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "DESIGN_STALE_BATCH_APPLIED")
+    );
 }
 
 #[test]
-fn cancellation_stops_future_batches_and_grouped_stream_undoes_as_one() {
+fn cancellation_preserves_independent_undo_for_each_accepted_agent_batch() {
     let agent = actor(ActorKind::Agent, "agent");
     let mut channel = LiveAgentChannel::new(created());
     let run_id = AgentRunId::new("run-cancel").unwrap();
@@ -349,15 +368,45 @@ fn cancellation_stops_future_batches_and_grouped_stream_undoes_as_one() {
         .query(studio_design::DesignerQuery::History);
     match history {
         studio_design::DesignerQueryResult::History(history) => {
-            assert_eq!(history.entries.len(), 1);
-            assert_eq!(history.entries[0].batches.len(), 2);
+            assert_eq!(history.entries.len(), 2);
+            assert_eq!(history.entries[0].batches.len(), 1);
+            assert_eq!(history.entries[1].batches.len(), 1);
+            assert_ne!(
+                history.entries[0].undo_group_id,
+                history.entries[1].undo_group_id
+            );
         }
         other => panic!("unexpected history result: {other:?}"),
     }
     assert!(matches!(
-        AgentCheckFeedback::default(),
-        AgentCheckFeedback { .. }
+        block_on(channel.session_mut().undo(studio_design::HistoryOperation {
+            operation_id: operation_id("undo-two"),
+            actor: actor(ActorKind::Human, "designer"),
+            base_revision: RevisionId::new(2),
+        })),
+        studio_design::CommandOutcome::Accepted(_)
     ));
+    let snapshot = current_snapshot(channel.session());
+    assert_ne!(snapshot.design.nodes[&node_id("left")].name, "Renamed");
+    assert_eq!(
+        snapshot.design.nodes[&node_id("left")].properties["text"],
+        PropertyValue::String("one".to_owned())
+    );
+    assert!(matches!(
+        block_on(channel.session_mut().undo(studio_design::HistoryOperation {
+            operation_id: operation_id("undo-one"),
+            actor: actor(ActorKind::Human, "designer"),
+            base_revision: RevisionId::new(3),
+        })),
+        studio_design::CommandOutcome::Accepted(_)
+    ));
+    let snapshot = current_snapshot(channel.session());
+    assert_ne!(
+        snapshot.design.nodes[&node_id("left")]
+            .properties
+            .get("text"),
+        Some(&PropertyValue::String("one".to_owned()))
+    );
 }
 
 #[test]

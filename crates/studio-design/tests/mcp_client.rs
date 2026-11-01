@@ -248,7 +248,7 @@ fn mcp_and_agent_scoped_adapters_return_identical_scope_denials() {
 }
 
 #[test]
-fn stale_mcp_batches_preserve_the_shared_conflict_result() {
+fn stale_mcp_batches_follow_live_last_writer_wins_policy() {
     block_on(async {
         let session = create_session(InMemoryDesignerPersistence::default()).await;
         let mut client = McpClient::connect(session, full_scope(), mcp_actor()).unwrap();
@@ -261,15 +261,37 @@ fn stale_mcp_batches_preserve_the_shared_conflict_result() {
         ));
 
         let stale = client
-            .submit(batch(RevisionId::INITIAL, "stale", "right", "Stale"))
+            .submit(batch(RevisionId::INITIAL, "stale", "left", "Stale"))
             .await
             .unwrap();
-        let CommandOutcome::Conflict(conflict) = stale else {
-            panic!("expected stale conflict")
-        };
-        assert_eq!(conflict.code, "DESIGN_STALE_REVISION");
-        assert_eq!(conflict.expected_revision, RevisionId::INITIAL);
-        assert_eq!(conflict.actual_revision, RevisionId::new(1));
+        assert!(matches!(stale, CommandOutcome::Accepted(_)));
+        let snapshot = client
+            .query(DesignerQuery::Snapshot)
+            .unwrap()
+            .into_snapshot();
+        assert_eq!(snapshot.design.nodes[&node_id("left")].name, "Stale");
+        let mut constrained = batch(RevisionId::INITIAL, "constrained", "left", "Must not apply");
+        constrained
+            .preconditions
+            .push(studio_design::CommandPrecondition::NodeMissing {
+                node_id: node_id("left"),
+            });
+        assert!(matches!(
+            client.submit(constrained).await.unwrap(),
+            CommandOutcome::Conflict(_)
+        ));
+        assert!(matches!(
+            client
+                .submit(batch(
+                    RevisionId::new(999),
+                    "future",
+                    "left",
+                    "Must not apply"
+                ))
+                .await
+                .unwrap(),
+            CommandOutcome::Conflict(_)
+        ));
         assert_eq!(
             client
                 .query(DesignerQuery::Snapshot)

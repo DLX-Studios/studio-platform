@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Designer ownership and live editing
+
+- Bound native project source, workspace, recovery, conflicts and settings to an active
+  authenticated owner; project IDs now survive restarts without identity collisions.
+- Clear identity-owned editor state and reject obsolete asynchronous results on session changes.
+  Legacy records without ownership proof remain intact and require explicit recovery.
+- Apply Agent and MCP batches with last-writer-wins semantics, retain explicit preconditions,
+  and give every accepted batch its own undo entry. Human undo grouping remains available.
+- Updated flagship evidence to schema version 2: `independent_undo`, `batch_name`, and
+  `batches_undone` replace the old grouped-agent fields. The demo verifies two separate undos.
+- Recorded the immutable Design build contract; native signed Build/Run is still pending.
+- Reduced routine CI artifact growth with consistent verification profiles and a shared debug
+  startup probe; aligned the headless test with Wayland/X11 display diagnostics.
+
 ## Unreleased — Windows reload transport
 
 - Added shared local reload stream/listener types: Unix standard-library sockets and a

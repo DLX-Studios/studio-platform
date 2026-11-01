@@ -20,7 +20,7 @@ use crate::{
     model::{
         Actor, DesignNode, DesignerDiagnostic, DiagnosticSeverity, NodeId, NodeParent, OperationId,
         ProjectId, RevisionId, STUDIO_DESIGN_SCHEMA_VERSION, SelectionSnapshot,
-        StudioDesignSnapshot, UndoGroupId,
+        StudioDesignSnapshot,
     },
     persistence::SessionFuture,
     session::{
@@ -405,8 +405,6 @@ struct RunState {
     cancelled: bool,
     accepted_operations: Vec<OperationId>,
     last_progress: Option<AgentProgress>,
-    undo_group_id: Option<UndoGroupId>,
-    undo_group_name: Option<String>,
 }
 
 /// Host-mediated live agent editing channel.
@@ -491,8 +489,6 @@ impl<S: DesignerSession, C: AgentChecker, E: AgentEventSink> LiveAgentChannel<S,
                 cancelled: false,
                 accepted_operations: Vec::new(),
                 last_progress: None,
-                undo_group_id: None,
-                undo_group_name: None,
             },
         );
         self.event_sink.emit(event);
@@ -736,31 +732,6 @@ impl<S: DesignerSession, C: AgentChecker, E: AgentEventSink> LiveAgentChannel<S,
                 check: AgentCheckFeedback::default(),
             };
         }
-        if let Some(group_id) = &run.undo_group_id {
-            if group_id != &incoming.batch.undo_group_id
-                || run.undo_group_name.as_deref() != Some(incoming.batch.undo_group_name.as_str())
-            {
-                let diagnostics = vec![agent_diagnostic(
-                    "AGENT_UNDO_GROUP_MISMATCH",
-                    "all batches in one agent run must share one undo-group identity and name",
-                )];
-                self.event_sink.emit(AgentEvent::Failure {
-                    run_id: run_id.clone(),
-                    operation_id: operation_id.clone(),
-                    diagnostics: diagnostics.clone(),
-                });
-                return AgentBatchResult {
-                    run_id,
-                    operation_id,
-                    progress,
-                    outcome: AgentBatchOutcome::Rejected(diagnostics),
-                    check: AgentCheckFeedback::default(),
-                };
-            }
-        } else {
-            run.undo_group_id = Some(incoming.batch.undo_group_id.clone());
-            run.undo_group_name = Some(incoming.batch.undo_group_name.clone());
-        }
         run.last_progress = Some(progress.clone());
         self.event_sink.emit(AgentEvent::Progress {
             run_id: run_id.clone(),
@@ -772,7 +743,8 @@ impl<S: DesignerSession, C: AgentChecker, E: AgentEventSink> LiveAgentChannel<S,
         else {
             return self.internal_failure(run_id, operation_id, progress);
         };
-        let mut batch = incoming.batch.clone();
+        let batch = incoming.batch.clone();
+        let mut replaced_intents = Vec::new();
         let mut intervening = Vec::new();
         if batch.base_revision != current.revision.id && batch.base_revision < current.revision.id {
             let DesignerQueryResult::History(history) = self.session.query(DesignerQuery::History)
@@ -785,37 +757,30 @@ impl<S: DesignerSession, C: AgentChecker, E: AgentEventSink> LiveAgentChannel<S,
             let already_applied = history_has_operation(&history, &batch.operation_id);
             if !already_applied {
                 intervening = intervening_batches(history, batch.base_revision);
-                if intervening.is_empty()
-                    || intervening
-                        .iter()
-                        .any(|applied| batches_overlap(&batch, applied, &current))
+                for applied in intervening
+                    .iter()
+                    .filter(|applied| batches_overlap(&batch, applied, &current))
+                    .take(16)
                 {
-                    let conflict = overlapping_conflict(
-                        &batch,
-                        &current,
-                        &intervening,
-                        "the stale agent batch overlaps an accepted intent",
+                    let mut warning = agent_diagnostic(
+                        "AGENT_INTENT_REPLACED",
+                        format!(
+                            "The live batch replaced overlapping intent from operation {}.",
+                            applied.batch.operation_id
+                        ),
                     );
-                    self.event_sink.emit(AgentEvent::Conflict {
-                        run_id: run_id.clone(),
-                        conflict: Box::new(conflict.clone()),
-                    });
-                    return AgentBatchResult {
-                        run_id,
-                        operation_id,
-                        progress,
-                        outcome: AgentBatchOutcome::Conflict(Box::new(conflict)),
-                        check: AgentCheckFeedback::default(),
-                    };
+                    warning.severity = DiagnosticSeverity::Warning;
+                    replaced_intents.push(warning);
                 }
-                batch.base_revision = current.revision.id;
+                // The shared command engine applies Agent and MCP batches against the
+                // latest revision. Explicit preconditions still guard constrained edits.
             }
         }
 
         let outcome = self.session.submit(batch).await;
         match outcome {
             CommandOutcome::Accepted(receipt) => {
-                let check = match self.session.query(DesignerQuery::Snapshot) {
+                let mut check = match self.session.query(DesignerQuery::Snapshot) {
                     DesignerQueryResult::Snapshot(snapshot) => self.checker.check(&snapshot),
                     _ => AgentCheckFeedback {
                         diagnostics: vec![agent_diagnostic(
@@ -824,6 +789,7 @@ impl<S: DesignerSession, C: AgentChecker, E: AgentEventSink> LiveAgentChannel<S,
                         )],
                     },
                 };
+                check.diagnostics.extend(replaced_intents);
                 if let Some(run) = self.runs.get_mut(&run_id) {
                     run.accepted_operations.push(receipt.operation_id.clone());
                 }
@@ -1155,27 +1121,6 @@ fn node_footprint_matches(node_id: &NodeId, footprint: &Footprint) -> bool {
             node_id == other
         }
         Footprint::ChildList(_) => false,
-    }
-}
-
-fn overlapping_conflict(
-    attempted: &CommandBatch,
-    current: &StudioDesignSnapshot,
-    intervening: &[AppliedBatch],
-    message: &str,
-) -> AgentConflict {
-    AgentConflict {
-        conflict: BatchConflict {
-            operation_id: attempted.operation_id.clone(),
-            expected_revision: attempted.base_revision,
-            actual_revision: current.revision.id,
-            failed_precondition: None,
-            code: "AGENT_OVERLAPPING_CONFLICT".to_owned(),
-            message: message.to_owned(),
-        },
-        attempted: attempted.clone(),
-        current: current.clone(),
-        intervening: intervening.to_vec(),
     }
 }
 

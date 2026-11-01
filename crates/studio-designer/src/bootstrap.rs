@@ -194,30 +194,79 @@ impl DashboardPersistenceTrait for LocalStoreDashboardPersistence {
 #[derive(Clone)]
 pub struct LocalStoreSettingsPersistence {
     store: Arc<EmbeddedLocalStore>,
+    session: Option<(
+        Arc<IdentityService<EmbeddedLocalStore, OsSessionCredentialStore>>,
+        IdentitySession,
+    )>,
 }
 
 impl LocalStoreSettingsPersistence {
-    /// Wrap the store opened by native startup.
+    /// Wrap a trusted host store. Native identity routes use the session-bound constructor.
     #[must_use]
     pub fn new(store: Arc<EmbeddedLocalStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            session: None,
+        }
+    }
+
+    fn for_session(
+        store: Arc<EmbeddedLocalStore>,
+        service: Arc<IdentityService<EmbeddedLocalStore, OsSessionCredentialStore>>,
+        session: IdentitySession,
+    ) -> Self {
+        Self {
+            store,
+            session: Some((service, session)),
+        }
+    }
+
+    fn authorize(&self, project: Option<&str>) -> Result<(), SettingsError> {
+        let Some((service, session)) = &self.session else {
+            return Ok(());
+        };
+        let denied = || SettingsError {
+            code: SettingsErrorCode::Unavailable,
+            message: "Settings access denied. Sign in with the project owner.".to_owned(),
+        };
+        match project {
+            Some(id) => {
+                let project = ProjectId::new(id).map_err(|_| denied())?;
+                block_on_native(LocalStoreDesignerPersistence::for_session(
+                    Arc::clone(&self.store),
+                    Arc::clone(service),
+                    session.clone(),
+                    project,
+                ))
+                .map_err(|_| denied())?;
+            }
+            None => {
+                block_on_native(service.project_entries(session, "settings-session-check"))
+                    .map_err(|_| denied())?;
+            }
+        }
+        Ok(())
     }
 }
 
 impl SettingsPersistence for LocalStoreSettingsPersistence {
     fn load_global(&self) -> Result<Option<GlobalSettings>, SettingsError> {
+        self.authorize(None)?;
         load_record(&self.store, SETTINGS_GLOBAL_BATCH).map_err(settings_error)
     }
 
     fn save_global(&self, settings: &GlobalSettings) -> Result<(), SettingsError> {
+        self.authorize(None)?;
         save_record(&self.store, SETTINGS_GLOBAL_BATCH, settings).map_err(settings_error)
     }
 
     fn load_project(&self, project_id: &str) -> Result<Option<ProjectSettings>, SettingsError> {
+        self.authorize(Some(project_id))?;
         load_record(&self.store, &settings_project_batch_id(project_id)).map_err(settings_error)
     }
 
     fn save_project(&self, settings: &ProjectSettings) -> Result<(), SettingsError> {
+        self.authorize(Some(&settings.project_id))?;
         save_record(
             &self.store,
             &settings_project_batch_id(&settings.project_id),
@@ -310,6 +359,7 @@ pub struct NativeProductState {
     route: ProductRoute,
     identity: IdentityShellState,
     session: Option<IdentitySession>,
+    authorized_project: Option<String>,
     indicator: ConnectionIndicator,
 }
 
@@ -330,6 +380,7 @@ impl NativeProductState {
             route,
             identity,
             session,
+            authorized_project: None,
             indicator: ConnectionIndicator::from_state(if connected {
                 ConnectionState::Synced
             } else {
@@ -376,6 +427,7 @@ impl NativeProductState {
         if !self.identity.enter_project(&session) {
             return false;
         }
+        self.authorized_project = None;
         self.session = Some(session);
         self.indicator = ConnectionIndicator::from_state(ConnectionState::Offline);
         self.route = ProductRoute::Dashboard;
@@ -410,6 +462,11 @@ impl NativeProductState {
 
     /// Navigate to a product route, rejecting authenticated routes when signed out.
     pub fn navigate(&mut self, route: ProductRoute) -> bool {
+        if let ProductRoute::Project { project_id } = &route {
+            if self.authorized_project.as_ref() != Some(project_id) {
+                return false;
+            }
+        }
         if matches!(
             route,
             ProductRoute::Dashboard
@@ -435,6 +492,7 @@ impl NativeProductState {
 
     /// Clear the active session and return to the identity gate.
     pub fn sign_out(&mut self) {
+        self.authorized_project = None;
         self.session = None;
         self.indicator = ConnectionIndicator::from_state(ConnectionState::Offline);
         self.route = ProductRoute::IdentityChooser;
@@ -529,11 +587,108 @@ impl NativeProductBootstrap {
         )
     }
 
+    /// Create an owned project using the same durable path as the native dashboard.
+    pub fn create_project_blocking(&self, name: &str) -> Result<String, DashboardError> {
+        let session = self
+            .state
+            .session()
+            .ok_or(DashboardError::Unauthenticated)?
+            .clone();
+        let project_id = block_on_native(LocalStoreDesignerPersistence::create_owned_project(
+            Arc::clone(&self.store),
+            Arc::clone(&self.identity_service),
+            session,
+        ))
+        .map_err(|error| DashboardPersistenceError {
+            code: DashboardPersistenceErrorCode::Rejected,
+            message: error.message,
+        })?;
+        let mut dashboard = self.dashboard()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        dashboard.add_project(ProjectRecord::new(
+            project_id.as_str(),
+            name,
+            ProjectAuthority::Local,
+            now,
+        ))?;
+        Ok(project_id.as_str().to_owned())
+    }
+
+    /// Return an adapter whose authority expires with the authenticated host session.
+    pub fn project_persistence(
+        &self,
+        id: &str,
+    ) -> Result<LocalStoreDesignerPersistence, studio_design::PersistenceError> {
+        let session = self
+            .state
+            .session()
+            .ok_or_else(project_access_error)?
+            .clone();
+        let project_id = ProjectId::new(id).map_err(|_| project_access_error())?;
+        block_on_native(LocalStoreDesignerPersistence::for_session(
+            Arc::clone(&self.store),
+            Arc::clone(&self.identity_service),
+            session,
+            project_id,
+        ))
+    }
+
+    /// Authorize a project before exposing its native route.
+    pub fn open_project(&mut self, id: &str) -> Result<(), studio_design::PersistenceError> {
+        self.project_persistence(id)?;
+        self.state.authorized_project = Some(id.to_owned());
+        if !self.state.open_project(id) {
+            return Err(project_access_error());
+        }
+        Ok(())
+    }
+
+    /// Open the production editor model, including ownership and durable recovery.
+    pub async fn open_project_model(
+        &self,
+        id: &str,
+    ) -> Result<FocusViewModel<LocalStoreDesignerPersistence>, FocusOpenError> {
+        let persistence = self.project_persistence(id).map_err(|error| {
+            FocusOpenError::Session(studio_design::SessionError::Persistence(error))
+        })?;
+        let project_id = ProjectId::new(id).map_err(|_| {
+            FocusOpenError::Session(studio_design::SessionError::Persistence(
+                project_access_error(),
+            ))
+        })?;
+        let identity = self
+            .state
+            .session()
+            .expect("persistence requires a session");
+        let actor = Actor {
+            id: ActorId::new(format!("designer-{}", identity.identity_id()))
+                .expect("host identity is bounded"),
+            kind: ActorKind::Human,
+            display_name: "Designer".to_owned(),
+        };
+        open_or_create_focus(persistence, project_id, actor)
+            .await
+            .map(|(model, _)| model)
+    }
+
     /// Open the durable settings controller.
     pub fn settings(
         &self,
     ) -> Result<SettingsController<LocalStoreSettingsPersistence>, SettingsError> {
-        SettingsController::new(LocalStoreSettingsPersistence::new(Arc::clone(&self.store)))
+        SettingsController::new(LocalStoreSettingsPersistence::for_session(
+            Arc::clone(&self.store),
+            Arc::clone(&self.identity_service),
+            self.state
+                .session()
+                .ok_or_else(|| SettingsError {
+                    code: SettingsErrorCode::Unavailable,
+                    message: "Sign in to open settings.".to_owned(),
+                })?
+                .clone(),
+        ))
     }
 
     /// Persist the welcome choice and update the route.
@@ -658,9 +813,21 @@ impl NativeProductBootstrap {
     }
 
     fn install_session(&mut self, session: IdentitySession) {
+        if let Some(previous) = self.state.session() {
+            if previous.session_id() != session.session_id() {
+                let _ = self.identity_service.sign_out(previous);
+            }
+        }
         self.sync.set_connected(false);
         let _ = self.state.set_authenticated_session(session);
         self.state.indicator = self.sync.indicator().clone();
+    }
+}
+
+fn project_access_error() -> studio_design::PersistenceError {
+    studio_design::PersistenceError {
+        code: studio_design::PersistenceErrorCode::Rejected,
+        message: "Project access denied. Sign in with its owner; legacy projects require an explicit ownership recovery.".to_owned(),
     }
 }
 
@@ -704,6 +871,7 @@ pub struct NativeProductShell {
     create_password: Option<Entity<InputState>>,
     create_confirmation: Option<Entity<InputState>>,
     identity_loading: bool,
+    identity_generation: u64,
     gate_password: Option<Entity<InputState>>,
     input_subscriptions: Vec<Subscription>,
     input_route: Option<ProductRoute>,
@@ -711,7 +879,8 @@ pub struct NativeProductShell {
     identity_error: Option<String>,
     dashboard: Option<ProjectDashboard<LocalStoreDashboardPersistence>>,
     dashboard_error: Option<String>,
-    next_project_number: u32,
+    focus_generation: u64,
+    shell_session_id: Option<String>,
     pending_delete: Option<(String, crate::project_dashboard::DeleteConsequences)>,
     settings: Option<SettingsController<LocalStoreSettingsPersistence>>,
     settings_error: Option<String>,
@@ -720,6 +889,10 @@ pub struct NativeProductShell {
 impl NativeProductShell {
     /// Create the authenticated Designer route shell.
     pub fn new(bootstrap: NativeProductBootstrap, _reduced_motion: bool) -> Self {
+        let shell_session_id = bootstrap
+            .state()
+            .session()
+            .map(|session| session.session_id().to_owned());
         Self {
             bootstrap,
             focus_view: None,
@@ -730,6 +903,7 @@ impl NativeProductShell {
             create_password: None,
             create_confirmation: None,
             identity_loading: false,
+            identity_generation: 0,
             gate_password: None,
             input_subscriptions: Vec::new(),
             input_route: None,
@@ -737,7 +911,8 @@ impl NativeProductShell {
             identity_error: None,
             dashboard: None,
             dashboard_error: None,
-            next_project_number: 1,
+            focus_generation: 0,
+            shell_session_id,
             pending_delete: None,
             settings: None,
             settings_error: None,
@@ -753,6 +928,7 @@ impl NativeProductShell {
         if self.input_route.as_ref() == Some(route) {
             return;
         }
+        self.identity_generation = self.identity_generation.wrapping_add(1);
         self.input_route = Some(route.clone());
         self.input_subscriptions.clear();
         self.identity_error = None;
@@ -831,18 +1007,48 @@ impl NativeProductShell {
     }
 
     fn create_project(&mut self) -> Option<String> {
-        let dashboard = self.dashboard.as_mut()?;
-        let number = self.next_project_number;
-        self.next_project_number = self.next_project_number.saturating_add(1);
-        let id = format!("local-project-{number}");
-        let project = ProjectRecord::new(
-            &id,
-            format!("Untitled project {number}"),
-            ProjectAuthority::Local,
-            number as u64,
-        );
-        dashboard.add_project(project).ok()?;
-        Some(id)
+        match self.bootstrap.create_project_blocking("Untitled project") {
+            Ok(id) => {
+                self.dashboard = None;
+                self.dashboard_error = None;
+                self.ensure_dashboard();
+                Some(id)
+            }
+            Err(error) => {
+                self.dashboard_error = Some(error.to_string());
+                None
+            }
+        }
+    }
+
+    /// Dispose all identity-owned surfaces before another identity can render.
+    fn reconcile_session(&mut self) {
+        let current = self
+            .bootstrap
+            .state()
+            .session()
+            .map(|session| session.session_id().to_owned());
+        if current == self.shell_session_id {
+            return;
+        }
+        self.identity_generation = self.identity_generation.wrapping_add(1);
+        self.shell_session_id = current;
+        self.focus_generation = self.focus_generation.wrapping_add(1);
+        self.focus_view = None;
+        self.focus_project_id = None;
+        self.focus_loading = false;
+        self.focus_error = None;
+        self.dashboard = None;
+        self.dashboard_error = None;
+        self.settings = None;
+        self.settings_error = None;
+        self.pending_delete = None;
+        self.input_route = None;
+        self.create_name = None;
+        self.create_password = None;
+        self.create_confirmation = None;
+        self.gate_password = None;
+        self.input_subscriptions.clear();
     }
 
     fn submit_create(&mut self, cx: &mut Context<Self>) {
@@ -880,6 +1086,8 @@ impl NativeProductShell {
         }
         let service = Arc::clone(&self.bootstrap.identity_service);
         let remember = self.remember_session;
+        let generation = self.identity_generation;
+        let request_route = self.bootstrap.state().route().clone();
         self.identity_loading = true;
         self.identity_error = None;
         cx.notify();
@@ -899,11 +1107,21 @@ impl NativeProductShell {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |shell, cx| {
+                if generation != shell.identity_generation
+                    || shell.bootstrap.state().route() != &request_route
+                {
+                    // A successful obsolete login must not retain usable host authority.
+                    if let Ok((_, ref session, _)) = result {
+                        let _ = shell.bootstrap.identity_service.sign_out(session);
+                    }
+                    return;
+                }
                 shell.identity_loading = false;
                 match result {
                     Ok((_, session, snapshot)) => {
                         shell.bootstrap.state.identity.refresh(snapshot);
                         shell.bootstrap.install_session(session);
+                        shell.reconcile_session();
                         shell.input_route = None;
                         shell.identity_error = None;
                     }
@@ -933,6 +1151,8 @@ impl NativeProductShell {
         let service = Arc::clone(&self.bootstrap.identity_service);
         let remember = self.remember_session;
         let worker_identity_id = identity_id.clone();
+        let generation = self.identity_generation;
+        let request_route = self.bootstrap.state().route().clone();
         self.identity_loading = true;
         self.identity_error = None;
         cx.notify();
@@ -948,11 +1168,21 @@ impl NativeProductShell {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |shell, cx| {
+                if generation != shell.identity_generation
+                    || shell.bootstrap.state().route() != &request_route
+                {
+                    // A successful obsolete login must not retain usable host authority.
+                    if let Ok((ref session, _)) = result {
+                        let _ = shell.bootstrap.identity_service.sign_out(session);
+                    }
+                    return;
+                }
                 shell.identity_loading = false;
                 match result {
                     Ok((session, snapshot)) => {
                         shell.bootstrap.state.identity.refresh(snapshot);
                         shell.bootstrap.install_session(session);
+                        shell.reconcile_session();
                         shell.input_route = None;
                         shell.dashboard = None;
                         shell.dashboard_error = None;
@@ -998,13 +1228,25 @@ impl NativeProductShell {
             kind: ActorKind::Human,
             display_name: "Designer".to_owned(),
         };
-        let store = Arc::clone(&self.bootstrap.store);
+        let persistence = match self.bootstrap.project_persistence(&project_id) {
+            Ok(persistence) => persistence,
+            Err(error) => {
+                self.focus_error = Some(error.message);
+                return;
+            }
+        };
+        self.focus_generation = self.focus_generation.wrapping_add(1);
+        let generation = self.focus_generation;
+        let session_id = identity.session_id().to_owned();
         self.focus_loading = true;
         self.focus_error = None;
-        self.focus_project_id = Some(project_id);
+        self.focus_project_id = Some(project_id.clone());
         cx.spawn(async move |this, cx| {
-            let result = open_or_create_focus(store, project_id_typed, actor).await;
+            let result = open_or_create_focus(persistence, project_id_typed, actor).await;
             this.update(cx, |shell, cx| {
+                if !shell.focus_request_is_current(generation, &session_id, &project_id) {
+                    return;
+                }
                 shell.focus_loading = false;
                 match result {
                     Ok((model, workspace_persistence)) => {
@@ -1029,6 +1271,25 @@ impl NativeProductShell {
         .detach();
     }
 
+    fn focus_request_is_current(
+        &self,
+        generation: u64,
+        session_id: &str,
+        project_id: &str,
+    ) -> bool {
+        self.focus_generation == generation
+            && self
+                .bootstrap
+                .state()
+                .session()
+                .map(IdentitySession::session_id)
+                == Some(session_id)
+            && self.bootstrap.state().route()
+                == &(ProductRoute::Project {
+                    project_id: project_id.to_owned(),
+                })
+    }
+
     fn retry_focus(&mut self, cx: &mut Context<Self>) {
         let Some(project_id) = self.focus_project_id.clone() else {
             return;
@@ -1048,14 +1309,17 @@ impl NativeProductShell {
         Button::new(id)
             .label(label)
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.bootstrap.state_mut().navigate(route.clone());
+                if this.bootstrap.state_mut().navigate(route.clone()) {
+                    this.focus_generation = this.focus_generation.wrapping_add(1);
+                    this.focus_loading = false;
+                }
                 cx.notify();
             }))
     }
 }
 
 async fn open_or_create_focus(
-    store: Arc<EmbeddedLocalStore>,
+    persistence: LocalStoreDesignerPersistence,
     project_id: ProjectId,
     actor: Actor,
 ) -> Result<
@@ -1065,10 +1329,6 @@ async fn open_or_create_focus(
     ),
     FocusOpenError,
 > {
-    let persistence =
-        LocalStoreDesignerPersistence::new_shared(Arc::clone(&store)).map_err(|error| {
-            FocusOpenError::Session(studio_design::SessionError::Persistence(error))
-        })?;
     let workspace_persistence: Arc<dyn studio_design::WorkspacePersistence> =
         Arc::new(persistence.clone());
     match FocusViewModel::open(persistence.clone(), &project_id, None).await {
@@ -1174,8 +1434,12 @@ mod tests {
             display_name: "Designer smoke test".to_owned(),
         };
 
-        let (model, _) = block_on_native(open_or_create_focus(store, project_id, actor))
-            .expect("new project opens");
+        let (model, _) = block_on_native(open_or_create_focus(
+            LocalStoreDesignerPersistence::new_shared(store).unwrap(),
+            project_id,
+            actor,
+        ))
+        .expect("new project opens");
         let snapshot = model.snapshot();
         let canvas = snapshot
             .canvas
@@ -1233,6 +1497,7 @@ fn safe_identity_error(error: &IdentityError) -> String {
 
 impl Render for NativeProductShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.reconcile_session();
         let route = self.bootstrap.state().route().clone();
         let indicator = self.bootstrap.state().indicator().clone();
         let route_is_unlock = matches!(&route, ProductRoute::Unlock { .. });
@@ -1491,10 +1756,11 @@ impl Render for NativeProductShell {
                                                 .projects
                                                 .contains_key(&open_project_id)
                                         }) {
-                                            let _ = this
-                                                .bootstrap
-                                                .state_mut()
-                                                .open_project(open_project_id.clone());
+                                            if let Err(error) =
+                                                this.bootstrap.open_project(&open_project_id)
+                                            {
+                                                this.dashboard_error = Some(error.message);
+                                            }
                                         }
                                         cx.notify();
                                     })),
@@ -1573,6 +1839,7 @@ impl Render for NativeProductShell {
                             .label("Sign out")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let _ = this.bootstrap.sign_out();
+                                this.reconcile_session();
                                 this.dashboard = None;
                                 this.input_route = None;
                                 cx.notify();
@@ -1622,6 +1889,7 @@ impl Render for NativeProductShell {
                         element.child(Button::new("sign-out").label("Sign out").on_click(
                             cx.listener(|this, _, _, cx| {
                                 let _ = this.bootstrap.sign_out();
+                                this.reconcile_session();
                                 cx.notify();
                             }),
                         ))
@@ -1630,5 +1898,106 @@ impl Render for NativeProductShell {
         }
 
         content.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use studio_design::DesignerPersistence;
+
+    #[test]
+    fn legacy_source_is_preserved_and_session_change_discards_editor_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut bootstrap = NativeProductBootstrap::open(directory.path()).unwrap();
+        let legacy = ProjectId::new("local-project-1").unwrap();
+        let unscoped =
+            LocalStoreDesignerPersistence::new_shared(Arc::clone(&bootstrap.store)).unwrap();
+        let actor = Actor {
+            id: ActorId::new("legacy-author").unwrap(),
+            kind: ActorKind::Human,
+            display_name: "Legacy".to_owned(),
+        };
+        block_on_native(DefaultDesignerSession::create(
+            unscoped.clone(),
+            starter_design(legacy.clone()),
+            OperationId::new("legacy-create").unwrap(),
+            actor,
+            UndoGroupId::new("legacy-create").unwrap(),
+        ))
+        .unwrap();
+        let original = block_on_native(DesignerPersistence::load(&unscoped, &legacy)).unwrap();
+        bootstrap
+            .create_identity_and_sign_in_blocking(
+                "Owner",
+                b"password".to_vec(),
+                b"password".to_vec(),
+                false,
+            )
+            .unwrap();
+        bootstrap
+            .dashboard()
+            .unwrap()
+            .add_project(ProjectRecord::new(
+                legacy.as_str(),
+                "Old project",
+                ProjectAuthority::Local,
+                1,
+            ))
+            .unwrap();
+        assert!(bootstrap.project_persistence(legacy.as_str()).is_err());
+        assert!(block_on_native(bootstrap.open_project_model(legacy.as_str())).is_err());
+        assert_eq!(
+            block_on_native(DesignerPersistence::load(&unscoped, &legacy)).unwrap(),
+            original
+        );
+
+        let project = bootstrap.create_project_blocking("Owned").unwrap();
+        bootstrap.open_project(&project).unwrap();
+        let session_id = bootstrap.state().session().unwrap().session_id().to_owned();
+        let mut shell = NativeProductShell::new(bootstrap, false);
+        shell.ensure_dashboard();
+        shell.ensure_settings();
+        shell.focus_project_id = Some(project.clone());
+        shell.focus_loading = true;
+        let generation = shell.focus_generation;
+        assert!(shell.focus_request_is_current(generation, &session_id, &project));
+        shell.bootstrap.sign_out().unwrap();
+        shell.reconcile_session();
+        assert!(shell.focus_view.is_none());
+        assert!(shell.focus_project_id.is_none());
+        assert!(shell.dashboard.is_none());
+        assert!(shell.settings.is_none());
+        assert!(!shell.focus_loading);
+        assert!(!shell.focus_request_is_current(generation, &session_id, &project));
+        // Even signing back into the same identity creates a different session.
+        let identity = shell.bootstrap.state().identity().identities()[0]
+            .identity_id
+            .clone();
+        shell
+            .bootstrap
+            .sign_in_blocking(&identity, b"password", false)
+            .unwrap();
+        shell.bootstrap.open_project(&project).unwrap();
+        shell.reconcile_session();
+        assert!(!shell.focus_request_is_current(generation, &session_id, &project));
+        let prior = shell.bootstrap.project_persistence(&project).unwrap();
+        shell
+            .bootstrap
+            .create_identity_and_sign_in_blocking(
+                "Another identity",
+                b"password".to_vec(),
+                b"password".to_vec(),
+                false,
+            )
+            .unwrap();
+        shell.reconcile_session();
+        assert!(
+            block_on_native(DesignerPersistence::load(
+                &prior,
+                &ProjectId::new(project).unwrap()
+            ))
+            .is_err()
+        );
     }
 }

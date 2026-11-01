@@ -21,7 +21,7 @@ they are not prerequisites for proving this local authoring path.
 | Step | Action and required observation | Current evidence | Audit outcome |
 | --- | --- | --- | --- |
 | J01 | Fresh launch → welcome → create Alice → authenticated dashboard; restart honors remembered state and wrong credentials are denied. | Native bootstrap/identity services and `studio-designer/tests/native_bootstrap.rs`; some tests inspect source strings. | Implemented layers; native keyboard/OS-credential run still required. |
-| J02 | Create Counter as Alice; close/reopen; create another project after process restart. Bob cannot read/open/edit either project, even with an injected Alice project ID. Sign-out disposes the old editor. | `create_project` uses a reset counter; shared persistence keys only by project ID; route checks only authentication; retained Focus survives sign-out. | **Blocked: F01 / ticket 66.** Require executable isolation reproduction and fix first. |
+| J02 | Create Counter as Alice; close/reopen; create another project after process restart. Bob cannot read/open/edit either project, even with an injected Alice project ID. Sign-out disposes the old editor. | Production bootstrap tests cover authenticated ownership, random IDs, foreign-ID denial, expired adapters, retained-session teardown and child-process cold reopen. | Host/lifecycle checks pass (ticket 66); physical GUI sign-out/reopen still belongs to J12. |
 | J03 | Open the starter, see its authored text rendered by the actual Runtime control; select via canvas/hierarchy without changing the content's semantics. | Projection contains the text, but `FocusView::render_node` shows kind/ID labels in nested boxes. | **Blocked: F02 / 67.** Projected props are not the currently rendered preview. |
 | J04 | Insert/configure controls and two screens; edit a value, undo, redo, restart and observe durable state and stable node IDs. | Session, manipulation, Focus and script-editor suites cover model/state operations. | Partial: production view interaction/visual geometry evidence required. |
 | J05 | Import PNG with provenance; bind it to Image; duplicate import keeps one identity; referenced deletion lists usages and requires resolution. | Host Library admission/usage tests exist; native editor opens without a Library snapshot and has no connected import/bind view. | **Blocked: F05 / C007.** |
@@ -33,8 +33,8 @@ they are not prerequisites for proving this local authoring path.
 | J11 | Close Runtime/Designer and cold reopen Alice's saved project; build/run again. Bob's source and state remain independent. | Store/session recovery tests exist; connected journey not established. | **Blocked on J02/J09/J10**; needs a composed persistence regression. |
 | J12 | Repeat with keyboard only, scaling and reduced motion on supported native platforms/display backends; record actual controls, focus order, accessibility and rendering. | Existing unit/model assertions and separate reload socket/CLI platform CI. | **Not executed**; native application/assistive-technology gate remains. |
 
-The first source-confirmed blocker is J02. Even after ownership is corrected, J03 and J09 prevent
-this scenario from being presented as a completed native authoring-to-runtime journey today.
+J02 now has executable host/lifecycle evidence. J03 and J09 still prevent this scenario from
+being presented as a completed native authoring-to-runtime journey.
 
 ## Automation contract
 

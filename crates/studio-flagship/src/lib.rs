@@ -46,7 +46,7 @@ use studio_design::{
 };
 use zeroize::Zeroizing;
 
-const REPORT_SCHEMA_VERSION: u16 = 1;
+const REPORT_SCHEMA_VERSION: u16 = 2;
 const FIXED_PAYMENT_TIME: u64 = 1_725_000_000;
 
 /// Run the complete deterministic demo-day scenario.
@@ -133,9 +133,9 @@ impl DemoDayOrchestrator {
                 "host broker called only the declared Stripe PaymentIntent route",
             ),
             gate(
-                "grouped_agent_authoring",
-                authoring_evidence.grouped_undo,
-                "two agent batches reverted as one named undo group",
+                "independent_agent_authoring",
+                authoring_evidence.independent_undo,
+                "each of two agent batches reverted independently",
             ),
             gate(
                 "audit_log",
@@ -1742,9 +1742,9 @@ fn run_stripe_gate(audit: &mut AuditLog) -> StripeEvidence {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentAuthoringEvidence {
     pub used_designer_session: bool,
-    pub grouped_undo: bool,
-    pub undo_group_name: String,
-    pub batches_grouped: usize,
+    pub independent_undo: bool,
+    pub batch_name: String,
+    pub batches_undone: usize,
     pub reverted_nodes: usize,
     pub durable_revision: u64,
 }
@@ -1861,28 +1861,49 @@ fn run_authoring_gate(audit: &mut AuditLog) -> AgentAuthoringEvidence {
         let undo = session
             .undo(HistoryOperation {
                 operation_id: OperationId::new("undo-author-menu").unwrap(),
-                actor,
+                actor: actor.clone(),
                 base_revision: RevisionId::new(2),
             })
             .await;
-        let grouped_undo = matches!(undo, CommandOutcome::Accepted(_))
-            && history
-                .entries
-                .last()
-                .is_some_and(|entry| entry.batches.len() == 2);
+        let after_first = match session.query(DesignerQuery::Snapshot) {
+            DesignerQueryResult::Snapshot(snapshot) => snapshot,
+            _ => panic!("snapshot query must be typed"),
+        };
+        let first_isolated = matches!(undo, CommandOutcome::Accepted(_))
+            && after_first
+                .design
+                .nodes
+                .contains_key(&NodeId::new("menu-card").unwrap())
+            && !after_first
+                .design
+                .nodes
+                .contains_key(&NodeId::new("kitchen-ticket").unwrap());
+        let second = session
+            .undo(HistoryOperation {
+                operation_id: OperationId::new("undo-author-card").unwrap(),
+                actor,
+                base_revision: RevisionId::new(3),
+            })
+            .await;
+        let independent_undo = first_isolated
+            && matches!(second, CommandOutcome::Accepted(_))
+            && history.entries.len() == 2
+            && history.entries.iter().all(|entry| entry.batches.len() == 1);
         let snapshot = match session.query(DesignerQuery::Snapshot) {
             DesignerQueryResult::Snapshot(snapshot) => snapshot,
             _ => panic!("snapshot query must be typed"),
         };
-        audit.append("agent-author", "authoring.grouped_undo", "flagship-project");
+        audit.append(
+            "agent-author",
+            "authoring.independent_undo",
+            "flagship-project",
+        );
         AgentAuthoringEvidence {
             used_designer_session: true,
-            grouped_undo,
-            undo_group_name: "Author flagship menu".to_owned(),
-            batches_grouped: history
-                .entries
-                .last()
-                .map_or(0, |entry| entry.batches.len()),
+            independent_undo,
+            batch_name: "Author flagship menu".to_owned(),
+            batches_undone: usize::from(matches!(undo, CommandOutcome::Accepted(_)))
+                + usize::from(matches!(second, CommandOutcome::Accepted(_))),
             reverted_nodes: (if !snapshot
                 .design
                 .nodes

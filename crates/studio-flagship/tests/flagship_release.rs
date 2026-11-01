@@ -18,7 +18,10 @@ fn demo_day_report_passes_deterministic_gates_but_keeps_external_blockers_visibl
     assert_eq!(report.center.duplicate_replay_count, 1);
     assert!(report.payroll.matches_tracking);
     assert!(report.billing.all_variants);
-    assert!(report.authoring.grouped_undo);
+    assert!(report.authoring.independent_undo);
+    assert_eq!(report.schema_version, 2);
+    assert_eq!(report.authoring.batches_undone, 2);
+    assert_eq!(report.authoring.reverted_nodes, 2);
     assert!(report.audit.complete);
     assert!(report.audit.secrets_absent);
     assert!(report.security.secret_free_report);

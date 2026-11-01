@@ -40,6 +40,7 @@ const RECOVERY_RECORDS_BATCH_PREFIX: &str = "designer-recovery-";
 #[derive(Clone)]
 pub struct LocalStoreDesignerPersistence {
     store: Arc<EmbeddedLocalStore>,
+    access: Option<Arc<ProjectAccess>>,
 }
 
 impl LocalStoreDesignerPersistence {
@@ -59,6 +60,7 @@ impl LocalStoreDesignerPersistence {
         }
         Ok(Self {
             store: Arc::new(store),
+            access: None,
         })
     }
 
@@ -73,7 +75,121 @@ impl LocalStoreDesignerPersistence {
                     .to_owned(),
             });
         }
-        Ok(Self { store })
+        Ok(Self {
+            store,
+            access: None,
+        })
+    }
+
+    /// Allocate a fresh project and record ownership through the authenticated host.
+    /// Existing or legacy IDs can never be claimed through this operation.
+    pub async fn create_owned_project(
+        store: Arc<EmbeddedLocalStore>,
+        service: Arc<
+            crate::IdentityService<EmbeddedLocalStore, studio_security::OsSessionCredentialStore>,
+        >,
+        session: crate::IdentitySession,
+    ) -> Result<ProjectId, PersistenceError> {
+        let mut entropy = [0_u8; 16];
+        getrandom::fill(&mut entropy)
+            .map_err(|_| rejected_record("Project identity allocation failed; retry creation."))?;
+        let mut id = String::from("project-");
+        for byte in entropy {
+            write!(&mut id, "{byte:02x}").expect("String write");
+        }
+        let project_id =
+            ProjectId::new(id).map_err(|_| rejected_record("Invalid project identity"))?;
+        // Never adopt source from an earlier unowned installation, even on collision.
+        for prefix in [
+            "designer-project-",
+            "designer-workspace-",
+            CONFLICT_RECORDS_BATCH_PREFIX,
+            RECOVERY_RECORDS_BATCH_PREFIX,
+        ] {
+            if !store
+                .batch_entries(&resilience_batch_id(prefix, &project_id))
+                .await
+                .map_err(map_store_error)?
+                .is_empty()
+            {
+                return Err(rejected_record(
+                    "Project identity collision; retry creation.",
+                ));
+            }
+        }
+        let owner_key = ownership_key(&project_id);
+        if !service
+            .project_entries(&session, &owner_key)
+            .await
+            .map_err(|_| ownership_error())?
+            .is_empty()
+        {
+            return Err(ownership_error());
+        }
+        let record = ProjectOwnership {
+            schema_version: 1,
+            identity_id: session.identity_id().to_owned(),
+            project_id: project_id.clone(),
+        };
+        service
+            .write_project_batch(
+                &session,
+                &owner_key,
+                [StoreBatchEntry {
+                    ordinal: 0,
+                    payload: serde_json::to_value(record).map_err(|_| ownership_error())?,
+                }],
+            )
+            .await
+            .map_err(|_| ownership_error())?;
+        Ok(project_id)
+    }
+
+    /// Bind every persistence operation to an active session and an owned project.
+    /// Dashboard membership is not sufficient proof of ownership.
+    pub async fn for_session(
+        store: Arc<EmbeddedLocalStore>,
+        service: Arc<
+            crate::IdentityService<EmbeddedLocalStore, studio_security::OsSessionCredentialStore>,
+        >,
+        session: crate::IdentitySession,
+        project_id: ProjectId,
+    ) -> Result<Self, PersistenceError> {
+        let mut persistence = Self::new_shared(store)?;
+        persistence.access = Some(Arc::new(ProjectAccess {
+            service,
+            session,
+            project_id: project_id.clone(),
+        }));
+        persistence.authorize(&project_id).await?;
+        Ok(persistence)
+    }
+
+    async fn authorize(&self, project_id: &ProjectId) -> Result<(), PersistenceError> {
+        let Some(access) = &self.access else {
+            return Ok(());
+        };
+        if access.project_id != *project_id {
+            return Err(ownership_error());
+        }
+        let entries = access
+            .service
+            .project_entries(&access.session, &ownership_key(project_id))
+            .await
+            .map_err(|_| ownership_error())?;
+        let [entry] = entries.as_slice() else {
+            return Err(ownership_error());
+        };
+        let record: ProjectOwnership =
+            serde_json::from_value(entry.payload.clone()).map_err(|_| ownership_error())?;
+        if entry.ordinal != 0
+            || record.schema_version != 1
+            || record.project_id != *project_id
+            || record.identity_id != access.session.identity_id()
+        {
+            return Err(ownership_error());
+        }
+        Ok(())
     }
 
     /// Recover the owned `LocalStore` after every session and adapter clone is dropped.
@@ -83,9 +199,37 @@ impl LocalStoreDesignerPersistence {
     pub fn try_into_store(self) -> Result<EmbeddedLocalStore, Self> {
         match Arc::try_unwrap(self.store) {
             Ok(store) => Ok(store),
-            Err(store) => Err(Self { store }),
+            Err(store) => Err(Self {
+                store,
+                access: self.access,
+            }),
         }
     }
+}
+
+struct ProjectAccess {
+    service:
+        Arc<crate::IdentityService<EmbeddedLocalStore, studio_security::OsSessionCredentialStore>>,
+    session: crate::IdentitySession,
+    project_id: ProjectId,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectOwnership {
+    schema_version: u16,
+    project_id: ProjectId,
+    identity_id: String,
+}
+
+fn ownership_key(project_id: &ProjectId) -> String {
+    format!("designer-owner-{project_id}")
+}
+
+fn ownership_error() -> PersistenceError {
+    rejected_record(
+        "Project access denied. Sign in with its owner; legacy projects require an explicit ownership recovery.",
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -120,6 +264,7 @@ impl DesignerPersistence for LocalStoreDesignerPersistence {
         project_id: &'a ProjectId,
     ) -> SessionFuture<'a, Result<Option<DurableDesignerState>, PersistenceError>> {
         Box::pin(async move {
+            self.authorize(project_id).await?;
             let entries = self
                 .store
                 .batch_entries(&project_batch_id(project_id))
@@ -156,6 +301,7 @@ impl DesignerPersistence for LocalStoreDesignerPersistence {
         transaction: &'a DesignerTransaction,
     ) -> SessionFuture<'a, Result<(), PersistenceError>> {
         Box::pin(async move {
+            self.authorize(&transaction.project_id).await?;
             if transaction.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
                 || transaction.state.schema_version != STUDIO_DESIGN_SCHEMA_VERSION
                 || transaction.project_id != transaction.state.current.design.project_id
@@ -197,6 +343,9 @@ impl WorkspacePersistence for LocalStoreDesignerPersistence {
         project_id: &'a ProjectId,
     ) -> SessionFuture<'a, Result<Option<WorkspaceRecord>, WorkspaceError>> {
         Box::pin(async move {
+            self.authorize(project_id)
+                .await
+                .map_err(|error| WorkspaceError::Persistence(error.message))?;
             let entries = self
                 .store
                 .batch_entries(&workspace_batch_id(project_id))
@@ -229,6 +378,9 @@ impl WorkspacePersistence for LocalStoreDesignerPersistence {
         record: &'a WorkspaceRecord,
     ) -> SessionFuture<'a, Result<(), WorkspaceError>> {
         Box::pin(async move {
+            self.authorize(&record.project_id)
+                .await
+                .map_err(|error| WorkspaceError::Persistence(error.message))?;
             validate_workspace_record(record, &record.project_id)?;
             let payload = serde_json::to_value(record).map_err(|_| {
                 WorkspaceError::Persistence("workspace record could not be encoded".to_owned())
@@ -255,6 +407,7 @@ impl ConflictPersistence for LocalStoreDesignerPersistence {
         project_id: &'a ProjectId,
     ) -> SessionFuture<'a, Result<Vec<ConflictRecord>, PersistenceError>> {
         Box::pin(async move {
+            self.authorize(project_id).await?;
             let entries = self
                 .store
                 .batch_entries(&resilience_batch_id(
@@ -284,6 +437,7 @@ impl ConflictPersistence for LocalStoreDesignerPersistence {
         records: &'a [ConflictRecord],
     ) -> SessionFuture<'a, Result<(), PersistenceError>> {
         Box::pin(async move {
+            self.authorize(project_id).await?;
             if records.iter().any(|record| {
                 record.schema_version != RESILIENCE_SCHEMA_VERSION
                     || record.project_id != *project_id
@@ -321,6 +475,7 @@ impl RecoveryPersistence for LocalStoreDesignerPersistence {
         project_id: &'a ProjectId,
     ) -> SessionFuture<'a, Result<Vec<RecoveryRecord>, PersistenceError>> {
         Box::pin(async move {
+            self.authorize(project_id).await?;
             let entries = self
                 .store
                 .batch_entries(&resilience_batch_id(
@@ -350,6 +505,7 @@ impl RecoveryPersistence for LocalStoreDesignerPersistence {
         records: &'a [RecoveryRecord],
     ) -> SessionFuture<'a, Result<(), PersistenceError>> {
         Box::pin(async move {
+            self.authorize(project_id).await?;
             if records.iter().any(|record| {
                 record.schema_version != RESILIENCE_SCHEMA_VERSION
                     || record.project_id != *project_id

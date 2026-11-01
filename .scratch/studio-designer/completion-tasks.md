@@ -5,7 +5,14 @@ Source: [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md), 
 have been implemented. Existing accepted requirements remain authoritative. Start each behavior
 change with a failing test, then use focused checks; use the shared Cargo cache sequentially.
 
-All C001–C021 tasks below are open implementation/verification work.
+Progress: C001 is implemented with focused host/lifecycle evidence. C004 is specified in the
+[build contract](../../docs/development/DESIGN_BUILD_CONTRACT.md); C005/C006 remain unimplemented.
+C021's configuration fix is pushed; fresh remote completion is pending. C009 is implemented at
+the shared domain boundary; native transport wiring remains C010. All other tasks remain open.
+
+Integration checkpoint: format check, 1,293 workspace tests (two explicit qualifications ignored),
+workspace Clippy with warnings denied, 13 focused agent/MCP/flagship tests, and 39 Bun tests
+including real headless Wayland startup pass.
 
 ## Delivery order
 
@@ -17,15 +24,15 @@ run alongside the first slice before accepting later integration checkpoints. In
 
 | Task | Priority | Work / acceptance | Depends on | Requirement / finding |
 | --- | --- | --- | --- | --- |
-| C001 | Critical | Reproduce two identities creating/opening `local-project-1`, restart collisions, direct foreign-ID open, and retained Focus after sign-out. Enforce host-owned ownership and safe identity allocation; clear session surfaces. No cross-owner read or mutation; same-owner reopen remains durable. See ticket 66. | — | 54/55, Constitution I; F01 |
+| C001 | Critical | **Implemented; see ticket 66 evidence.** Reproduce two identities creating/opening `local-project-1`, restart collisions, direct foreign-ID open, and retained Focus after sign-out. Enforce host-owned ownership and safe identity allocation; clear session surfaces. No cross-owner read or mutation; same-owner reopen remains durable. See ticket 66. | — | 54/55, Constitution I; F01 |
 | C002 | High | Replace labeled-node preview with shared Runtime-native rendering while preserving author selection overlays and stable IDs. Authored Text, Input, Button, styles/layout and events must match the launched app. See 67. | C001 | 04/10/39; F02 |
 | C003 | High | Implement semantic TimePicker rendering, inspector/event/property contract and keyboard/accessibility tests; certify the entire approved catalog with zero fallback. | C002 | 31–34; F10 |
-| C004 | High | Specify a closed build request for an immutable Design revision + Library snapshot + target/manifest + host signing reference. Define diagnostic mapping, reproducible inputs, failure/last-good behavior, and shared projection semantics. | C001 | 04/10; F03 |
+| C004 | High | **Specified; see build contract.** Specify a closed build request for an immutable Design revision + Library snapshot + target/manifest + host signing reference. Define diagnostic mapping, reproducible inputs, failure/last-good behavior, and shared projection semantics. | C001 | 04/10; F03 |
 | C005 | High | Implement Design-to-existing compiler/package backend; preserve node/events/navigation, responsive variants and referenced asset keys. Two builds of the same inputs must be byte-identical and signature/asset tampering must fail Runtime admission. | C004 | 10; F03 |
 | C006 | High | Add native Build/Run commands using C005, trusted signing configuration and verified Runtime admission. Show structured failures, preserve last-good artifact, and reopen the same durable source. See 68. | C002,C005 | 05/10; F03 |
 | C007 | High | Connect the real host Library and immutable projection snapshot to native import/browse/insert/bind/delete UI and content fixtures/forms. Publish a tested decoder/variant capability matrix; do not present passthrough originals as completed transcoding. | C001,C002 | 04/06/48/49; F05 |
 | C008 | High | Replace Workbench summary labels with interactive shared session panels, real docking/resize/focus and complete profile selection. Connect content, history, plugin/settings and conversation controllers; preserve state across Focus/Workbench switches. | C002,C007 | 05/42/45/49/51/53; F08 |
-| C009 | High | Make agent stale-overlap behavior and undo match decision 08: last-writer-wins per admitted batch, diagnostics for losing intent, independent undo for each batch. Add regressions replacing the contradictory conflict/grouped-agent tests; preserve human undo grouping and cloud conflicts. | C001 | 08/50 override; F07 |
+| C009 | High | **Implemented; see ticket 50 follow-up.** Make agent stale-overlap behavior and undo match decision 08: last-writer-wins per admitted batch, diagnostics for losing intent, independent undo for each batch. Add regressions replacing the contradictory conflict/grouped-agent tests; preserve human undo grouping and cloud conflicts. | C001 | 08/50 override; F07 |
 | C010 | High | Replace AgentAdapter/McpSurface no-ops with the existing scoped AgentChannel/McpClient and a bounded host transport. Inject real validation feedback, host actor attribution and cancellation; connect provider/model/session selection and native progress/reference UI. | C008,C009 | 08/50–52; F06 |
 | C011 | High | Define closed guest action/event/SDK dispatch for each admitted data/query/network/workflow capability. Wire handlers to existing host services and enforce per-principal/env/resource budgets, cancellation and redaction. Prove via a real WASM guest, not direct host-method calls alone. | C001,C004 | 04/15/16/19/20/26/27; F11 |
 | C012 | High | Specify missing declarative extension content-type/validator/migration contracts and the capability catalog; implement admission, consent/revocation, actual sandbox hook preemption/memory enforcement, and native installation/settings/removal with tracked commands. | C008,C011 | 04/07/35/53; F12 |
