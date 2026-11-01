@@ -203,16 +203,13 @@ fn renderer_readiness_matrix_distinguishes_mapped_from_rendered() {
     let kind = NodeKind::TimePicker;
     let readiness = component_readiness(kind);
     assert!(readiness.native_mapped, "{kind:?}");
-    assert!(!readiness.semantically_rendered, "{kind:?}");
-    assert!(!readiness.verified, "{kind:?}");
+    assert!(readiness.semantically_rendered, "{kind:?}");
+    assert!(readiness.verified, "{kind:?}");
 }
 
 #[test]
-fn renderer_certification_reports_only_the_documented_time_picker_gap() {
-    assert_eq!(
-        certify_renderer_readiness(),
-        Err(vec![NodeKind::TimePicker])
-    );
+fn renderer_certification_has_no_remaining_fallback_kinds() {
+    assert_eq!(certify_renderer_readiness(), Ok(()));
 }
 
 #[test]

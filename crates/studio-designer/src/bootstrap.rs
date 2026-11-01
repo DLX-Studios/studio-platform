@@ -1205,7 +1205,12 @@ impl NativeProductShell {
         .detach();
     }
 
-    fn start_focus_open(&mut self, project_id: String, cx: &mut Context<Self>) {
+    fn start_focus_open(
+        &mut self,
+        project_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.focus_loading {
             return;
         }
@@ -1241,9 +1246,9 @@ impl NativeProductShell {
         self.focus_loading = true;
         self.focus_error = None;
         self.focus_project_id = Some(project_id.clone());
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = open_or_create_focus(persistence, project_id_typed, actor).await;
-            this.update(cx, |shell, cx| {
+            this.update_in(cx, |shell, window, cx| {
                 if !shell.focus_request_is_current(generation, &session_id, &project_id) {
                     return;
                 }
@@ -1254,6 +1259,7 @@ impl NativeProductShell {
                             FocusView::new_with_workspace_persistence(
                                 model,
                                 workspace_persistence,
+                                window,
                                 cx,
                             )
                         }));
@@ -1290,13 +1296,13 @@ impl NativeProductShell {
                 })
     }
 
-    fn retry_focus(&mut self, cx: &mut Context<Self>) {
+    fn retry_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(project_id) = self.focus_project_id.clone() else {
             return;
         };
         self.focus_error = None;
         self.focus_view = None;
-        self.start_focus_open(project_id, cx);
+        self.start_focus_open(project_id, window, cx);
     }
 
     fn route_button(
@@ -1674,7 +1680,7 @@ impl Render for NativeProductShell {
                     self.focus_loading = false;
                 }
                 if self.focus_view.is_none() && self.focus_error.is_none() && !self.focus_loading {
-                    self.start_focus_open(project_id.clone(), cx);
+                    self.start_focus_open(project_id.clone(), window, cx);
                 }
                 if let Some(project) = self.focus_view.clone() {
                     content = content.child(project);
@@ -1698,8 +1704,8 @@ impl Render for NativeProductShell {
                             Button::new("retry-project-open")
                                 .label("Retry project open")
                                 .primary()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.retry_focus(cx);
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.retry_focus(window, cx);
                                     cx.notify();
                                 })),
                         );

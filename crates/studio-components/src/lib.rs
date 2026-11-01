@@ -1,6 +1,8 @@
 //! Studio-owned native component wrappers and retained-node mappings.
 //! Studio-owned protocol-to-native component and event boundaries.
 
+pub mod native_view;
+
 mod catalog;
 mod controls;
 mod events;

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Native Designer preview
+
+- Share the Runtime renderer with Focus/Workbench preview, including authored text, native inputs,
+  selection outlines and prototype events isolated from saved revisions. Fix the toolbar layout
+  that squeezed the canvas and bound recursive debug renderer stack usage.
+- Implement TimePicker with independent native state, keyboard editing, canonical 24-hour values,
+  host updates, disabled editing and a validated native inspector. The catalog has no fallback kinds.
+- Add GPUI UI integration tests. Their test-support dependency constrains the shared lockfile to
+  Taffy 0.15.0 and unicode-properties 0.1.3; GPUI and GPUI Kit stay at the existing aligned versions.
+- Avoid rebuilding the vendored compiler on every Cargo command when its optional upstream
+  submodule is absent; document the build-script delta in vendor provenance.
+- Confirm the CI repair with successful Linux validation and macOS/Windows transport jobs.
+
 ## Unreleased — Designer ownership and live editing
 
 - Bound native project source, workspace, recovery, conflicts and settings to an active

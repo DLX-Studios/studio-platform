@@ -108,3 +108,10 @@ and the [ownership contract](DESIGNER_PROJECT_OWNERSHIP.md): 51 Designer tests a
 persistence tests pass, including production authentication, foreign-ID denial and child-process
 cold reopen. Native GUI acceptance remains separately tracked. The historical findings above
 remain the baseline audit; the completion backlog records current implementation progress.
+
+F17 is closed by [run 41285190138](https://github.com/DLX-Studios/studio-platform/actions/runs/41285190138)
+on `069eff9b`: Linux validation and macOS/Windows transport jobs all succeeded. Verification
+profiles now omit debug symbols/incremental artifacts, checks remain serialized, and startup uses
+the already-built debug probe. The preceding run's Rust checks passed with a 12 GB target directory
+and 67 GB runner disk remaining, then exposed a stale Wayland diagnostic assertion; that assertion
+was corrected before the successful run. This is CI evidence, not full cross-platform release certification.

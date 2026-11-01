@@ -70,7 +70,7 @@ fn run(
                                 .timer(Duration::from_millis(100))
                                 .await;
                             let alive = shell.update(&mut cx.clone(), |shell, cx| {
-                                match shell.pump_host_actions() {
+                                match shell.pump_host_actions(cx) {
                                     Ok(changed) => {
                                         if changed {
                                             cx.notify();

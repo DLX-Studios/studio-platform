@@ -21,8 +21,8 @@ reproducible; the MIT copyright notice ships in `LICENSE` per the license terms.
 
 ## Studio deltas
 
-Sources are byte-identical to the upstream revision listed above. Build-system integration
-requires two manifest-only deltas (no `.rs` file is modified):
+Library sources are byte-identical to the upstream revision listed above. Build-system
+integration has the following documented deltas:
 
 1. `[lints] workspace = true` in each vendored `Cargo.toml` is replaced with the upstream
    workspace's own lint table (`unsafe_op_in_unsafe_fn`, `undocumented_unsafe_blocks`,
@@ -36,8 +36,14 @@ requires two manifest-only deltas (no `.rs` file is modified):
    `rsvelte_projection` (optional dependency of the facade) are included so manifests resolve,
    even though Studio enables neither.
 
-Upstream's `oxc` git `[patch]` is intentionally not copied: Studio never names `oxc` types
-directly, so crates.io `oxc 0.146` needs no unification.
+4. `rsvelte_core/build.rs` emits the optional Svelte submodule `rerun-if-changed` directive
+   only when that package file exists. The vendored checkout has no submodule; watching a
+   nonexistent path invalidated every downstream build on every Cargo invocation. The pinned
+   `svelte-version.txt` is always watched and the existing version assertion remains in place
+   when an upstream checkout is present.
+
+Studio's root manifest pins the Oxc family to upstream revision
+`0389c4010ef8298728f3e47fff8e2a9106d10045`; see `[patch.crates-io]` for the complete set.
 
 Compatibility fixtures in `crates/studio-script/tests/` pin the Svelte shapes Studio relies on;
 an upstream update is accepted only after those fixtures pass against the new revision.

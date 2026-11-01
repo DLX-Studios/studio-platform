@@ -2,7 +2,7 @@
 
 #[test]
 fn generic_renderer_does_not_encode_vertical_identifiers_or_behavior() {
-    let source = include_str!("../src/foundation.rs");
+    let source = include_str!("../../studio-components/src/native_view/renderer.rs");
     let forbidden = [
         concat!("order-", "pane"),
         concat!("catalog-", "pane"),

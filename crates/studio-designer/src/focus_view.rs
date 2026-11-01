@@ -16,11 +16,15 @@ use std::{
 use gpui_kit::component::{
     Disableable,
     button::{Button, ButtonVariants},
-    input::{Editor, EditorState, InputEvent},
+    input::{Editor, EditorState, Input, InputEvent, InputState},
 };
 use gpui_kit::{
-    AnyElement, Context as GpuiContext, Entity, FocusHandle, IntoElement, ParentElement, Render,
-    Role, Subscription, Window, div, prelude::*, px, rgb,
+    Context as GpuiContext, Entity, FocusHandle, IntoElement, ParentElement, Render, Role,
+    Subscription, Window, div, prelude::*, px, rgb,
+};
+use studio_components::{
+    InputAction,
+    native_view::{NativeRenderNode, NativeRuntimeView, NativeViewEvent, ProjectionSurface},
 };
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
@@ -36,7 +40,7 @@ use studio_design::{
     duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch, nudge_batch, reparent_batch,
     restore_batch, select_variant,
 };
-use studio_protocol::{NodeKind, UiNode};
+use studio_protocol::UiNode;
 use thiserror::Error;
 
 /// Stable native Focus View colors.  The view is deliberately small; the
@@ -44,7 +48,6 @@ use thiserror::Error;
 const COLOR_CANVAS: u32 = 0x00f5_f7f8;
 const COLOR_PANEL: u32 = 0x00ff_ffff;
 const COLOR_BORDER: u32 = 0x00df_e3e6;
-const COLOR_SELECTED: u32 = 0x00e0_ecff;
 const COLOR_TEXT: u32 = 0x0018_2735;
 const COLOR_MUTED: u32 = 0x008b_949e;
 const COLOR_ERROR: u32 = 0x00fe_f2f2;
@@ -166,6 +169,16 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
             DesignerQueryResult::Snapshot(snapshot) => snapshot,
             _ => unreachable!("DesignerSession returned the wrong query result"),
         };
+        let options = self.effective_projection_options();
+        self.projection = studio_design::project_report(&snapshot, self.library.as_ref(), options);
+        self.state = if self.projection.is_valid() {
+            FocusViewState::Ready
+        } else {
+            FocusViewState::ProjectionFailed(self.projection.diagnostics.clone())
+        };
+    }
+
+    fn effective_projection_options(&self) -> ProjectionOptions {
         let session_state = match self.session.query(DesignerQuery::SessionState) {
             DesignerQueryResult::SessionState(state) => state,
             _ => unreachable!("DesignerSession returned the wrong query result"),
@@ -179,14 +192,9 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
             && let Ok(profile_id) = DeviceProfileId::new(profile_id.to_owned())
             && let Some(profile) = DeviceProfileMatrix::standard().profiles.get(&profile_id)
         {
-            options.responsive_variant_id = select_variant(&snapshot.design, profile);
+            options.responsive_variant_id = select_variant(&self.source_snapshot().design, profile);
         }
-        self.projection = studio_design::project_report(&snapshot, self.library.as_ref(), options);
-        self.state = if self.projection.is_valid() {
-            FocusViewState::Ready
-        } else {
-            FocusViewState::ProjectionFailed(self.projection.diagnostics.clone())
-        };
+        options
     }
 
     /// Return an immutable model snapshot for a canvas, inspector, or test.
@@ -1196,6 +1204,8 @@ pub struct FocusView<P> {
     /// Session-backed state used by callbacks and render.
     pub model: Option<FocusViewModel<P>>,
     root_focus: FocusHandle,
+    preview: Entity<NativeRuntimeView<ProjectionSurface>>,
+    _preview_subscription: Subscription,
     operation_in_flight: bool,
     /// Presentation-only Focus/Workbench controller; both views use `model`.
     workspace: WorkspaceController,
@@ -1215,11 +1225,15 @@ pub struct FocusView<P> {
     prototype_screen: Option<studio_design::ScreenId>,
     prototype_interaction: Option<InteractionId>,
     token_delete_confirmation: bool,
+    time_input: Entity<InputState>,
+    time_input_binding: Option<(NodeId, String)>,
+    inspector_feedback: Option<String>,
 }
 
 #[derive(Clone, Copy)]
 enum FocusAction {
     EditText,
+    EditTime,
     Undo,
     Drag,
     NudgeLeft,
@@ -1258,10 +1272,11 @@ enum FocusAction {
 impl<P: DesignerPersistence + 'static> FocusView<P> {
     /// Create the GPUI adapter around one already-open model.
     #[must_use]
-    pub fn new(model: FocusViewModel<P>, cx: &mut GpuiContext<Self>) -> Self {
+    pub fn new(model: FocusViewModel<P>, window: &mut Window, cx: &mut GpuiContext<Self>) -> Self {
         Self::with_workspace(
             model,
             Arc::new(studio_design::InMemoryWorkspacePersistence::default()),
+            window,
             cx,
         )
     }
@@ -1272,14 +1287,16 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
     pub fn new_with_workspace_persistence(
         model: FocusViewModel<P>,
         workspace_persistence: Arc<dyn WorkspacePersistence>,
+        window: &mut Window,
         cx: &mut GpuiContext<Self>,
     ) -> Self {
-        Self::with_workspace(model, workspace_persistence, cx)
+        Self::with_workspace(model, workspace_persistence, window, cx)
     }
 
     fn with_workspace(
         model: FocusViewModel<P>,
         workspace_persistence: Arc<dyn WorkspacePersistence>,
+        window: &mut Window,
         cx: &mut GpuiContext<Self>,
     ) -> Self {
         let project_id = model.session_state().project_id;
@@ -1291,9 +1308,19 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 WorkspaceController::from_state(WorkspaceState::new())
                     .expect("default workspace state is valid")
             });
-        Self {
+        let preview = cx.new(|cx| {
+            NativeRuntimeView::with_surface(true, ProjectionSurface::default(), window, cx)
+        });
+        let preview_subscription =
+            cx.subscribe(&preview, |this, _, event: &NativeViewEvent, cx| {
+                this.handle_preview_event(event);
+                cx.notify();
+            });
+        let mut view = Self {
             model: Some(model),
             root_focus: cx.focus_handle(),
+            preview,
+            _preview_subscription: preview_subscription,
             operation_in_flight: false,
             workspace,
             workspace_persistence,
@@ -1309,6 +1336,47 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             prototype_screen: None,
             prototype_interaction: None,
             token_delete_confirmation: false,
+            time_input: cx.new(|cx| InputState::new(window, cx).default_value("00:00")),
+            time_input_binding: None,
+            inspector_feedback: None,
+        };
+        view.initialize_editor(window, cx);
+        view
+    }
+
+    fn initialize_editor(&mut self, window: &mut Window, cx: &mut GpuiContext<Self>) {
+        if self.script_input.is_none() {
+            let source = self
+                .model
+                .as_ref()
+                .map(FocusViewModel::script_source)
+                .unwrap_or_default();
+            if self.script_editor.is_none() {
+                self.script_editor = self.model.as_ref().and_then(|model| {
+                    ScriptDocumentAdapter::from_snapshot(&model.source_snapshot()).ok()
+                });
+            }
+            let input = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .default_value(source.clone())
+                    .language("studio")
+            });
+            let subscription = cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.script_source = input.read(cx).value().to_string();
+                    if let Some(editor) = this.script_editor.as_mut() {
+                        editor.replace_source(this.script_source.clone());
+                    }
+                    if !this.script_syncing {
+                        this.script_feedback =
+                            Some("Unsaved script buffer · press Check & Commit".to_owned());
+                    }
+                    cx.notify();
+                }
+            });
+            self.script_source = source;
+            self.script_input = Some(input);
+            self._script_subscription = Some(subscription);
         }
     }
 
@@ -1505,12 +1573,22 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             }
             _ => {}
         }
+        let time_value = self.time_input.read(cx).value().to_string();
+        if matches!(action, FocusAction::EditTime)
+            && !studio_protocol::is_valid_time_value(&time_value)
+        {
+            self.inspector_feedback = Some("Enter a 24-hour time as HH:MM or HH:MM:SS.".to_owned());
+            cx.notify();
+            return;
+        }
+        self.inspector_feedback = None;
         let Some(mut model) = self.model.take() else {
             return;
         };
         let revision = model.snapshot().revision_id.get().saturating_add(1);
         let (name, undo_name) = match action {
             FocusAction::EditText => ("focus-edit", "focus-text-edit"),
+            FocusAction::EditTime => ("focus-edit-time", "focus-time-edit"),
             FocusAction::Undo => ("focus-undo", "focus-undo"),
             FocusAction::Drag => ("focus-drag", "focus-drag"),
             FocusAction::NudgeLeft => ("focus-nudge-left", "focus-nudge-left"),
@@ -1565,6 +1643,18 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         cx.spawn(async move |this, cx| {
             let outcome = match action {
                 FocusAction::EditText => model.edit_text(operation_id, actor, undo_group_id).await,
+                FocusAction::EditTime => {
+                    model
+                        .edit_property(
+                            operation_id,
+                            actor,
+                            undo_group_id,
+                            "Edit time",
+                            "value",
+                            Some(PropertyValue::String(time_value)),
+                        )
+                        .await
+                }
                 FocusAction::Undo => model.undo(operation_id, actor).await,
                 FocusAction::Drag => {
                     model
@@ -1856,44 +1946,62 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         self.start_script_commit(cx);
     }
 
-    fn render_node(
-        &self,
-        node: &UiNode,
-        selected: Option<&NodeId>,
-        cx: &mut GpuiContext<Self>,
-    ) -> AnyElement {
-        let node_id = node.id.clone();
-        let selected_here = selected.is_some_and(|selected| selected.as_str() == node.id);
-        let children = node
-            .children
-            .iter()
-            .map(|child| self.render_node(child, selected, cx))
-            .collect::<Vec<_>>();
-        let kind = format_kind(node.kind);
-        div()
-            .id(format!("focus-canvas-node-{}", node.id))
-            .role(Role::Button)
-            .aria_label(format!("{kind} {}", node.id))
-            .w_full()
-            .p_2()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(COLOR_BORDER))
-            .when(selected_here, |element| element.bg(rgb(COLOR_SELECTED)))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(format!("{kind} · {}", node.id)),
-            )
-            .children(children)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(model) = this.model.as_mut() {
-                    let _ = model.select_str(&node_id);
+    fn handle_preview_event(&mut self, event: &NativeViewEvent) {
+        match event {
+            NativeViewEvent::Selected(node_id) if !self.prototype_mode => {
+                if let Some(model) = self.model.as_mut() {
+                    let _ = model.select_str(node_id);
                 }
-                cx.notify();
-            }))
-            .into_any_element()
+            }
+            NativeViewEvent::Input { node_id, action } if self.prototype_mode => {
+                let Ok(node_id) = NodeId::new(node_id.clone()) else {
+                    return;
+                };
+                let event = match action {
+                    InputAction::PointerClick
+                    | InputAction::KeyboardActivate
+                    | InputAction::TouchActivate => studio_design::InteractionEvent::Pressed,
+                    InputAction::TextChanged { .. }
+                    | InputAction::SelectionChanged { .. }
+                    | InputAction::SliderDrag { .. } => studio_design::InteractionEvent::Changed,
+                    InputAction::Scroll { .. } => return,
+                };
+                if let Some(prototype) = self.prototype.as_mut() {
+                    let dispatch = prototype.dispatch_event(node_id, event);
+                    self.prototype_screen = dispatch.state.active_screen_id;
+                    self.prototype_feedback = Some(format!(
+                        "Prototype · {} effect(s) · {} diagnostic(s)",
+                        dispatch.trace.len(),
+                        dispatch.diagnostics.len()
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn preview_root(&self, snapshot: &FocusViewSnapshot) -> Option<UiNode> {
+        let Some(prototype) = self.prototype.as_ref().filter(|_| self.prototype_mode) else {
+            return snapshot.canvas.clone();
+        };
+        let model = self.model.as_ref()?;
+        let mut source = model.source_snapshot();
+        source.design = prototype.design().clone();
+        let state = prototype.state();
+        for (id, properties) in state.properties {
+            if let Some(node) = source.design.nodes.get_mut(&id) {
+                node.properties.extend(properties);
+            }
+        }
+        for (id, visible) in state.visibility {
+            if let Some(node) = source.design.nodes.get_mut(&id) {
+                node.properties
+                    .insert("visible".to_owned(), PropertyValue::Boolean(visible));
+            }
+        }
+        let mut options = model.effective_projection_options();
+        options.screen_id = state.active_screen_id;
+        studio_design::project_report(&source, model.library.as_ref(), options).root
     }
 }
 
@@ -1906,39 +2014,6 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 .aria_label("Designer operation in progress")
                 .p_4()
                 .child("Saving Designer changes…");
-        }
-        if self.script_input.is_none() {
-            let source = self
-                .model
-                .as_ref()
-                .map(FocusViewModel::script_source)
-                .unwrap_or_default();
-            if self.script_editor.is_none() {
-                self.script_editor = self.model.as_ref().and_then(|model| {
-                    ScriptDocumentAdapter::from_snapshot(&model.source_snapshot()).ok()
-                });
-            }
-            let input = cx.new(|cx| {
-                EditorState::new(window, cx)
-                    .default_value(source.clone())
-                    .language("studio")
-            });
-            let subscription = cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.script_source = input.read(cx).value().to_string();
-                    if let Some(editor) = this.script_editor.as_mut() {
-                        editor.replace_source(this.script_source.clone());
-                    }
-                    if !this.script_syncing {
-                        this.script_feedback =
-                            Some("Unsaved script buffer · press Check & Commit".to_owned());
-                    }
-                    cx.notify();
-                }
-            });
-            self.script_source = source;
-            self.script_input = Some(input);
-            self._script_subscription = Some(subscription);
         }
         // Canvas commands commit through the shared session before this view
         // is rendered again. Rebase a clean editor buffer to that new source
@@ -1967,10 +2042,52 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .expect("FocusView model is present after loading guard")
             .snapshot();
         let selected = snapshot.selected_node_id.clone();
-        let canvas = snapshot
-            .canvas
+        let time_binding = snapshot.selected_node.as_ref().and_then(|node| {
+            if !matches!(
+                node.source,
+                studio_design::DesignNodeSource::Primitive {
+                    kind: studio_protocol::NodeKind::TimePicker
+                }
+            ) {
+                return None;
+            }
+            let value = match node.properties.get("value") {
+                Some(PropertyValue::String(value)) => value.clone(),
+                _ => "00:00".to_owned(),
+            };
+            Some((node.id.clone(), value))
+        });
+        if self.time_input_binding != time_binding {
+            if let Some((_, value)) = &time_binding {
+                self.time_input
+                    .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+            }
+            self.time_input_binding = time_binding;
+            self.inspector_feedback = None;
+        }
+        let is_time = self.time_input_binding.is_some();
+        let preview_root = self.preview_root(&snapshot);
+        let tree = preview_root.as_ref().map(NativeRenderNode::from);
+        self.preview.update(cx, |preview, cx| {
+            preview.update_surface(
+                |surface| {
+                    if surface.root == tree {
+                        return false;
+                    }
+                    surface.root = tree;
+                    true
+                },
+                cx,
+            );
+            preview.set_authoring(
+                !self.prototype_mode,
+                selected.as_ref().map(ToString::to_string),
+                cx,
+            );
+        });
+        let canvas = preview_root
             .as_ref()
-            .map(|root| {
+            .map(|_| {
                 div()
                     .id("focus-canvas-surface")
                     .role(Role::Group)
@@ -1982,7 +2099,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     .border_1()
                     .border_color(rgb(COLOR_BORDER))
                     .bg(rgb(COLOR_CANVAS))
-                    .child(self.render_node(root, selected.as_ref(), cx))
+                    .child(self.preview.clone())
                     .into_any_element()
             })
             .unwrap_or_else(|| {
@@ -2370,15 +2487,19 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .track_focus(&self.root_focus)
             .size_full()
             .flex()
+            .flex_col()
             .gap_3()
             .p_4()
             .bg(rgb(COLOR_CANVAS))
             .text_color(rgb(COLOR_TEXT))
             .child(toolbar)
             .child(workbench_surface)
+            .child(div().id("focus-body").flex().flex_1().min_h_0().w_full().gap_3()
             .child(
                 div()
                     .id("focus-canvas-panel")
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .role(Role::Pane)
                     .aria_label(format!("Canvas {route}"))
                     .flex_1()
@@ -2394,6 +2515,9 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .child(
                 div()
                     .id("focus-inspector-panel")
+                    .flex_shrink_0()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .role(Role::Pane)
                     .aria_label("Inspector")
                     .w(px(300.0))
@@ -2406,6 +2530,12 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     .border_color(rgb(COLOR_BORDER))
                     .bg(rgb(COLOR_PANEL))
                     .child(div().text_lg().child("Inspector"))
+                    .when(is_time, |element| element
+                        .child(div().text_sm().child("Time · 24-hour HH:MM or HH:MM:SS"))
+                        .child(Input::new(&self.time_input).id("focus-time-value"))
+                        .child(Button::new("focus-time-apply").label("Apply time").disabled(self.prototype_mode)
+                            .on_click(cx.listener(|this, _, _, cx| this.start_action(FocusAction::EditTime, cx))))
+                        .when_some(self.inspector_feedback.clone(), |element, message| element.child(div().id("focus-time-error").role(Role::Alert).child(message))))
                     .child(
                         div()
                             .text_sm()
@@ -2884,18 +3014,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                                     })),
                             )
                     }),
-            )
-    }
-}
-
-fn format_kind(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Box => "Box",
-        NodeKind::Column => "Column",
-        NodeKind::Row => "Row",
-        NodeKind::Text => "Text",
-        NodeKind::Button => "Button",
-        _ => "Node",
+            ))
     }
 }
 

@@ -5,7 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+test-support = ["gpui-kit/test-support"]
+
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 gpui-kit.workspace = true
 serde_json.workspace = true
 studio-protocol = { path = "../studio-protocol" }
@@ -15,6 +19,7 @@ studio-ui = { path = "../studio-ui" }
 thiserror.workspace = true
 
 [dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

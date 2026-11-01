@@ -7,12 +7,14 @@ change with a failing test, then use focused checks; use the shared Cargo cache 
 
 Progress: C001 is implemented with focused host/lifecycle evidence. C004 is specified in the
 [build contract](../../docs/development/DESIGN_BUILD_CONTRACT.md); C005/C006 remain unimplemented.
-C021's configuration fix is pushed; fresh remote completion is pending. C009 is implemented at
-the shared domain boundary; native transport wiring remains C010. All other tasks remain open.
+C021 is complete: [run 41285190138](https://github.com/DLX-Studios/studio-platform/actions/runs/41285190138) passed Linux validation and macOS/Windows transport jobs. C009 is implemented at
+the shared domain boundary; native transport wiring remains C010. C002 now shares the native renderer with focused interaction/geometry evidence; broader token/profile/asset acceptance remains. C003 has native TimePicker/inspector implementation and passing catalog certification; OS acceptance remains C019. All other tasks remain open.
 
-Integration checkpoint: format check, 1,293 workspace tests (two explicit qualifications ignored),
-workspace Clippy with warnings denied, 13 focused agent/MCP/flagship tests, and 39 Bun tests
-including real headless Wayland startup pass.
+Integration checkpoint after a clean shared-cache rebuild: format check, 1,302 workspace tests
+(two explicit qualifications ignored), workspace Clippy with warnings denied, and 39 Bun tests
+including real headless Wayland startup pass. The earlier ownership/live-editing commit also
+passed [remote CI](https://github.com/DLX-Studios/studio-platform/actions/runs/41286226664).
+The new native preview changes require their own remote run.
 
 ## Delivery order
 
@@ -26,7 +28,7 @@ run alongside the first slice before accepting later integration checkpoints. In
 | --- | --- | --- | --- | --- |
 | C001 | Critical | **Implemented; see ticket 66 evidence.** Reproduce two identities creating/opening `local-project-1`, restart collisions, direct foreign-ID open, and retained Focus after sign-out. Enforce host-owned ownership and safe identity allocation; clear session surfaces. No cross-owner read or mutation; same-owner reopen remains durable. See ticket 66. | — | 54/55, Constitution I; F01 |
 | C002 | High | Replace labeled-node preview with shared Runtime-native rendering while preserving author selection overlays and stable IDs. Authored Text, Input, Button, styles/layout and events must match the launched app. See 67. | C001 | 04/10/39; F02 |
-| C003 | High | Implement semantic TimePicker rendering, inspector/event/property contract and keyboard/accessibility tests; certify the entire approved catalog with zero fallback. | C002 | 31–34; F10 |
+| C003 | High | **Implemented locally; native UI and catalog tests pass.** Implement semantic TimePicker rendering, inspector/event/property contract and keyboard/accessibility tests; certify the entire approved catalog with zero fallback. | C002 | 31–34; F10 |
 | C004 | High | **Specified; see build contract.** Specify a closed build request for an immutable Design revision + Library snapshot + target/manifest + host signing reference. Define diagnostic mapping, reproducible inputs, failure/last-good behavior, and shared projection semantics. | C001 | 04/10; F03 |
 | C005 | High | Implement Design-to-existing compiler/package backend; preserve node/events/navigation, responsive variants and referenced asset keys. Two builds of the same inputs must be byte-identical and signature/asset tampering must fail Runtime admission. | C004 | 10; F03 |
 | C006 | High | Add native Build/Run commands using C005, trusted signing configuration and verified Runtime admission. Show structured failures, preserve last-good artifact, and reopen the same durable source. See 68. | C002,C005 | 05/10; F03 |
@@ -43,7 +45,7 @@ run alongside the first slice before accepting later integration checkpoints. In
 | C017 | Medium | Reconcile remaining spec 005–008 full-gate/real-package evidence and spec 009–014 acceptance status; update release docs and remove stale code-only/missing-libclang conclusions where current proof supersedes them. No unchecked live/native gate is closed by a model test. | C015,C016; approved test environment | F16 |
 | C018 | High / external | Provision safe staging and OAuth registrations; run REST/SSE/WSS/provider/Stripe suites and physical three-station/peripheral journey. Record only safe codes/metadata; missing credentials or hardware remains a named blocker or explicit waiver. | C010–C012,C014,C015; operator credentials/devices | 19–21/34/36/59/64; F14 |
 | C019 | High / release | Run full application builds and native acceptance on supported OS/display backends; produce signed release artifacts, installer/update/rollback rehearsal and compressed/installed/app-payload size evidence. Complete accessibility, dependency/provenance/license and release-owner sign-off. Keep deferred low-power certification explicit. | C003,C015,C017,C018; release checkpoint | 12, Constitution V, release checklist; F15 |
-| C021 | High / verification | Restore Linux CI after the observed runner `No space left on device` failure. Apply consistent verification profile/incremental settings before Cargo, measure artifact/disk usage, keep lint/test/release stages serialized and budgeted, and obtain a fresh full successful run. Preserve failure evidence; do not delete unrelated developer caches or claim a failed runner proves test success. | CI runner/configuration | AGENTS policy; F17 |
+| C021 | High / verification | **Complete; remote run 41285190138 passed.** Restore Linux CI after the observed runner `No space left on device` failure. Apply consistent verification profile/incremental settings before Cargo, measure artifact/disk usage, keep lint/test/release stages serialized and budgeted, and obtain a fresh full successful run. Preserve failure evidence; do not delete unrelated developer caches or claim a failed runner proves test success. | CI runner/configuration | AGENTS policy; F17 |
 | C020 | Planned feature | Specify and implement the trusted native sidecar bridge and Rust/Go/C Media Pipeline Lab from the saved proposal. Stabilize protocol/lifecycle/conformance before media, native video output and packaging; preserve the WASM authority boundary. | Explicit feature contracts; C011/C019 as integration dependencies | Native sidecar proposal; additional scope |
 
 ## Concrete first tests and code boundaries

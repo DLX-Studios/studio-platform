@@ -55,6 +55,7 @@ export function DatePicker(id: string, value: string = "", onChanged: string = "
   return w;
 }
 
+/** Local 24-hour HH:MM or HH:MM:SS; omitted value starts at 00:00. Emits changed {value}. */
 export function TimePicker(id: string, value: string = "", onChanged: string = ""): Widget {
   let w = widget(id, "time_picker");
   if (value.length > 0) w.value(value);

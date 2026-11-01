@@ -2,7 +2,7 @@
 
 use studio_protocol::NodeKind;
 
-/// The four interactive controls with a stable runtime implementation.
+/// The interactive controls with a stable runtime implementation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeControl {
     /// An activatable action control.
@@ -13,6 +13,8 @@ pub enum RuntimeControl {
     Select,
     /// A bounded scalar/range control.
     Slider,
+    /// A segmented local time editor.
+    Time,
 }
 
 impl RuntimeControl {
@@ -33,6 +35,7 @@ impl RuntimeControl {
             | NodeKind::InputGroup
             | NodeKind::OtpInput
             | NodeKind::SecretInput => Some(Self::Input),
+            NodeKind::TimePicker => Some(Self::Time),
             NodeKind::Select | NodeKind::Combobox => Some(Self::Select),
             NodeKind::Slider | NodeKind::RangeSlider | NodeKind::NumberInput => Some(Self::Slider),
             _ => None,

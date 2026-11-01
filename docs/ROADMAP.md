@@ -25,7 +25,7 @@ native application builds, UI behavior, installers, or release support on those 
 | Feature | Present implementation / evidence | Remaining acceptance |
 | --- | --- | --- |
 | 001 Secure Plugin Runtime | Sandbox, closed ABI/protocol, retained registry, signatures/trust, simulators and deterministic tests. | Current platform, security/accessibility and release certification; broader capability routing assessed separately. |
-| 002 Native Component Platform | Catalog, schemas/SDK, mappings and broad Runtime renderer implementation. | TimePicker deliberately fails catalog certification; full native inspector/input/preview parity remains. |
+| 002 Native Component Platform | Catalog, schemas/SDK, mappings and broad Runtime renderer implementation. | TimePicker has native rendering, inspector editing and keyboard tests; full platform acceptance remains. |
 | 003 Toolchain | Phased compile/package pipeline, deterministic archives, watcher, structured diagnostics and tests. | Shipped watcher currently launches a Runtime child; do not describe it as an embedded IR host. |
 | 004 Studio Script | Rust rsvelte frontend, typed IR, evaluator/hot-swap, ASC backend, module graph and differential tests. | FR-004/FR-011 integration gap: `studio dev` still builds/reloads Wasm rather than using direct IR interpretation. |
 | 005 Reload | Runtime/CLI local channel, swap planner, request/revision handling and Unix/Windows adapter tests. | One unchecked full-gate task; native same-window behavior and complete acceptance evidence remain. |
@@ -58,12 +58,12 @@ Existing responsive/token/layout/prototype/session models and host services shou
 A tested adapter or controller must not be presented as a completed native screen. The domain
 MCP client exists, but the shipped MCP surface is a no-op; the source audit names the exact gaps.
 
-## Current CI blocker
+## CI verification
 
-The native Windows/macOS reload and CLI jobs passed for `e21ed734`. Linux validation passed
-formatting/Clippy, then the runner exhausted disk during Rust tests. Full remote verification is
-not green; C021 fixes the CI profile/artifact/disk budget and requires a fresh successful run.
-The local 1,290-test checkpoint remains separate evidence.
+C021 is closed by [run 41285190138](https://github.com/DLX-Studios/studio-platform/actions/runs/41285190138)
+on `069eff9b`: Linux validation and macOS/Windows reload transport jobs passed. Consistent
+verification profiles and reuse of the debug startup probe repaired the previous disk failure.
+The historical failed run is retained in the completion audit. Native release acceptance remains separate.
 
 ## External release gates
 

@@ -121,7 +121,7 @@ AssemblyScript builder.
 | `Tree` | gpui-kit Tree | Desktop-only extension | Future |
 | `Calendar` | gpui-kit Calendar | Flutter Calendar | Future |
 | `DatePicker` | gpui-kit DatePicker | Flutter DatePicker, shadcn Date Picker | Future |
-| `TimePicker` | GPUI composition | Flutter TimePicker | Future |
+| `TimePicker` | GPUI segmented TimeField | Flutter TimePicker | Native implementation and interaction tests |
 | `Stepper` | gpui-kit Stepper | Flutter Stepper | Future |
 
 ### Deliberately deferred

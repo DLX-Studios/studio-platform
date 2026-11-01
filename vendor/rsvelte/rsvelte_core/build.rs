@@ -6,7 +6,9 @@ fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
     let svelte_pkg = std::path::Path::new(&manifest_dir)
         .join("../../submodules/svelte/packages/svelte/package.json");
-    println!("cargo::rerun-if-changed={}", svelte_pkg.display());
+    if svelte_pkg.exists() {
+        println!("cargo::rerun-if-changed={}", svelte_pkg.display());
+    }
     if svelte_pkg.exists()
         && let Ok(contents) = std::fs::read_to_string(&svelte_pkg)
         && let Some(version) = package_version(&contents)

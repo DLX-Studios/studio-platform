@@ -23,7 +23,8 @@ pub use error::{DeveloperDiagnostic, ErrorCode, ProtocolError};
 pub use lifecycle::{LifecycleEvent, LifecycleState};
 pub use navigation::{NavigationCommand, NavigationEvent};
 pub use properties::{
-    ChildCardinality, child_cardinality, is_known_property, validate_node_contract,
+    ChildCardinality, child_cardinality, is_known_property, is_valid_time_value,
+    validate_node_contract,
 };
 pub use ui::{MountTree, NodeKind, PatchBatch, PatchOp, UiEvent, UiNode};
 

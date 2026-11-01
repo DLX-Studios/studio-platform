@@ -13,8 +13,8 @@ use studio_net::RestBroker;
 use studio_oauth::OAuthManager;
 use studio_package::ProviderAdmissionPlan;
 use studio_protocol::{
-    ActionRequest, ActionResult, GuestMessage, HostEvent, NodeKind, ProtocolError, ProtocolLimits,
-    UiNode, decode_guest_message,
+    ActionRequest, ActionResult, GuestMessage, HostEvent, ProtocolError, ProtocolLimits, UiNode,
+    decode_guest_message,
 };
 use studio_ui::{PatchError, PatchMetrics, UiRegistry};
 use studio_wasm::{PluginInstance, RuntimeError};
@@ -26,15 +26,7 @@ use crate::host::is_oauth_provider;
 /// Persistent host-owned indicator required for explicitly untrusted development launches.
 pub const DEVELOPMENT_WARNING: &str = "Development mode: unsigned plugin bundle";
 
-/// Immutable retained-node copy used by the GPUI render pass.
-#[derive(Clone, Debug)]
-pub(crate) struct PluginRenderNode {
-    pub id: String,
-    pub kind: NodeKind,
-    pub control: Option<RuntimeControl>,
-    pub props: std::collections::BTreeMap<String, Value>,
-    pub children: Vec<Self>,
-}
+use studio_components::native_view::{NativeRenderNode as PluginRenderNode, NativeSurface};
 
 /// Fully validated, instantiated, and atomically mounted plugin surface.
 #[derive(Debug)]
@@ -640,5 +632,24 @@ mod tests {
         let result =
             run_provider_action(sign_in_request("github.oauth", Some("discord")), None, None);
         assert_eq!(failure_code(result), "oauth.provider.unknown");
+    }
+}
+
+impl NativeSurface for PluginSurface {
+    type Error = SurfaceError;
+    fn render_tree(&self) -> Option<PluginRenderNode> {
+        self.render_tree()
+    }
+    fn process_input(&mut self, node_id: &str, action: InputAction) -> Result<(), Self::Error> {
+        self.process_input(node_id, action).map(|_| ())
+    }
+    fn poll_action_results(&mut self) -> Result<bool, Self::Error> {
+        self.poll_action_results()
+    }
+    fn asset(&self, path: &str) -> Option<&[u8]> {
+        self.asset(path)
+    }
+    fn warning(&self) -> Option<&str> {
+        self.warning()
     }
 }

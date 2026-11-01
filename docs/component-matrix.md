@@ -75,7 +75,7 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 | DescriptionList | Data display | yes | yes | yes | yes |
 | Calendar | Data display | yes | yes | yes | yes |
 | DatePicker | Data display | yes | yes | yes | yes |
-| TimePicker | Data display | yes | yes | no | no |
+| TimePicker | Form/input | yes | yes | yes | yes |
 | Separator | Container | yes | yes | yes | yes |
 | Accordion | Deferred display | yes | yes | yes | yes |
 | Collapsible | Deferred display | yes | yes | yes | yes |
@@ -110,8 +110,12 @@ renderer/state contract. A mapped kind is not automatically considered rendered.
 
 ## Notes
 
-- `TimePicker` is protocol-declared and native-mapped but has no native time widget mapping yet;
-  production rendering hides it and development rendering emits an explicit fallback diagnostic.
+- `TimePicker` uses the native segmented time editor with per-node state, keyboard input,
+  disabled editing and canonical `changed` events. Its value is 24-hour `HH:MM` or `HH:MM:SS`;
+  omitted values start at `00:00`. Labels, enabled state and `on_changed` are supported; it is a
+  leaf control. Dates, time zones and locale-specific strings are outside this contract.
+  Native interaction tests live in `studio-components/tests/native_rendering.rs` and
+  `studio-designer/tests/native_preview.rs`. These do not replace OS accessibility acceptance.
 - The remaining formerly deferred kinds use a schema-driven native GPUI surface. Their labels,
   content, collection properties, enabled/interactive flags, variants, and children are rendered;
   they are no longer development fallbacks.

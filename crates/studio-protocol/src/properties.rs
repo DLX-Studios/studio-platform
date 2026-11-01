@@ -255,13 +255,19 @@ fn validate_specific(
         | NodeKind::Tree
         | NodeKind::DescriptionList
         | NodeKind::Calendar
-        | NodeKind::DatePicker
-        | NodeKind::TimePicker => match property {
+        | NodeKind::DatePicker => match property {
             "label" | "title" | "value" | "route" => nonempty_string(value, limits)?,
             "selected" | "open" | "enabled" => value.is_boolean(),
             "items" | "options" | "columns" => string_options(value, limits)?,
             "page" | "pages" | "step" => value.as_u64().is_some(),
             "on_changed" | "on_select" | "on_navigate" => event_name(value),
+            _ => false,
+        },
+        NodeKind::TimePicker => match property {
+            "value" => value.as_str().is_some_and(is_valid_time_value),
+            "label" => nonempty_string(value, limits)?,
+            "enabled" => value.is_boolean(),
+            "on_changed" => event_name(value),
             _ => false,
         },
         NodeKind::Separator
@@ -420,6 +426,7 @@ pub fn is_known_property(kind: NodeKind, property: &str, limits: ProtocolLimits)
         "intrinsic",
         "full",
         "assets/x",
+        "00:00",
     ];
     for word in WORDS {
         if validate_specific(kind, property, &Value::String((*word).to_owned()), limits)
@@ -488,7 +495,6 @@ fn validate_child_count(node: &UiNode) -> Result<(), ProtocolError> {
         | NodeKind::DescriptionList
         | NodeKind::Calendar
         | NodeKind::DatePicker
-        | NodeKind::TimePicker
         | NodeKind::Accordion
         | NodeKind::Collapsible
         | NodeKind::HoverCard
@@ -510,7 +516,8 @@ fn validate_child_count(node: &UiNode) -> Result<(), ProtocolError> {
         | NodeKind::Item
         | NodeKind::MessageScroller
         | NodeKind::ToggleGroup => true,
-        NodeKind::Separator
+        NodeKind::TimePicker
+        | NodeKind::Separator
         | NodeKind::Kbd
         | NodeKind::ColorPicker
         | NodeKind::Rating
@@ -687,4 +694,23 @@ fn valid_transition(value: &Value) -> bool {
 
 fn exact_keys(object: &Map<String, Value>, expected: &[&str]) -> bool {
     object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
+}
+
+/// Whether a time value is canonical 24-hour `HH:MM` or `HH:MM:SS`.
+/// Seconds are optional; dates, zones, leap seconds and locale-dependent text are excluded.
+#[must_use]
+pub fn is_valid_time_value(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !matches!(bytes.len(), 5 | 8) || bytes[2] != b':' || (bytes.len() == 8 && bytes[5] != b':') {
+        return false;
+    }
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(i, b)| i == 2 || i == 5 || b.is_ascii_digit())
+    {
+        return false;
+    }
+    let pair = |i: usize| (bytes[i] - b'0') * 10 + bytes[i + 1] - b'0';
+    pair(0) < 24 && pair(3) < 60 && (bytes.len() == 5 || pair(6) < 60)
 }

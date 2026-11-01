@@ -185,6 +185,11 @@ fn event_payload(
             | NodeKind::Toggle,
             InputAction::SelectionChanged { value },
         ) => Ok(("changed", json!({"value": value}))),
+        (NodeKind::TimePicker, InputAction::SelectionChanged { value })
+            if studio_protocol::is_valid_time_value(&value) =>
+        {
+            Ok(("changed", json!({"value": value})))
+        }
         _ => Err(DispatchError::ActionInvalid),
     }
 }

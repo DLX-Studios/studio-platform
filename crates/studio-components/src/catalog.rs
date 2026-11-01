@@ -37,7 +37,7 @@ impl TargetSize {
         width: 0.0,
         height: 0.0,
     };
-    const INTERACTIVE: Self = Self {
+    pub(crate) const INTERACTIVE: Self = Self {
         width: 44.0,
         height: 44.0,
     };
@@ -361,13 +361,13 @@ const fn batch_b_rendered(kind: NodeKind) -> bool {
             | NodeKind::InputGroup
             | NodeKind::OtpInput
             | NodeKind::SecretInput
+            | NodeKind::TimePicker
     )
 }
 
 /// Batch C: overlay kinds with host-owned gating/stacking/dismissal/reduced-motion, navigation
 /// shells, data-display kinds with empty/populated state handling, and schema-driven native
-/// surfaces for the remaining catalog kinds. `TimePicker` stays out: no native time widget is
-/// mapped yet.
+/// surfaces for the remaining catalog kinds, including the segmented native time editor.
 const fn batch_c_rendered(kind: NodeKind) -> bool {
     matches!(
         kind,
@@ -403,6 +403,7 @@ const fn batch_c_rendered(kind: NodeKind) -> bool {
             | NodeKind::DescriptionList
             | NodeKind::Calendar
             | NodeKind::DatePicker
+            | NodeKind::TimePicker
             | NodeKind::Accordion
             | NodeKind::Collapsible
             | NodeKind::HoverCard
@@ -552,6 +553,7 @@ fn is_interactive(kind: NodeKind) -> bool {
             | NodeKind::Select
             | NodeKind::TextInput
             | NodeKind::SecretInput
+            | NodeKind::TimePicker
     )
 }
 
