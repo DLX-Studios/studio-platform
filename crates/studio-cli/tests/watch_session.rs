@@ -4,7 +4,6 @@
 
 mod common;
 
-#[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tempfile::TempDir;
