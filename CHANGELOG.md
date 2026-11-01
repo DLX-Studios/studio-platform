@@ -4,6 +4,8 @@
 
 - Add project-scoped Library access through authenticated Designer persistence. Keep catalogs
   and blobs separate per project, reject expired sessions, and serialize concurrent catalog updates.
+- Reject unsupported Library resize, quality and conversion requests instead of labeling
+  unchanged originals as transformed output. Document admission versus decoder capabilities.
 - Native Library import and binding UI remain in progress.
 
 ## Unreleased — Responsive native preview

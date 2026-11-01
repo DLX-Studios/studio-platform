@@ -395,6 +395,7 @@ pub enum LibraryDiagnosticCode {
     InvalidAdmission,
     UnsupportedFormat,
     UnsupportedCodec,
+    UnsupportedVariant,
     UnsafeSvg,
     AssetNotFound,
     AssetInUse,
@@ -761,10 +762,9 @@ impl LibraryAssetStore {
         self.read_blob(&metadata.original)
     }
 
-    /// Generate or retrieve a deterministic runtime variant.  V1 keeps the
-    /// original bytes byte-for-byte while recording the normalized variant
-    /// contract; decoder-specific transcoding can replace this host seam
-    /// without changing identity or catalog references.
+    /// Generate or retrieve a deterministic identity variant preserving original bytes.
+    /// Width, height, quality changes and conversion to another format are unsupported.
+    /// An omitted format or the original format is accepted; no decoding is performed.
     pub async fn generate_runtime_variant(
         &self,
         id: &LibraryAssetId,
@@ -779,6 +779,7 @@ impl LibraryAssetStore {
                     "the Library asset identity was not found",
                 )
             })?;
+            validate_variant(&spec, metadata.format)?;
             let key = spec.key();
             if let Some(existing) = metadata.variants.get(&key) {
                 return Ok(existing.clone());
@@ -805,6 +806,9 @@ impl LibraryAssetStore {
         spec: &RuntimeVariantSpec,
     ) -> Result<AssetBlob, LibraryAssetError> {
         let metadata = self.metadata(id).await?;
+        // Old catalogs may contain passthrough bytes labeled with transform requests.
+        // Never serve those records as transformed output.
+        validate_variant(spec, metadata.format)?;
         let variant = metadata.variants.get(&spec.key()).ok_or_else(|| {
             LibraryAssetError::new(
                 LibraryDiagnosticCode::AssetNotFound,
@@ -1264,4 +1268,21 @@ fn shared_catalog_lock(root: &Path) -> Arc<Mutex<()>> {
     let lock = Arc::new(Mutex::new(()));
     locks.insert(root.to_path_buf(), Arc::downgrade(&lock));
     lock
+}
+
+fn validate_variant(
+    spec: &RuntimeVariantSpec,
+    original_format: AssetFormat,
+) -> Result<(), LibraryAssetError> {
+    if spec.width.is_some()
+        || spec.height.is_some()
+        || spec.quality.is_some()
+        || spec.format.is_some_and(|format| format != original_format)
+    {
+        return Err(LibraryAssetError::new(
+            LibraryDiagnosticCode::UnsupportedVariant,
+            "Library resizing, quality changes and format conversion are not available. Use the original asset.",
+        ));
+    }
+    Ok(())
 }

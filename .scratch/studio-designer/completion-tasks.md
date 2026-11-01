@@ -8,13 +8,13 @@ change with a failing test, then use focused checks; use the shared Cargo cache 
 Progress: C001 is implemented with focused host/lifecycle evidence. C004 is specified in the
 [build contract](../../docs/development/DESIGN_BUILD_CONTRACT.md); C005/C006 remain unimplemented.
 C021 is complete: [run 41285190138](https://github.com/DLX-Studios/studio-platform/actions/runs/41285190138) passed Linux validation and macOS/Windows transport jobs. C009 is implemented at
-the shared domain boundary; native transport wiring remains C010. C002 now shares the native renderer with focused interaction/geometry evidence; native token/profile cases now pass; asset and signed-launch acceptance remains. C003 has native TimePicker/inspector implementation and passing catalog certification; OS acceptance remains C019. C007 now has project/session-scoped host Library access; native Library integration remains open. All other tasks remain open.
+the shared domain boundary; native transport wiring remains C010. C002 now shares the native renderer with focused interaction/geometry evidence; native token/profile cases now pass; asset and signed-launch acceptance remains. C003 has native TimePicker/inspector implementation and passing catalog certification; OS acceptance remains C019. C007 now has project/session-scoped host Library access and rejects unsupported transforms; the [capability matrix](../../docs/development/LIBRARY_CAPABILITIES.md) distinguishes admission from decoding. Native Library integration remains open. All other tasks remain open.
 
-Integration checkpoint after a clean shared-cache rebuild: format check, 1,302 workspace tests
+Integration checkpoint after a clean shared-cache rebuild: format check, 1,307 workspace tests
 (two explicit qualifications ignored), workspace Clippy with warnings denied, and 39 Bun tests
 including real headless Wayland startup pass. The earlier ownership/live-editing commit also
 passed [remote CI](https://github.com/DLX-Studios/studio-platform/actions/runs/41286226664).
-The new native preview changes require their own remote run.
+The latest native/profile/Library changes require their own successful remote run.
 
 ## Delivery order
 

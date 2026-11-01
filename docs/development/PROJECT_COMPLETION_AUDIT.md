@@ -115,3 +115,17 @@ profiles now omit debug symbols/incremental artifacts, checks remain serialized,
 the already-built debug probe. The preceding run's Rust checks passed with a 12 GB target directory
 and 67 GB runner disk remaining, then exposed a stale Wayland diagnostic assertion; that assertion
 was corrected before the successful run. This is CI evidence, not full cross-platform release certification.
+
+
+## Native preview and Library follow-up — 2026-11-01
+
+C002/C003 now use a shared Runtime-native renderer with seven production-view tests covering
+selection, saved edits, prototype isolation, native TimePicker, profile sizing and token layout.
+C007 has project/session-scoped Library access and serialized concurrent catalog updates.
+Unsupported resize/quality/conversion requests now fail instead of publishing unchanged bytes
+as transformed output; [the capability matrix](LIBRARY_CAPABILITIES.md) records decoder limits.
+Native Library authoring and preview-byte loading remain open, along with signed Build/Run and
+the other completion backlog items. No whole-project completion or platform release is claimed.
+
+Clean-cache integration evidence: format check, 1,307 workspace tests (two qualifications
+ignored), warnings-denied workspace Clippy, and 39 Bun tests including headless Wayland pass.

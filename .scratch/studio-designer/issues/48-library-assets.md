@@ -34,4 +34,7 @@ re-login with old handles still denied, independent provenance for identical byt
 projects, and concurrent catalog writes through independently opened adapters.
 
 Native import/browse/bind/delete and immutable preview-byte snapshots are still unconnected.
-The current variant implementation still copies originals; resizing/transcoding is not certified.
+The variant API now accepts only identity output and rejects resizing, quality changes and
+format conversion with `UnsupportedVariant`, including reads of legacy transform-labeled
+records. Five host Library tests pass. See the [capability matrix](../../../docs/development/LIBRARY_CAPABILITIES.md);
+full decoding/transcoding remains unimplemented.

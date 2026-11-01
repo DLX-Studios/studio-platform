@@ -48,11 +48,7 @@ fn identical_sources_deduplicate_and_preserve_original_and_variant() {
             );
             assert_eq!(second.provenance.len(), 2);
 
-            let spec = RuntimeVariantSpec {
-                width: Some(320),
-                height: Some(240),
-                ..RuntimeVariantSpec::default()
-            };
+            let spec = RuntimeVariantSpec::default();
             let variant_a = library
                 .generate_runtime_variant(&first.id, spec.clone())
                 .await
@@ -214,5 +210,67 @@ fn independently_opened_adapters_serialize_catalog_changes() {
             assert_eq!(listed.len(), 2);
             assert!(listed.iter().any(|asset| asset.id == a.id));
             assert!(listed.iter().any(|asset| asset.id == b.id));
+        });
+}
+
+#[test]
+fn variant_requests_never_label_original_bytes_as_transformed_output() {
+    Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let library = LibraryAssetStore::open(directory.path(), Durability::Every)
+                .await
+                .unwrap();
+            let source = library
+                .admit(file("original", b"\x89PNG\r\n\x1a\nsource"))
+                .await
+                .unwrap();
+            for spec in [
+                RuntimeVariantSpec {
+                    width: Some(320),
+                    ..RuntimeVariantSpec::default()
+                },
+                RuntimeVariantSpec {
+                    height: Some(240),
+                    ..RuntimeVariantSpec::default()
+                },
+                RuntimeVariantSpec {
+                    quality: Some(80),
+                    ..RuntimeVariantSpec::default()
+                },
+                RuntimeVariantSpec {
+                    format: Some(studio_host::AssetFormat::Jpeg),
+                    ..RuntimeVariantSpec::default()
+                },
+            ] {
+                let error = library
+                    .generate_runtime_variant(&source.id, spec.clone())
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.diagnostic().code(),
+                    LibraryDiagnosticCode::UnsupportedVariant
+                );
+                assert_eq!(
+                    library
+                        .read_runtime_variant(&source.id, &spec)
+                        .await
+                        .unwrap_err()
+                        .diagnostic()
+                        .code(),
+                    LibraryDiagnosticCode::UnsupportedVariant
+                );
+            }
+            assert!(
+                library
+                    .metadata(&source.id)
+                    .await
+                    .unwrap()
+                    .variants
+                    .is_empty()
+            );
         });
 }
