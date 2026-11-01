@@ -14,6 +14,12 @@ effects re-project that ephemeral source using the same profile and Library mapp
 prototype restores the saved source and clears native input buffers from the prototype session.
 Normal host patches preserve unrelated native state. Retired nodes release retained widget state.
 
+The selected device profile now controls both responsive variant resolution and the native
+canvas content viewport, including safe-area deductions. Larger profiles scroll in both axes
+inside the canvas pane without resizing the inspector. Profile changes do not create revisions.
+Native tests verify phone-through-4K control widths, responsive text/gap overrides, and a shared
+spacing-token edit reaching measured native layout.
+
 The toolbar sits above the canvas/inspector row, and the inspector scrolls independently. The
 native Script editor is created with the view rather than on its first render. Asynchronous
 project opens require the live window and retain the session/generation checks from the ownership

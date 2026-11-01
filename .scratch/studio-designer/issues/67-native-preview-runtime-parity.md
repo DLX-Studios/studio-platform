@@ -54,3 +54,9 @@ See [shared preview contract](../../../docs/development/DESIGNER_NATIVE_PREVIEW.
 Clean-cache integration checkpoint: 1,302 workspace tests pass (two qualifications ignored),
 Clippy passes with warnings denied, and all 39 Bun tests pass, including headless Wayland.
 The cache rebuild used debug-symbol-free, nonincremental profiles and occupied about 12 GB.
+
+Profile follow-up: a native regression reproduced a 980-pixel input in Phone preview. The
+canvas now takes the selected profile content dimensions and scrolls larger previews on both
+axes. Two additional production-view tests cover profile widths, revision preservation,
+responsive text/gap overrides and shared-token edits reaching native geometry. Asset and
+signed-launch acceptance remains open.

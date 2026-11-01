@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Responsive native preview
+
+- Size the canvas to the selected device profile, including safe-area deductions, and scroll
+  larger previews inside the editor. Use the same profile to resolve responsive properties.
+- Verify profile switching and shared spacing-token edits through measured native controls.
+
 ## Unreleased — Native Designer preview
 
 - Share the Runtime renderer with Focus/Workbench preview, including authored text, native inputs,

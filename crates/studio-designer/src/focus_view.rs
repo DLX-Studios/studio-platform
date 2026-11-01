@@ -29,16 +29,16 @@ use studio_components::{
 use studio_design::{
     Actor, ActorId, ActorKind, CanvasPoint, CanvasSize, Command, CommandBatch, CommandOutcome,
     DefaultDesignerSession, DesignToken, DesignerDiagnostic, DesignerPersistence, DesignerQuery,
-    DesignerQueryResult, DesignerSession, DeviceProfileId, DeviceProfileMatrix, EditorSnapshot,
-    HierarchyEdit, HistoryOperation, InteractionId, LayoutProperties, LibrarySnapshot, NodeId,
-    NodeParent, OperationId, ParentPlacement, ProjectionDiagnostic, ProjectionOptions,
-    ProjectionReport, PropertyValue, ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION,
-    ScriptCommitMetadata, ScriptCommitOutcome, ScriptDocumentAdapter, SelectionSnapshot,
-    SessionContextUpdate, SessionError, SnapConfig, StudioDesign, TokenId, TokenKind, TokenValue,
-    UndoGroupId, WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceCommand, WorkspaceController,
-    WorkspacePersistence, WorkspaceRecord, WorkspaceState, delete_batch, drag_batch,
-    duplicate_batch, hierarchy_edit_batch, keyboard_resize_batch, nudge_batch, reparent_batch,
-    restore_batch, select_variant,
+    DesignerQueryResult, DesignerSession, DeviceProfileId, EditorSnapshot, HierarchyEdit,
+    HistoryOperation, InteractionId, LayoutProperties, LibrarySnapshot, NodeId, NodeParent,
+    OperationId, ParentPlacement, ProjectionDiagnostic, ProjectionOptions, ProjectionReport,
+    PropertyValue, ResizeHandle, STUDIO_DESIGN_SCHEMA_VERSION, ScriptCommitMetadata,
+    ScriptCommitOutcome, ScriptDocumentAdapter, SelectionSnapshot, SessionContextUpdate,
+    SessionError, SnapConfig, StudioDesign, TokenId, TokenKind, TokenValue, UndoGroupId,
+    WORKSPACE_STATE_SCHEMA_VERSION, WorkspaceCommand, WorkspaceController, WorkspacePersistence,
+    WorkspaceRecord, WorkspaceState, delete_batch, drag_batch, duplicate_batch,
+    hierarchy_edit_batch, keyboard_resize_batch, nudge_batch, reparent_batch, restore_batch,
+    select_variant,
 };
 use studio_protocol::UiNode;
 use thiserror::Error;
@@ -188,13 +188,18 @@ impl<P: DesignerPersistence> FocusViewModel<P> {
             options.screen_id = session_state.active_screen_id;
         }
         if options.responsive_variant_id.is_none()
-            && let Some(profile_id) = session_state.device_profile.as_deref()
-            && let Ok(profile_id) = DeviceProfileId::new(profile_id.to_owned())
-            && let Some(profile) = DeviceProfileMatrix::standard().profiles.get(&profile_id)
+            && let Some(profile) = self.selected_profile()
         {
-            options.responsive_variant_id = select_variant(&self.source_snapshot().design, profile);
+            options.responsive_variant_id =
+                select_variant(&self.source_snapshot().design, &profile);
         }
         options
+    }
+
+    // Use the same session-owned profile for variant resolution and native viewport sizing.
+    fn selected_profile(&self) -> Option<studio_design::DeviceProfile> {
+        let id = DeviceProfileId::new(self.session_state().device_profile?).ok()?;
+        self.responsive_profiles()?.profiles.get(&id).cloned()
     }
 
     /// Return an immutable model snapshot for a canvas, inspector, or test.
@@ -2085,6 +2090,11 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 cx,
             );
         });
+        let viewport = self
+            .model
+            .as_ref()
+            .and_then(FocusViewModel::selected_profile)
+            .map(|profile| profile.content_viewport());
         let canvas = preview_root
             .as_ref()
             .map(|_| {
@@ -2092,13 +2102,15 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     .id("focus-canvas-surface")
                     .role(Role::Group)
                     .aria_label("Live design canvas")
-                    .min_h(px(480.0))
-                    .w_full()
-                    .p_4()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(COLOR_BORDER))
-                    .bg(rgb(COLOR_CANVAS))
+                    .when(viewport.is_none(), |element| {
+                        element.min_h(px(480.0)).w_full()
+                    })
+                    .when_some(viewport, |element, viewport| {
+                        element
+                            .w(px(viewport.width as f32))
+                            .h(px(viewport.height as f32))
+                            .flex_shrink_0()
+                    })
                     .child(self.preview.clone())
                     .into_any_element()
             })
@@ -2499,7 +2511,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 div()
                     .id("focus-canvas-panel")
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_scroll()
                     .role(Role::Pane)
                     .aria_label(format!("Canvas {route}"))
                     .flex_1()

@@ -32,6 +32,12 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 fn model() -> FocusViewModel<InMemoryDesignerPersistence> {
+    model_configured(|_| {})
+}
+
+fn model_configured(
+    configure: impl FnOnce(&mut StudioDesign),
+) -> FocusViewModel<InMemoryDesignerPersistence> {
     let mut design =
         StudioDesign::empty(ProjectId::new("native-preview").unwrap(), "Native preview");
     let screen = ScreenId::new("home").unwrap();
@@ -109,6 +115,7 @@ fn model() -> FocusViewModel<InMemoryDesignerPersistence> {
             },
         },
     );
+    configure(&mut design);
     let session = block_on(DefaultDesignerSession::create(
         InMemoryDesignerPersistence::default(),
         design,
@@ -130,8 +137,17 @@ fn open_focus(
     gpui_kit::AnyWindowHandle,
     gpui_kit::Entity<FocusView<InMemoryDesignerPersistence>>,
 ) {
+    open_focus_model(cx, model())
+}
+
+fn open_focus_model(
+    cx: &mut TestAppContext,
+    model: FocusViewModel<InMemoryDesignerPersistence>,
+) -> (
+    gpui_kit::AnyWindowHandle,
+    gpui_kit::Entity<FocusView<InMemoryDesignerPersistence>>,
+) {
     cx.update(gpui_kit::init);
-    let model = model();
     cx.update(|cx| {
         gpui_kit::open_window(
             WindowOptions {
@@ -326,4 +342,136 @@ fn focus_and_runtime_renderer_share_control_values_and_geometry(cx: &mut TestApp
         .unwrap()
     };
     assert_eq!(measure(focus, cx), measure(runtime, cx));
+}
+
+#[gpui_kit::test]
+fn profile_switch_sizes_native_viewport_without_editing_source(cx: &mut TestAppContext) {
+    let (handle, view) = open_focus(cx);
+    let revision = cx.update(|cx| view.read(cx).model.as_ref().unwrap().snapshot().revision_id);
+    for (button, width) in [
+        ("focus-profile-phone", 390.),
+        ("focus-profile-tablet", 834.),
+        ("focus-profile-desktop", 1920.),
+        ("focus-profile-4k", 3840.),
+    ] {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(button, cx);
+            // Runtime's mounted surface has 8 logical pixels of padding per side.
+            let input = window.find("authored-input").bounds();
+            assert_eq!(input.size.width, px(width - 16.), "{button}");
+            assert!(window.find("authored-input").visible());
+        })
+        .unwrap();
+    }
+    cx.update(|cx| {
+        assert_eq!(
+            view.read(cx).model.as_ref().unwrap().snapshot().revision_id,
+            revision
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn native_preview_resolves_profile_overrides_and_shared_token_edits(cx: &mut TestAppContext) {
+    use studio_design::{
+        DesignToken, InputEnvironment, Length, LengthUnit, ResponsiveNodeOverride,
+        ResponsiveVariant, ResponsiveVariantId, TokenId, TokenKind, TokenValue,
+    };
+    let model = model_configured(|design| {
+        let token_id = TokenId::new("spacing").unwrap();
+        design.tokens.insert(
+            token_id.clone(),
+            DesignToken {
+                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                id: token_id.clone(),
+                name: "Spacing".into(),
+                kind: TokenKind::Length,
+                value: TokenValue::Length(Length {
+                    value: "8".into(),
+                    unit: LengthUnit::Pixels,
+                }),
+            },
+        );
+        let root = design.nodes.get_mut(&NodeId::new("root").unwrap()).unwrap();
+        root.properties
+            .insert("gap".into(), PropertyValue::Token(token_id));
+        let compact = ResponsiveVariantId::new("compact").unwrap();
+        root.responsive_overrides.insert(
+            compact.clone(),
+            ResponsiveNodeOverride {
+                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                properties: [("gap".into(), PropertyValue::Integer(24))].into(),
+                layout: studio_design::LayoutProperties::default(),
+                style: studio_design::StyleProperties::default(),
+            },
+        );
+        design
+            .nodes
+            .get_mut(&NodeId::new("authored-text").unwrap())
+            .unwrap()
+            .responsive_overrides
+            .insert(
+                compact.clone(),
+                ResponsiveNodeOverride {
+                    schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                    properties: [("text".into(), PropertyValue::String("Compact".into()))].into(),
+                    layout: studio_design::LayoutProperties::default(),
+                    style: studio_design::StyleProperties::default(),
+                },
+            );
+        design.responsive_variants.insert(
+            compact.clone(),
+            ResponsiveVariant {
+                schema_version: STUDIO_DESIGN_SCHEMA_VERSION,
+                id: compact,
+                name: "Compact".into(),
+                minimum_width: None,
+                maximum_width: Some(500),
+                input: InputEnvironment::Any,
+            },
+        );
+    });
+    let (handle, view) = open_focus_model(cx, model);
+    let before = cx.update(|cx| view.read(cx).model.as_ref().unwrap().snapshot().revision_id);
+    for (button, label, gap) in [
+        ("focus-profile-phone", "Compact", 24.),
+        ("focus-profile-desktop", "Before", 8.),
+    ] {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(button, cx);
+            let text = window.find("authored-text");
+            assert_eq!(text.label(), Some(label));
+            assert_eq!(
+                window.find("authored-time").bounds().top() - text.bounds().bottom(),
+                px(gap)
+            );
+        })
+        .unwrap();
+    }
+    cx.update(|cx| {
+        assert_eq!(
+            view.read(cx).model.as_ref().unwrap().snapshot().revision_id,
+            before
+        );
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.click("authored-text", cx);
+        window.click("focus-token-edit", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("authored-time").bounds().top()
+                - window.find("authored-text").bounds().bottom(),
+            px(10.)
+        );
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert!(view.read(cx).model.as_ref().unwrap().snapshot().revision_id > before);
+    });
 }
