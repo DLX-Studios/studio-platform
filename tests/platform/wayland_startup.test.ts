@@ -24,6 +24,6 @@ describe("native Wayland startup", () => {
     expect(stdout).toContain(
       "native headless Wayland launch with no XWayland process: ok",
     );
-    expect(stdout).toContain("missing Wayland endpoint rejection: ok");
+    expect(stdout).toContain("missing native display endpoint rejection: ok");
   }, 30_000);
 });
