@@ -4,6 +4,7 @@
 mod catalog;
 mod controls;
 mod events;
+mod platform;
 mod secret_input;
 mod state;
 mod transition;
@@ -17,6 +18,7 @@ pub use catalog::{
 pub use controls::RuntimeControl;
 pub use events::{DispatchError, DispatchErrorCode, HostEventDispatcher, InputAction};
 pub use gpui_kit::component::animation;
+pub use platform::NativeDisplayAvailability;
 pub use secret_input::{
     HostSecretInput, SecretInputError, SecretInputErrorCode, SecretInputSnapshot,
 };

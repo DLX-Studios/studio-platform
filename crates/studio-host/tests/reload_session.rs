@@ -60,7 +60,7 @@ impl StubHost {
 
 /// Read one newline-terminated line, preserving over-read bytes across calls.
 fn read_line_buffered(
-    reader: &mut std::os::unix::net::UnixStream,
+    reader: &mut studio_protocol::reload::ReloadStream,
     buffered: &mut Vec<u8>,
 ) -> std::io::Result<String> {
     use std::io::Read;

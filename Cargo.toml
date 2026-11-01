@@ -28,11 +28,6 @@ members = [
     "crates/studio-wasm",
 ]
 exclude = [
-    "vendor/gpui-kit",
-    "vendor/gpui-component",
-    "vendor/gpui-base",
-    "vendor/gpui-kit-assets",
-    "vendor/gpui-component-macros",
     "vendor/rsvelte/rsvelte",
     "vendor/rsvelte/rsvelte_core",
     "vendor/rsvelte/rsvelte_esrap",
@@ -75,9 +70,8 @@ jsonwebtoken = { version = "=10.4.0", default-features = false, features = [
     "aws_lc_rs",
     "use_pem",
 ] }
-gpui = { version = "=0.3.7", package = "gpui-pre", default-features = false, features = ["wayland"] }
-gpui_platform = { version = "=0.3.7", package = "gpui-pre-platform", default-features = false, features = ["wayland"] }
-gpui-kit = { path = "vendor/gpui-kit", default-features = false, features = ["component", "assets"] }
+# Kit owns the matching GPUI 0.3.10 platform family (Wayland + X11 on Linux).
+gpui-kit = "=0.8.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -4,8 +4,16 @@
 
 ## Transport
 
-Unix `SOCK_STREAM` at `<project>/build/.studio-reload.sock`, newline-delimited JSON,
-UTF-8. CLI awaits outcomes up to 30 s.
+Local filesystem `SOCK_STREAM`, newline-delimited UTF-8 JSON. CLI awaits outcomes up to 30 s.
+Unix uses the standard-library domain socket at `<project>/build/.studio-reload.sock`,
+falling back to a stable hashed temporary filename for deep checkout paths. Windows uses
+AF_UNIX through the Windows-only `uds_windows` adapter and always uses that short temporary
+filename. Both peers compute it with `studio_protocol::reload::socket_path`; the CLI passes
+the result via `--reload-socket`. No TCP listener is opened. Windows requires AF_UNIX support
+(Windows 10 version 1803 or later).
+
+The 2026-11-01 platform adapter is additive: wire version `studio-reload/1`, message shapes,
+request correlation, revision semantics, and Unix endpoint selection remain compatible.
 
 ## Messages
 

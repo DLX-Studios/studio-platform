@@ -190,6 +190,7 @@ impl WatchSession {
     clippy::useless_conversion,
     reason = "libc::rlim_t width is platform-dependent; u64::from is a no-op only on 64-bit targets"
 )]
+#[cfg(unix)]
 pub fn raise_dev_stack() {
     const DEV_STACK_BYTES: u64 = 64 * 1024 * 1024;
     let mut current = std::mem::MaybeUninit::<libc::rlimit>::uninit();
@@ -221,19 +222,26 @@ pub fn raise_dev_stack() {
     }
 }
 
+/// Windows uses the stack reservation of the executable; Unix resource limits do not apply.
+#[cfg(not(unix))]
+pub fn raise_dev_stack() {}
+
 pub fn runtime_binary() -> PathBuf {
     if let Ok(binary) = std::env::var("STUDIO_APP_BINARY") {
         return PathBuf::from(binary);
     }
     if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
-        let candidate = PathBuf::from(target).join("debug/studio-app");
+        let candidate = PathBuf::from(target)
+            .join("debug")
+            .join(format!("studio-app{}", std::env::consts::EXE_SUFFIX));
         if candidate.is_file() {
             return candidate;
         }
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("target/debug/studio-app")
+        .join("target/debug")
+        .join(format!("studio-app{}", std::env::consts::EXE_SUFFIX))
 }
 
 /// Run the dev watch loop until cancelled or the runtime exits.

@@ -12,6 +12,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  reload-transport:
+    name: Reload transport (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-04
+      - name: Test native reload transport
+        run: cargo test --locked -p studio-protocol --lib reload::tests
+      - name: Check native CLI and reload test targets
+        run: cargo check --locked -p studio-cli --tests
+
   validate:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -38,6 +60,10 @@ jobs:
             libvulkan-dev \
             libwayland-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libx11-xcb-dev \
+            libclang-dev \
+            clang \
             sway
 
       - name: Install JavaScript dependencies
@@ -66,16 +92,11 @@ jobs:
       - name: Reject generated artifact drift
         run: git diff --exit-code -- protocol sdk/assemblyscript/assembly/generated
 
-      - name: Reject X11 features
-        run: ./scripts/check-no-x11-features.sh
+      - name: Check native platform features
+        run: ./scripts/check-platform-features.sh
 
-      - name: Build Wayland-only native probe
-        env:
-          DISPLAY: ""
-        run: env -u DISPLAY cargo build --locked --release -p studio-app
-
-      - name: Reject X11 dynamic linkage
-        run: ./scripts/check-no-x11.sh target/release/studio-app
+      - name: Build native probe
+        run: cargo build --locked --release -p studio-app
 
       - name: Test native headless Wayland startup
         env:

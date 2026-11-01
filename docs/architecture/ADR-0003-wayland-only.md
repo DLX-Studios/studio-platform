@@ -1,6 +1,6 @@
 # ADR-0003: Wayland-Only Linux Host
 
-- Status: Accepted
+- Status: Superseded by [ADR-0004](ADR-0004-native-platforms.md) on 2026-10-31
 - Date: 2026-08-03
 
 ## Decision

@@ -8,8 +8,8 @@ flow is designed to finish well inside ten minutes on a prepared development mac
 
 - Rust 1.93 (the repository toolchain selects it automatically)
 - Bun 1.3 or newer
-- a native Wayland session when opening the graphical host; Studio intentionally has no X11 or
-  XWayland fallback
+- a graphical session when opening the host (Wayland or X11 on Linux; native backends on
+  macOS and Windows, subject to target-platform release validation)
 
 ## Build and package
 

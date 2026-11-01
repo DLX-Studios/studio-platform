@@ -50,18 +50,18 @@ unsupported_status=$?
 set -e
 
 if [[ ${unsupported_status} -ne 2 ]]; then
-  echo "Studio exited with ${unsupported_status}, not 2, without a Wayland endpoint" >&2
+  echo "Studio exited with ${unsupported_status}, not 2, without a native display endpoint" >&2
   echo "${unsupported_output}" >&2
   exit 1
 fi
 
-if [[ "${unsupported_output}" != *"Studio requires a native Wayland session"* ]]; then
-  echo "Studio did not report its native Wayland requirement" >&2
+if [[ "${unsupported_output}" != *"Studio requires a graphical session"* ]]; then
+  echo "Studio did not report its graphical session requirement" >&2
   echo "${unsupported_output}" >&2
   exit 1
 fi
 
-echo "missing Wayland endpoint rejection: ok"
+echo "missing native display endpoint rejection: ok"
 
 runtime_dir="$(mktemp -d "${TMPDIR:-/tmp}/studio-wayland.XXXXXX")"
 chmod 700 "${runtime_dir}"

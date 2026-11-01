@@ -15,23 +15,28 @@ Studio Runtime is expected to incorporate and adapt selected open-source depende
 
 - Project: https://github.com/longbridge/gpui-kit (formerly
   https://github.com/longbridge/gpui-component)
-- Audited revision: `0c830f4d257e69fdd17200650533ab4ca9a40cc0` (upstream package `0.7.0`)
-- License: Apache License 2.0
-- Current use: the full upstream component library (Button, Input, Select, Slider, and
-  companion controls) plus the required `gpui-kit` facade, `gpui-base`, `gpui-kit-assets`,
-  and `gpui-component-macros` crates, vendored under `vendor/` with Wayland-only GPUI
-  declarations and exposed exclusively behind Studio-owned wrappers and the
-  protocol-to-component mapping in `crates/studio-app`.
-- Fork details: `docs/upstream/gpui-kit-delta.md`
+- Version: published crates.io `gpui-kit 0.8.1` and matching Kit layers.
+- License: Apache License 2.0, as declared by the published packages.
+- Current use: native controls behind Studio-owned wrappers and protocol mappings. The previous
+  five-crate vendor fork was removed; Cargo.lock records the registry source and checksums.
+- Dependency policy: `docs/upstream/gpui-kit-delta.md`.
 
 ## GPUI (`gpui-pre` distribution)
 
-- Project: https://github.com/zed-industries/zed, distributed as `gpui-pre 0.3.7`
-  (Zed snapshot `1a28cff`) via crates.io
-- License: Apache License 2.0, as declared by the published distribution; distribution
-  review must still confirm the applicable license of the linked GPUI crates and resulting
-  Studio binary before release.
-- Current use: native Wayland rendering/platform backend with default features disabled.
+- Project: https://github.com/zed-industries/zed, distributed through crates.io.
+- Version: `gpui-pre 0.3.10` and matching platform crates selected by GPUI Kit.
+- License: Apache License 2.0 as declared by the distribution; review all linked dependencies
+  and distribution obligations before release.
+- Current use: upstream native backends, including Wayland and X11 on Linux and `font-kit`
+  for macOS text rendering.
+
+## uds_windows
+
+- Project: https://github.com/haraldh/rust_uds_windows
+- Version: crates.io `uds_windows 1.2.1`, locked with registry checksum.
+- License: MIT, as declared by the published crate.
+- Current use: Windows-only local AF_UNIX reload transport. Unix targets use the Rust standard
+  library and do not build this dependency. Studio-owned code adds no unsafe implementation.
 
 ## rsvelte
 

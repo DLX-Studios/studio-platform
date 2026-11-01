@@ -1,7 +1,7 @@
 //! Secure bundle-to-policy-to-instance-to-mount startup orchestration.
 
 use parking_lot::Mutex;
-use std::{ffi::OsStr, fs, sync::Arc};
+use std::{fs, sync::Arc};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -62,32 +62,7 @@ pub(crate) fn is_oauth_provider(provider: &str) -> bool {
     OAUTH_PROVIDER_IDS.contains(&provider)
 }
 
-/// Whether a native Wayland endpoint is available for this launch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WaylandAvailability {
-    /// Native Wayland display or inherited socket is available.
-    Available,
-    /// No native Wayland endpoint is present; no fallback is allowed.
-    Unavailable,
-}
-
-impl WaylandAvailability {
-    /// Detect the two native endpoint forms recognized by GPUI's Wayland backend.
-    #[must_use]
-    pub fn from_environment() -> Self {
-        if endpoint_present(std::env::var_os("WAYLAND_DISPLAY").as_deref())
-            || endpoint_present(std::env::var_os("WAYLAND_SOCKET").as_deref())
-        {
-            Self::Available
-        } else {
-            Self::Unavailable
-        }
-    }
-}
-
-fn endpoint_present(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|value| !value.is_empty())
-}
+pub use studio_components::NativeDisplayAvailability;
 
 /// Immutable host policy and provisioned trust snapshot for one launch.
 #[derive(Clone, Debug)]
@@ -125,8 +100,8 @@ pub enum LaunchErrorCode {
     ArgumentsInvalid,
     /// Selected path violates mode or regular-file requirements.
     PathInvalid,
-    /// Native Wayland is unavailable.
-    WaylandUnavailable,
+    /// A native display session is unavailable.
+    DisplayUnavailable,
     /// Archive or closed manifest validation failed.
     BundleInvalid,
     /// Production publisher signature/trust validation failed.
@@ -154,9 +129,9 @@ pub enum LaunchError {
     /// Path is not permitted for the selected mode.
     #[error("selected bundle path is invalid")]
     PathInvalid,
-    /// No native Wayland endpoint is available.
-    #[error("Studio requires a native Wayland session; X11 and XWayland are not supported")]
-    WaylandUnavailable,
+    /// No supported native display endpoint is available.
+    #[error("Studio requires a graphical session (Wayland or X11 on Linux)")]
+    DisplayUnavailable,
     /// Archive or manifest admission failed.
     #[error("plugin bundle validation failed: {0}")]
     BundleInvalid(String),
@@ -190,7 +165,7 @@ impl LaunchError {
         match self {
             Self::ArgumentsInvalid => LaunchErrorCode::ArgumentsInvalid,
             Self::PathInvalid => LaunchErrorCode::PathInvalid,
-            Self::WaylandUnavailable => LaunchErrorCode::WaylandUnavailable,
+            Self::DisplayUnavailable => LaunchErrorCode::DisplayUnavailable,
             Self::BundleInvalid(_) => LaunchErrorCode::BundleInvalid,
             Self::IntegrityInvalid => LaunchErrorCode::IntegrityInvalid,
             Self::TrustConfigurationInvalid(_) => LaunchErrorCode::TrustConfigurationInvalid,
@@ -207,7 +182,7 @@ impl LaunchError {
 #[derive(Clone)]
 pub struct StudioHost {
     config: HostConfig,
-    wayland: WaylandAvailability,
+    display: NativeDisplayAvailability,
     https_client: Option<Arc<dyn HttpsClient>>,
     credential_backend: Arc<dyn CredentialBackend>,
     provisioned_secrets: Arc<Mutex<Vec<(ProtectedSecretKey, SecretInput)>>>,
@@ -268,7 +243,7 @@ impl std::fmt::Debug for StudioHost {
         formatter
             .debug_struct("StudioHost")
             .field("config", &self.config)
-            .field("wayland", &self.wayland)
+            .field("display", &self.display)
             .field("https_client_installed", &self.https_client.is_some())
             .field("credential_backend_installed", &true)
             .field(
@@ -298,10 +273,10 @@ impl StudioHost {
     }
     /// Create a host for one detected platform session.
     #[must_use]
-    pub fn new(config: HostConfig, wayland: WaylandAvailability) -> Self {
+    pub fn new(config: HostConfig, display: NativeDisplayAvailability) -> Self {
         Self {
             config,
-            wayland,
+            display,
             https_client: None,
             credential_backend: Arc::new(OsCredentialBackend),
             provisioned_secrets: Arc::new(Mutex::new(Vec::new())),
@@ -430,8 +405,8 @@ impl StudioHost {
             ) -> Result<(), MigrationStepError>
             + Send,
     {
-        if self.wayland == WaylandAvailability::Unavailable {
-            return Err(LaunchError::WaylandUnavailable);
+        if self.display == NativeDisplayAvailability::Unavailable {
+            return Err(LaunchError::DisplayUnavailable);
         }
         if request.mode() != LaunchMode::Production {
             return Err(LaunchError::MigrationRequired);
@@ -472,8 +447,8 @@ impl StudioHost {
         migrations_complete: bool,
         https_client: Option<Arc<dyn HttpsClient>>,
     ) -> Result<PluginSurface, LaunchError> {
-        if self.wayland == WaylandAvailability::Unavailable {
-            return Err(LaunchError::WaylandUnavailable);
+        if self.display == NativeDisplayAvailability::Unavailable {
+            return Err(LaunchError::DisplayUnavailable);
         }
         let (mode, path) = request.into_parts();
         if (mode == LaunchMode::Production && !path.is_absolute())

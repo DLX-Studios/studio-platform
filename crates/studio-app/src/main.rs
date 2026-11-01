@@ -1,8 +1,8 @@
-//! Wayland-only Runtime guest host and platform feasibility probe.
+//! Native Runtime guest host and platform feasibility probe.
 
 mod gpui_https_client;
 
-use std::{ffi::OsStr, sync::Arc};
+use std::sync::Arc;
 
 use gpui_kit::assets::Assets;
 use gpui_kit::component::{Root, Theme, ThemeMode};
@@ -11,15 +11,11 @@ use gpui_kit::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions
 use studio_app::{
     cli::LaunchRequest,
     foundation::FoundationGallery,
-    host::{HostConfig, RedirectBrokerConfig, StudioHost, WaylandAvailability},
+    host::{HostConfig, NativeDisplayAvailability, RedirectBrokerConfig, StudioHost},
     plugin_surface::PluginSurface,
 };
 use studio_package::TrustStore;
 use studio_security::{ProtectedSecretKey, SecretInput};
-
-fn has_wayland_endpoint(display: Option<&OsStr>, socket: Option<&OsStr>) -> bool {
-    display.is_some_and(|value| !value.is_empty()) || socket.is_some_and(|value| !value.is_empty())
-}
 
 /// Read the hosted redirect broker configuration from the environment.
 ///
@@ -122,21 +118,17 @@ fn run(
                 cx.new(|cx| Root::new(shell, window, cx))
             },
         )
-        .expect("Studio could not create its Wayland window");
+        .expect("Studio could not create its native window");
         cx.activate(true);
     });
 }
 
 fn main() {
-    let wayland = if has_wayland_endpoint(
-        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
-        std::env::var_os("WAYLAND_SOCKET").as_deref(),
-    ) {
-        WaylandAvailability::Available
-    } else {
-        eprintln!("Studio requires a native Wayland session; X11 and XWayland are not supported.");
+    let display = NativeDisplayAvailability::from_environment();
+    if display == NativeDisplayAvailability::Unavailable {
+        eprintln!("Studio requires a graphical session (Wayland or X11 on Linux).");
         std::process::exit(2);
-    };
+    }
 
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if arguments.len() == 1 {
@@ -166,7 +158,7 @@ fn main() {
         };
         let socket = request.reload_socket().map(std::path::Path::to_path_buf);
         let https_client = Arc::new(gpui_https_client::GpuiHttpsClient::default());
-        let mut host = StudioHost::new(HostConfig::new(trust_store), wayland)
+        let mut host = StudioHost::new(HostConfig::new(trust_store), display)
             .with_https_client(https_client.clone());
         // A hosted redirect broker is optional. Without one the host signs in over a loopback
         // redirect exactly as it did before, and with half a configuration it refuses to start
@@ -261,22 +253,4 @@ fn start_reload_server(
         })
         .expect("reload server thread spawns");
     inbox
-}
-
-#[cfg(test)]
-mod tests {
-    use super::has_wayland_endpoint;
-    use std::ffi::OsStr;
-
-    #[test]
-    fn accepts_either_wayland_endpoint_variable() {
-        assert!(has_wayland_endpoint(Some(OsStr::new("wayland-0")), None));
-        assert!(has_wayland_endpoint(None, Some(OsStr::new("4"))));
-    }
-
-    #[test]
-    fn rejects_missing_or_empty_wayland_endpoint_variables() {
-        assert!(!has_wayland_endpoint(None, None));
-        assert!(!has_wayland_endpoint(Some(OsStr::new("")), None));
-    }
 }

@@ -27,7 +27,7 @@ studio-app
                        -> studio-navigation
                        -> studio-security
                        -> studio-ui -> studio-protocol
-                       -> vendor/gpui-kit -> GPUI (pinned Wayland build)
+                       -> gpui-kit 0.8.1 -> GPUI 0.3.10 (native platform backends)
   -> studio-navigation
   -> studio-package
   -> studio-protocol
@@ -35,7 +35,7 @@ studio-app
   -> studio-ui
   -> studio-wasm -> studio-security
                  -> Wasmtime (no WASI)
-  -> GPUI + gpui_platform (same pinned revision, Wayland feature only)
+  -> GPUI + platform (matching 0.3.10 family selected by Kit)
 
 studio-cli -> studio-package
 studio-script -> thiserror (compiler boundary; no runtime integration yet)
@@ -88,7 +88,7 @@ Security-sensitive public surfaces that require additional review are:
 | protocol fixtures and generator | `protocol/fixtures/**` | generator rejects stale files |
 | `routes/*.studio` | `assembly/routes.generated.ts` | `studio-cli`; never hand-edit |
 | AssemblyScript SDK sources | `sdk/assemblyscript/build/**` | Bun/ASC build output, not API source |
-| vendored Longbridge source plus patch workflow | `vendor/gpui-kit*`, `vendor/gpui-component*` | upstream sync scripts and delta doc |
+| published Longbridge packages | `gpui-kit = "=0.8.1"`, Cargo.lock | upstream release and platform feature checks |
 
 `protocol/` is the canonical contract tree. Generated files never initiate a move.
 
@@ -114,15 +114,15 @@ Security-sensitive public surfaces that require additional review are:
 | retained state | `studio-ui`, `studio-components::state`, upstream entities | registry owns node identity; component state registry owns GPUI entities; do not merge their responsibilities |
 | routing | `studio-navigation`, `studio-app::router` | generic plugin routing stays in navigation; checkout/host-sensitive routes remain host-owned |
 | events | protocol `UiEvent`, component dispatcher, SDK registry | one versioned envelope; host router owns registration and cleanup |
-| animation/theme | vendored library and Studio policies | reuse upstream primitives; Studio owns semantic tokens and reduced-motion policy |
+| animation/theme | published Kit library and Studio policies | reuse upstream primitives; Studio owns semantic tokens and reduced-motion policy |
 | sandbox/security | `studio-wasm`, `studio-security`, Oxide concepts | retain Wasmtime isolation; selectively implement reviewed concepts rather than adding Oxide |
 
 ## Upstream and license status
 
 | Source | Status | License/provenance action |
 |---|---|---|
-| Longbridge `gpui-kit` | vendored audited revision `0c830f4` (0.7.0); primary implementation base | Apache-2.0 files and delta recorded in notices |
-| Zed GPUI via `gpui-pre 0.3.7` | crates.io distribution with Wayland-only features (no git pin) | distribution license review remains required |
+| Longbridge `gpui-kit` | published 0.8.1; primary implementation base | registry checksums and notices; release review required |
+| Zed GPUI via `gpui-pre 0.3.10` | matching registry platform family; Linux Wayland and X11 | distribution license review remains required |
 | adabraka-ui | reference only; no local source imported | verify repository/revision/license before any code copy |
 | gpui-nav | pattern source only; no local source imported | verify repository/revision/license before any code copy |
 | gpui-router | pattern source only; no local source imported | verify repository/revision/license before any code copy |
@@ -140,6 +140,6 @@ Security-sensitive public surfaces that require additional review are:
 6. Publish fluent AssemblyScript builders and typed event/reactivity bindings.
 7. Add gallery slices before POS adoption, then perform full cleanup only after compatibility gates.
 
-After every slice, run the validation sequence in `AGENTS.md` plus Bun generation, no-X11 feature
-and binary checks, and the release build. A slice is not complete while old APIs lack shims or
+After every slice, run the scoped validation sequence in `AGENTS.md` plus applicable Bun
+generation and native platform feature checks. Release builds run only at release checkpoints. A slice is not complete while old APIs lack shims or
 generated output differs after regeneration.

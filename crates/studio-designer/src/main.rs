@@ -1,4 +1,4 @@
-//! Wayland-only Studio Designer application.
+//! Native Studio Designer application.
 
 use gpui_kit::assets::Assets;
 use gpui_kit::component::{Root, Theme, ThemeMode, TitleBar};
@@ -23,16 +23,14 @@ fn run(application: Application, bootstrap: NativeProductBootstrap) {
                 cx.new(|cx| Root::new(shell, window, cx))
             },
         )
-        .expect("Studio Designer could not create its Wayland window");
+        .expect("Studio Designer could not create its native window");
         cx.activate(true);
     });
 }
 
 fn main() {
-    if !studio_designer::bootstrap::wayland_available() {
-        eprintln!(
-            "Studio Designer requires a native Wayland session; X11 and XWayland are not supported."
-        );
+    if !studio_designer::bootstrap::native_display_available() {
+        eprintln!("Studio Designer requires a graphical session (Wayland or X11 on Linux).");
         std::process::exit(2);
     }
 

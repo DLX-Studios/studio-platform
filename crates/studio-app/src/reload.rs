@@ -185,13 +185,13 @@ fn launch_outcome(error: &LaunchError) -> (ReloadStage, &'static str, String) {
     use crate::host::LaunchErrorCode;
     let stage = match error.code() {
         LaunchErrorCode::GuestInvalid | LaunchErrorCode::UiInvalid => ReloadStage::Instantiate,
-        LaunchErrorCode::WaylandUnavailable => ReloadStage::Commit,
+        LaunchErrorCode::DisplayUnavailable => ReloadStage::Commit,
         _ => ReloadStage::Validate,
     };
     let code = match error.code() {
         LaunchErrorCode::ArgumentsInvalid => "RELOAD_ARGUMENTS_INVALID",
         LaunchErrorCode::PathInvalid => "RELOAD_PATH_INVALID",
-        LaunchErrorCode::WaylandUnavailable => "RELOAD_WAYLAND_UNAVAILABLE",
+        LaunchErrorCode::DisplayUnavailable => "RELOAD_DISPLAY_UNAVAILABLE",
         LaunchErrorCode::BundleInvalid => "RELOAD_BUNDLE_INVALID",
         LaunchErrorCode::IntegrityInvalid => "RELOAD_INTEGRITY_INVALID",
         LaunchErrorCode::TrustConfigurationInvalid => "RELOAD_TRUST_INVALID",
@@ -235,7 +235,11 @@ impl ReloadServer {
 
     /// Serve connections until cancelled. Each connection handles one request
     /// line and then closes; swaps never run concurrently.
-    pub fn serve(&mut self, listener: std::os::unix::net::UnixListener, cancel: &AtomicBool) {
+    pub fn serve(
+        &mut self,
+        listener: studio_protocol::reload::ReloadListener,
+        cancel: &AtomicBool,
+    ) {
         listener.set_nonblocking(true).unwrap_or_default();
         while !cancel.load(Ordering::SeqCst) {
             match listener.accept() {
@@ -248,7 +252,7 @@ impl ReloadServer {
         }
     }
 
-    fn serve_one(&mut self, stream: std::os::unix::net::UnixStream) {
+    fn serve_one(&mut self, stream: studio_protocol::reload::ReloadStream) {
         let line = match studio_host::reload::read_line(&stream, std::time::Duration::from_secs(30))
         {
             Ok(line) => line,
@@ -506,7 +510,7 @@ mod tests {
             ReloadStage::Instantiate
         );
         assert_eq!(
-            launch_outcome(&LaunchError::WaylandUnavailable).0,
+            launch_outcome(&LaunchError::DisplayUnavailable).0,
             ReloadStage::Commit
         );
         let (_, code, _) = launch_outcome(&LaunchError::UiInvalid("x".to_owned()));

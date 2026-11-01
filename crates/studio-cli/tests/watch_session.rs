@@ -4,6 +4,7 @@
 
 mod common;
 
+#[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -108,6 +109,7 @@ fn change_during_build_yields_a_single_trailing_rebuild() {
 }
 
 #[test]
+#[cfg(unix)]
 fn cancellation_stops_cleanly_and_leaves_the_bundle_intact() {
     let root = TempDir::new().unwrap();
     let project = common::seed_project(root.path(), "watched");

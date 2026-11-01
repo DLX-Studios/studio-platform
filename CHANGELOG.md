@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Windows reload transport
+
+- Added shared local reload stream/listener types: Unix standard-library sockets and a
+  Windows-only `uds_windows` AF_UNIX adapter. Reload wire messages remain at version 1.
+- Reused short hashed temporary endpoints on Windows to avoid checkout path limits.
+- Updated Runtime, CLI, and reload tests to use the platform adapter; gated Unix stack-limit
+  and shell-fixture code, and used the native executable suffix for runtime discovery.
+- Added native Windows/macOS reload transport CI tests.
+
+## Unreleased — native platform dependency alignment
+
+- Replaced the five-crate GPUI Kit 0.7.0 Studio fork with published GPUI Kit 0.8.1
+  and its matching GPUI 0.3.10 family.
+- Enabled upstream native platform backends, including X11 alongside Wayland on Linux.
+- Shared the Runtime/Designer display preflight; Linux accepts either backend, while other
+  native platforms do not require Wayland environment variables.
+- Replaced no-X11 CI gates with platform feature checks and updated constitution 2.0.0
+  and ADR-0004. Target-platform release validation remains required.
+
 ## Unreleased — gpui-kit 0.7.0 migration
 
 - Moved the vendored component library from the `gpui-component` crates to the `gpui-kit`

@@ -1,9 +1,22 @@
 //! CLI-to-runtime reload protocol: versioned messages over a local channel.
 //!
-//! The transport is a Unix domain socket carrying newline-delimited JSON (see
+//! The transport is a local domain socket carrying newline-delimited JSON (see
 //! `specs/005-reload-protocol/contracts/reload-protocol.md`). This module owns
 //! the wire types both sides share; the swap planner lives in
 //! `studio-host::reload`.
+
+/// Native local listener used by the Runtime and reload tests.
+#[cfg(unix)]
+pub use std::os::unix::net::UnixListener as ReloadListener;
+/// Native local stream used by both reload peers.
+#[cfg(unix)]
+pub use std::os::unix::net::UnixStream as ReloadStream;
+/// Windows AF_UNIX listener; requires Windows 10 version 1803 or later.
+#[cfg(windows)]
+pub use uds_windows::UnixListener as ReloadListener;
+/// Windows AF_UNIX stream with the same framing and deadlines as Unix peers.
+#[cfg(windows)]
+pub use uds_windows::UnixStream as ReloadStream;
 
 /// Protocol identifier; mismatches are rejected, never negotiated.
 pub const RELOAD_PROTOCOL: &str = "studio-reload/1";
@@ -194,13 +207,15 @@ const MAX_SOCKET_PATH_BYTES: usize = 100;
 
 /// Resolve the reload socket path for a project build directory.
 ///
-/// Deep checkouts overflow the Unix `sun_path` limit: those fall back to a
+/// Deep checkouts overflow the native `sun_path` limit: those fall back to a
 /// stable hashed name in the system temp dir, so both dev peers (CLI watcher
 /// and runtime host) compute the same endpoint from the same build dir.
+/// Windows always uses that short name, avoiding extended-length checkout paths
+/// in Winsock's UTF-8 socket address.
 #[must_use]
 pub fn socket_path(build_dir: &std::path::Path) -> std::path::PathBuf {
     let direct = build_dir.join(RELOAD_SOCKET_NAME);
-    if direct.as_os_str().as_encoded_bytes().len() <= MAX_SOCKET_PATH_BYTES {
+    if cfg!(unix) && direct.as_os_str().as_encoded_bytes().len() <= MAX_SOCKET_PATH_BYTES {
         return direct;
     }
     // Deterministic FNV-1a over the build dir: stable across the CLI and
@@ -218,9 +233,9 @@ pub fn socket_path(build_dir: &std::path::Path) -> std::path::PathBuf {
 /// # Errors
 ///
 /// Returns the bind I/O error when the socket cannot be created.
-pub fn bind_endpoint(path: &std::path::Path) -> std::io::Result<std::os::unix::net::UnixListener> {
+pub fn bind_endpoint(path: &std::path::Path) -> std::io::Result<ReloadListener> {
     let _ = std::fs::remove_file(path);
-    std::os::unix::net::UnixListener::bind(path)
+    ReloadListener::bind(path)
 }
 
 /// Connect with refused-as-stale semantics: connection-refused means no live
@@ -229,8 +244,8 @@ pub fn bind_endpoint(path: &std::path::Path) -> std::io::Result<std::os::unix::n
 /// # Errors
 ///
 /// Returns the connect I/O error (notably connection-refused for stale paths).
-pub fn connect_endpoint(path: &std::path::Path) -> std::io::Result<std::os::unix::net::UnixStream> {
-    std::os::unix::net::UnixStream::connect(path)
+pub fn connect_endpoint(path: &std::path::Path) -> std::io::Result<ReloadStream> {
+    ReloadStream::connect(path)
 }
 
 /// Write one JSON line.
@@ -238,7 +253,7 @@ pub fn connect_endpoint(path: &std::path::Path) -> std::io::Result<std::os::unix
 /// # Errors
 ///
 /// Returns the write I/O error when the peer is gone.
-pub fn send_line(stream: &mut std::os::unix::net::UnixStream, line: &str) -> std::io::Result<()> {
+pub fn send_line(stream: &mut ReloadStream, line: &str) -> std::io::Result<()> {
     use std::io::Write;
     stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -250,10 +265,7 @@ pub fn send_line(stream: &mut std::os::unix::net::UnixStream, line: &str) -> std
 /// # Errors
 ///
 /// Returns the read I/O error on timeout or a broken peer.
-pub fn read_line(
-    stream: &std::os::unix::net::UnixStream,
-    timeout: std::time::Duration,
-) -> std::io::Result<String> {
+pub fn read_line(stream: &ReloadStream, timeout: std::time::Duration) -> std::io::Result<String> {
     use std::io::{BufRead, BufReader};
     stream.set_read_timeout(Some(timeout))?;
     let mut line = String::new();
@@ -264,6 +276,66 @@ pub fn read_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{io, time::Duration};
+
+    #[test]
+    fn local_transport_round_trips_with_a_cloned_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = socket_path(directory.path());
+        let listener = bind_endpoint(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let request = read_line(&stream, Duration::from_secs(5)).unwrap();
+            assert_eq!(request, encode_restart("native-1"));
+            let mut writer = stream.try_clone().unwrap();
+            send_line(
+                &mut writer,
+                r#"{"protocol":"studio-reload/1","type":"restarted","request_id":"native-1","revision":2}"#,
+            )
+            .unwrap();
+        });
+        let mut stream = connect_endpoint(&path).unwrap();
+        send_line(&mut stream, &encode_restart("native-1")).unwrap();
+        assert_eq!(
+            decode_outcome(&read_line(&stream, Duration::from_secs(5)).unwrap()).unwrap(),
+            DecodedOutcome::Accepted {
+                request_id: "native-1".to_owned(),
+                revision: 2,
+            }
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn local_listener_supports_cancellation_polling() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = bind_endpoint(&socket_path(directory.path())).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn local_stream_read_deadline_is_enforced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = socket_path(directory.path());
+        let listener = bind_endpoint(&path).unwrap();
+        let stream = connect_endpoint(&path).unwrap();
+        let (_idle_peer, _) = listener.accept().unwrap();
+        let error = read_line(&stream, Duration::from_millis(30)).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+    }
+
+    #[test]
+    fn missing_local_endpoint_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(connect_endpoint(&socket_path(directory.path())).is_err());
+    }
 
     fn request(id: &str, bundle: &str) -> ReloadRequest {
         ReloadRequest {
@@ -313,12 +385,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn socket_path_stays_in_build_dir_when_short() {
         let path = socket_path(std::path::Path::new("/tmp/proj/build"));
         assert_eq!(
             path,
             std::path::Path::new("/tmp/proj/build/.studio-reload.sock")
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn socket_path_uses_a_short_temp_name_on_windows() {
+        let build = std::path::Path::new(r"\\?\C:\Studio\build");
+        let path = socket_path(build);
+        assert!(path.starts_with(std::env::temp_dir()));
+        assert_eq!(path, socket_path(build));
+        assert_ne!(path, socket_path(std::path::Path::new(r"C:\Other\build")));
     }
 
     #[test]

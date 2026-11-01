@@ -27,7 +27,7 @@ Studio ships one host for many plugins. A POS checkout is just the first example
 - **Host-owned everything.** Navigation, secrets, filesystem, networking, and rendering live in Rust. Guest Wasm (Wasmtime, no WASI) only emits a declarative UI tree and targeted patches.
 - **Retained native UI.** Flutter-like primitives (`Card`, `Text`, `Button`, `Select`, `SecretInput`, 40+ more) map to real GPUI widgets. No canvas, no HTML — `cargo fmt` and `cargo clippy -D warnings` stay green.
 - **Versioned, closed contracts.** `studio-protocol` is the single source of truth; JSON Schema and AssemblyScript bindings are generated from it. Unknown fields, capabilities, or imports are rejected.
-- **Wayland-only, deterministic.** No X11/XCB linkage (verified by `check-no-x11.sh`), 16 MiB guest memory, 15M initialization fuel, 10M event fuel / 50 ms epoch per call, atomic patch batches, and an in-memory host for checkout/receipt/print simulation.
+- **Native platforms, deterministic guests.** GPUI Kit selects matching platform backends (Wayland and X11 on Linux), 16 MiB guest memory, 15M initialization fuel, 10M event fuel / 50 ms epoch per call, atomic patch batches, and an in-memory host for checkout/receipt/print simulation.
 - **Test-first.** Every slice starts red: `cargo test --workspace` + `bun test` must stay green before a task is marked done.
 
 ---
@@ -44,7 +44,7 @@ cargo fmt --all -- --check          # 0 diff
 cargo clippy --workspace -- -D warnings # 0 warnings
 cargo test --locked --workspace     # ~120 tests, incl. native_shell_checkout / accessibility / manifest
 bun run check && bun test           # use the pinned Bun 1.3.9 (a local canary rejects bun.lock)
-./scripts/check-no-x11-features.sh && ./scripts/check-no-x11.sh
+./scripts/check-platform-features.sh
 ```
 
 The 2026-09-03 integration checkpoint passed formatting, workspace Clippy with all targets, the
@@ -68,7 +68,7 @@ Formal `STUDIO-BENCH-1` (N100, 8 GiB, 1920×1080 Weston) and human a11y/legal si
 | Guest limits | 16 MiB, 15M initialization fuel, 10M event fuel, 5k nodes, depth 64, 512 ops/batch, 16 pending actions |
 | Performance goals | Warm launch <150 ms, interaction p95 <100 ms, property patch p95 <2 ms, 60 FPS transitions |
 
-`target/release/studio-app` builds Wayland-only (`-D warnings` clean) and runs headless under `sway`/`weston` for CI.
+`target/release/studio-app` builds with the upstream native platform backends (`-D warnings` clean) and runs headless under `sway`/`weston` for CI.
 
 ---
 
@@ -89,7 +89,7 @@ Developers can write plugins by hand, generate them with an LLM, or mix both. St
 
 ```bash
 bun install --frozen-lockfile
-cargo build --locked --release -p studio-app   # Wayland-only binary
+cargo build --locked --release -p studio-app   # Native binary
 bun run ./scripts/build-example.ts pos-desktop  # asc → wasm → .studio (deterministic)
 ./target/release/studio-app --dev examples/pos-desktop/build/pos-desktop.studio
 
@@ -102,7 +102,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 bun run check
 bun test
-bun run test:all   # = cargo fmt + clippy + cargo test + bun check + bun test + no-X11 + headless wayland
+bun run test:all   # = cargo fmt + clippy + cargo test + bun check + bun test + native platform features
 ```
 
 Headless CI: `STUDIO_APP_BINARY=./target/release/studio-app ./scripts/test-headless-wayland.sh`
@@ -234,7 +234,7 @@ Studio is built for contributors — human or agent:
 
 - Small, traceable slices (≤5 files except vendored `gpui-kit` deltas)
 - `cargo fmt`, `clippy -D warnings`, `cargo test`, `bun test` must pass before PR
-- No `unsafe`, no X11, no WASI; every guest message is validated
+- No `unsafe` in Studio-owned code, no WASI; every guest message is validated
 - See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) and [.specify/memory/constitution.md](.specify/memory/constitution.md)
 
 ---

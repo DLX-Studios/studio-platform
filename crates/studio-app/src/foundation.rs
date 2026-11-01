@@ -1,4 +1,4 @@
-//! Native controls used to prove the Wayland-only GPUI foundation.
+//! Native controls used to prove the native GPUI foundation.
 
 use std::{
     collections::{BTreeMap, BTreeSet},

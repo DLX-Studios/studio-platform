@@ -160,7 +160,10 @@ fn request(id: &str, bundle: &str) -> ReloadRequest {
     }
 }
 
-fn read_assembled(stream: &mut std::os::unix::net::UnixStream, buffered: &mut Vec<u8>) -> String {
+fn read_assembled(
+    stream: &mut studio_protocol::reload::ReloadStream,
+    buffered: &mut Vec<u8>,
+) -> String {
     use std::io::Read;
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))

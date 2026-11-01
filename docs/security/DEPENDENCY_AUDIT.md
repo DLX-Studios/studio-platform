@@ -5,6 +5,13 @@ Audit date: 2026-08-04. Inputs: `Cargo.lock`, `bun.lock`, workspace manifests, t
 and `bun audit`. Detailed findings are recorded in
 `docs/security/RELEASE_REVIEW_2026-08-04.md`.
 
+## Platform amendment — 2026-10-31
+
+ADR-0004 and constitution 2.0.0 replace the original Wayland-only restriction. Studio now uses
+published GPUI Kit 0.8.1 and the matching GPUI 0.3.10 family, including Linux X11 and Wayland.
+The former vendor fork and no-X11 gates were removed. The audit below is historical evidence
+for its stated date; it does not certify the upgraded dependency graph or new platform releases.
+
 ## Security-critical direct dependencies
 
 | Dependency | Pin/control | Purpose | Review result |

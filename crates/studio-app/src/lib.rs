@@ -1,4 +1,4 @@
-//! Studio Runtime's Wayland-only guest host and retained UI surfaces.
+//! Studio Runtime's native guest host and retained UI surfaces.
 
 #![allow(missing_docs)]
 #![allow(

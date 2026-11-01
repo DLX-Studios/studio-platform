@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 gpui-kit.workspace = true
+studio-components = { path = "../studio-components" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

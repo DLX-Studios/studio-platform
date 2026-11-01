@@ -1,5 +1,10 @@
 # Studio Runtime — Architecture and Implementation Plan
 
+> Platform amendment (2026-10-31): [ADR-0004](docs/architecture/ADR-0004-native-platforms.md)
+> and constitution 2.0.0 supersede this original milestone plan's Wayland-only and no-X11
+> requirements. Studio now uses published GPUI Kit 0.8.1 / GPUI 0.3.10 and native backends.
+
+
 Status: approved for implementation
 Repository: `/home/sir/Nova_Projects/studio-platform`
 Initial milestone: Wayland-only native POS checkout using a sandboxed AssemblyScript plugin

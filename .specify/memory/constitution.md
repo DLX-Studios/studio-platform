@@ -1,20 +1,13 @@
 <!--
-Sync Impact Report
-- Version change: unratified template -> 1.0.0
-- Modified principles:
-  - PRINCIPLE_1 -> I. Host Authority and Zero Trust
-  - PRINCIPLE_2 -> II. Test-First Evidence (NON-NEGOTIABLE)
-  - PRINCIPLE_3 -> III. Versioned Contracts Before Implementations
-  - PRINCIPLE_4 -> IV. Retained Native UI and Host-Scheduled Work
-  - PRINCIPLE_5 -> V. Wayland-Only, Minimal Native Surface
-- Added principles:
-  - VI. Small, Traceable Vertical Slices
-- Added sections:
-  - Security and Resource Constraints
-  - Development Workflow and Quality Gates
-- Removed sections: none
-- Dependent templates: no edits required; Spec Kit reads this constitution at runtime
-- Follow-up TODOs: none
+Sync Impact Report — 2026-10-31
+- Version: 1.0.0 -> 2.0.0 (replaces the exclusive Wayland guarantee).
+- Authorization: project owner requested matching current GPUI/Kit versions across projects
+  and support for all platforms, including X11.
+- Principle V: Wayland-only -> native platforms with explicit host capabilities.
+- Impact: ADR-0004 supersedes ADR-0003; startup, tests, CI, dependencies, and build docs updated.
+- Historical milestone specifications retain the original Wayland requirements as history;
+  this amendment and ADR-0004 supersede that platform restriction.
+- Host authority, WASM isolation, signing, and resource limits remain required.
 -->
 # Studio Runtime Constitution
 
@@ -84,18 +77,19 @@ protocol operation permits it. An idle guest MUST not consume CPU to redraw unch
 Rationale: retained host rendering provides native behavior and bounded work proportional to
 state changes.
 
-### V. Wayland-Only, Minimal Native Surface
+### V. Native Platforms and Explicit Host Capabilities
 
-The initial host MUST run natively on Wayland and MUST NOT compile, link, or silently fall back
-to X11 or XWayland. CI MUST inspect both the Cargo feature graph and linked binary for X11/XCB
-capabilities. Startup without a native Wayland endpoint MUST fail with a controlled diagnostic.
+The host MUST use a compatible, locked GPUI/GPUI Kit dependency family. Native platform
+backends MAY include Wayland and X11/XWayland on Linux, macOS, and Windows. Linux startup
+without a supported display endpoint MUST fail with a controlled diagnostic; other platforms
+MUST NOT require Linux display variables. Platform availability does not grant guest access
+to native resources or weaken the host-guest trust boundary.
 
-Dependencies and feature flags MUST be deny-by-default. A new native subsystem, Wasmtime import,
-capability, network path, storage path, or hardware adapter requires a specification, threat-model
-update, focused tests, and evidence that the existing narrow surface cannot satisfy the need.
+New host capabilities, Wasmtime imports, network/storage paths, and hardware adapters still
+require a specification, threat-model update, focused tests, and explicit resource limits.
+Each shipped platform requires its own build and runtime evidence.
 
-Rationale: platform and dependency constraints are enforceable only when they are continuously
-tested.
+Rationale: support upstream native platforms while preserving explicit host authority.
 
 ### VI. Small, Traceable Vertical Slices
 
@@ -146,7 +140,7 @@ Significant features and architectural changes MUST use the Spec Kit workflow:
    work before the feature is declared complete.
 
 Every change MUST pass applicable formatting, linting, unit, contract, integration, security, and
-build checks. Native releases additionally MUST pass Wayland-only feature and linkage checks.
+build checks. Native releases additionally MUST pass platform feature checks and target-platform smoke tests.
 Manual smoke tests supplement automation but MUST NOT replace an automatable assertion.
 
 Reviews MUST verify constitutional compliance, specification traceability, failure handling,
@@ -175,4 +169,4 @@ for non-semantic clarification. Each feature plan and review MUST include a cons
 Exceptions MUST be temporary, narrowly scoped, documented with an owner and expiry condition,
 and MUST NOT weaken secret isolation or the host-guest trust boundary.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-08-03
+**Version**: 2.0.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-10-31

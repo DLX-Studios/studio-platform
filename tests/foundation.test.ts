@@ -36,8 +36,8 @@ describe("Phase 0 foundation", () => {
     ).text();
 
     expect(research).toContain("29cd89882465d6ebfe00af2ada6f89951581c580");
-    expect(research).toContain("0c830f4d257e69fdd17200650533ab4ca9a40cc0");
-    expect(research).toContain("0.3.7");
+    expect(research).toContain("0.8.1");
+    expect(research).toContain("0.3.10");
     expect(research).toContain("e158684b23d9cb043fed3989ca252212046dabca");
     expect(research).toContain("fecccf8c0d641efc75152fa206bbb941fa990c70");
     expect(research).toContain("b8b4228d9a1cb2bb108432241bcb5d8e6784a035");
@@ -55,7 +55,7 @@ describe("Phase 0 foundation", () => {
     );
   });
 
-  test("keeps locked CI and Wayland build documentation aligned", async () => {
+  test("keeps locked CI and native platform build documentation aligned", async () => {
     const workflow = await Bun.file(join(root, ".github/workflows/ci.yml")).text();
     const building = await Bun.file(
       join(root, "docs/development/BUILDING.md"),
@@ -66,9 +66,8 @@ describe("Phase 0 foundation", () => {
       "cargo test --locked --workspace",
       "bun run check",
       "bun test",
-      "./scripts/check-no-x11-features.sh",
+      "./scripts/check-platform-features.sh",
       "cargo build --locked --release -p studio-app",
-      "./scripts/check-no-x11.sh target/release/studio-app",
       "./scripts/test-headless-wayland.sh",
     ]) {
       expect(workflow).toContain(command);
@@ -79,6 +78,8 @@ describe("Phase 0 foundation", () => {
       "git diff --exit-code -- protocol sdk/assemblyscript/assembly/generated",
     );
     expect(building).toContain("libwayland-dev");
+    expect(building).toContain("libxkbcommon-x11-dev");
+    expect(workflow).toContain("libxkbcommon-x11-dev");
   });
 
   test("tracks the unified component platform feature artifacts", async () => {

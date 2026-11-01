@@ -26,8 +26,9 @@ tree. Plugins observe readiness and stable result codes, not raw input or provid
 Opaque references are exact-principal, purpose, session, expiry, and use-count capabilities—not
 credentials and not transferable bearer values across instances.
 
-The supported platform boundary is native Wayland only. Missing endpoints are rejected without an
-X11 fallback. Compositor disconnect performs ordered terminal cleanup and exits; restoration would
+The host uses upstream native GPUI platform backends, including Wayland and X11 on Linux
+(ADR-0004). Missing Linux display endpoints are rejected. Display disconnect performs ordered
+terminal cleanup and exits; restoration would
 risk reattaching stale native state and sensitive actions, so it is intentionally unsupported.
 
 ## Consequences

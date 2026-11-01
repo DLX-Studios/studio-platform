@@ -1,5 +1,8 @@
 # Milestone-One Release Checklist
 
+Checked items below retain their original milestone evidence; they do not certify the
+2026-10-31 dependency upgrade. Re-run target-platform release gates for a new release.
+
 ## Automated gates
 
 - [x] Ticket 59 flagship deterministic evidence report: `cargo run --locked -p studio-flagship --bin flagship-evidence`
@@ -12,8 +15,7 @@
 - [x] four 60-second fuzz smoke runs
 - [x] `./scripts/benchmark-acceptance.sh` (informative host; low-power baseline intentionally deferred)
 - [x] release build with `DISPLAY` unset
-- [x] `./scripts/check-no-x11-features.sh`
-- [x] `./scripts/check-no-x11.sh target/release/studio-app`
+- [x] `./scripts/check-platform-features.sh` (2026-10-31: GPUI Kit 0.8.1 / GPUI 0.3.10; replaces old no-X11 gates)
 - [x] headless native Wayland launch with no new XWayland process
 - [x] `bun test tests/traceability.test.ts`
 
@@ -29,7 +31,7 @@
 - [ ] Review the Cargo/Bun lockfile delta and vulnerability advisories; see
   `docs/security/RELEASE_REVIEW_2026-08-04.md` (known-vulnerability scan is clean; unmaintained
   transitive crates remain for review).
-- [ ] Confirm Oxide extraction ledger and gpui-kit SHA/delta remain accurate.
+- [ ] Confirm Oxide extraction ledger and published GPUI Kit versions/notices remain accurate.
 - [ ] Obtain legal confirmation for licenses of the final linked GPUI binary and collect notices;
   the release review identifies GPL-linked Zed crates and metadata gaps requiring confirmation.
 - [ ] Confirm no production provider terminal printer network or filesystem capability was added.

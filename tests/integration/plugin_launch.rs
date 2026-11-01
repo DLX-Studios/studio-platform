@@ -27,7 +27,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::json;
 use studio_app::{
     cli::{LaunchMode, LaunchRequest},
-    host::{HostConfig, LaunchErrorCode, StudioHost, WaylandAvailability},
+    host::{HostConfig, LaunchErrorCode, NativeDisplayAvailability, StudioHost},
     plugin_surface::DEVELOPMENT_WARNING,
 };
 use studio_components::InputAction;
@@ -731,7 +731,7 @@ fn production_requires_an_absolute_regular_file_selection() {
     let signing_key = SigningKey::from_bytes(&[7; 32]);
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     let relative = LaunchRequest::parse_from(["studio", "--bundle", "relative.studio"]).unwrap();
     assert_eq!(
@@ -757,7 +757,7 @@ fn valid_signed_bundle_mounts_before_exposing_the_surface() {
     );
     let host = StudioHost::new(
         HostConfig::new(provisioned_trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     let surface = host.prepare(production_request(&path)).unwrap();
 
@@ -776,7 +776,7 @@ fn production_rejects_empty_default_trust_before_guest_execution() {
     );
     let host = StudioHost::new(
         HostConfig::new(TrustStore::default()),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     assert_eq!(
         host.prepare(production_request(&path)).unwrap_err().code(),
@@ -794,7 +794,7 @@ fn signature_mutation_is_rejected_before_guest_execution() {
     );
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     assert_eq!(
         host.prepare(production_request(&path)).unwrap_err().code(),
@@ -813,7 +813,7 @@ fn unsigned_development_launch_requires_explicit_dev_and_keeps_warning() {
     let request = LaunchRequest::parse_from(["studio", "--dev", path.to_str().unwrap()]).unwrap();
     let host = StudioHost::new(
         HostConfig::new(TrustStore::default()),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     let surface = host.prepare(request).unwrap();
     assert_eq!(surface.mode(), LaunchMode::Development);
@@ -821,7 +821,7 @@ fn unsigned_development_launch_requires_explicit_dev_and_keeps_warning() {
 }
 
 #[test]
-fn no_wayland_session_rejects_launch_without_x11_fallback() {
+fn no_native_display_session_rejects_launch() {
     let signing_key = SigningKey::from_bytes(&[7; 32]);
     let fixtures = FixtureDirectory::new();
     let path = fixtures.write(
@@ -830,11 +830,11 @@ fn no_wayland_session_rejects_launch_without_x11_fallback() {
     );
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Unavailable,
+        NativeDisplayAvailability::Unavailable,
     );
     assert_eq!(
         host.prepare(production_request(&path)).unwrap_err().code(),
-        LaunchErrorCode::WaylandUnavailable
+        LaunchErrorCode::DisplayUnavailable
     );
 }
 
@@ -848,7 +848,7 @@ fn mounted_catalog_accepts_pointer_and_keyboard_activation() {
     );
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     let surface = host.prepare(production_request(&path)).unwrap();
     for action in [InputAction::PointerClick, InputAction::KeyboardActivate] {
@@ -936,7 +936,7 @@ fn run_provider_sign_in(
     let state = Arc::new(Mutex::new(None));
     let mut host = StudioHost::new(
         HostConfig::new(trust(signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     )
     .with_https_client(Arc::new(TestProviderHttpsClient {
         served: Arc::clone(&served),
@@ -1110,7 +1110,7 @@ fn a_declared_issuer_that_names_another_issuer_fails_the_launch_closed() {
     );
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     )
     .with_https_client(Arc::new(MismatchedIssuerHttpsClient));
     assert_eq!(
@@ -1129,7 +1129,7 @@ fn a_declared_issuer_whose_discovery_cannot_be_fetched_fails_the_launch_closed()
     );
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     )
     .with_https_client(Arc::new(UnreachableHttpsClient));
     assert_eq!(
@@ -1148,7 +1148,7 @@ fn a_declared_issuer_needs_a_client_that_can_reach_its_issuer() {
     );
     let host = StudioHost::new(
         HostConfig::new(trust(&signing_key)),
-        WaylandAvailability::Available,
+        NativeDisplayAvailability::Available,
     );
     assert_eq!(
         host.prepare(production_request(&path)).unwrap_err().code(),

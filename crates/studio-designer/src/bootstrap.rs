@@ -56,11 +56,11 @@ const DASHBOARD_BATCH_PREFIX: &str = "studio-dashboard-v1-";
 const SETTINGS_GLOBAL_BATCH: &str = "studio-settings-global-v1";
 const SETTINGS_PROJECT_BATCH_PREFIX: &str = "studio-settings-project-v1-";
 
-/// Whether a native Wayland endpoint is available for the Designer launch.
+/// Whether a supported native display session is available for the Designer launch.
 #[must_use]
-pub fn wayland_available() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
-        || std::env::var_os("WAYLAND_SOCKET").is_some_and(|value| !value.is_empty())
+pub fn native_display_available() -> bool {
+    studio_components::NativeDisplayAvailability::from_environment()
+        == studio_components::NativeDisplayAvailability::Available
 }
 
 /// Offline-first worker used until a cloud transport is provisioned.

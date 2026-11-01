@@ -2,6 +2,12 @@
 
 **Branch**: `005-reload-protocol` | **Date**: 2026-09-03 | **Spec**: [spec.md](spec.md)
 
+> Platform amendment (2026-11-01): the transport now uses shared native listener/stream
+> types and a Windows-only AF_UNIX adapter. See the updated
+> [transport contract](contracts/reload-protocol.md) and
+> [adapter evidence](../../docs/development/RELOAD_PLATFORM_ADAPTER.md). The original
+> Linux/Wayland-only target and no-new-dependencies assumptions below are superseded.
+
 ## Summary
 
 Add a local reload channel between `studio dev` and the runtime: Unix domain socket at

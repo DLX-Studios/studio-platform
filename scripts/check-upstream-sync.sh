@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-kit_head="$(git ls-remote https://github.com/longbridge/gpui-kit.git refs/heads/main | awk '{print $1}')"
-pre_latest="$(curl -s --max-time 60 https://index.crates.io/gp/ui/gpui-pre | grep -o '"vers":"[^"]*"' | tail -1 | cut -d'"' -f4)"
+python3 - "$root_dir" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+import tomllib
+import urllib.request
 
-configured_kit="$(sed -n 's/.*Revision: `\([0-9a-f]\{40\}\)`.*/\1/p' "$root_dir/vendor/gpui-kit/UPSTREAM.md" | head -1)"
-configured_pre="$(sed -n 's/^gpui = { version = "=\([0-9.]*\)", package = "gpui-pre".*/\1/p' "$root_dir/Cargo.toml" | head -1)"
-
-printf 'gpui-kit main:       %s\n' "$kit_head"
-printf 'Studio gpui-kit pin: %s\n' "$configured_kit"
-printf 'gpui-pre latest:      %s\n' "$pre_latest"
-printf 'Studio gpui-pre pin:  %s\n' "$configured_pre"
-
-if [[ "$kit_head" != "$configured_kit" || "$pre_latest" != "$configured_pre" ]]; then
-  echo "Upstream revisions have advanced; run the reviewed synchronization workflow." >&2
-  exit 2
-fi
-
-echo "Upstream pins are current."
+root = Path(sys.argv[1])
+packages = tomllib.loads((root / "Cargo.lock").read_text())["package"]
+current = True
+for name in ("gpui-kit", "gpui-pre", "gpui-pre-platform"):
+    locked = {p["version"] for p in packages if p["name"] == name}
+    request = urllib.request.Request(
+        "https://crates.io/api/v1/crates/" + name,
+        headers={"User-Agent": "studio-platform-upstream-check"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        latest = json.load(response)["crate"]["max_stable_version"]
+    print(f"{name}: locked={','.join(sorted(locked))}; latest={latest}")
+    current &= locked == {latest}
+if not current:
+    sys.exit("Published versions differ; review and update Kit and its matching GPUI family together.")
+PYTHON

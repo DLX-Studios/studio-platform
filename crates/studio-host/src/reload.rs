@@ -6,9 +6,9 @@
 //! server-side planner: session revisions and swap decisions.
 
 pub use studio_protocol::reload::{
-    DecodedOutcome, RELOAD_PROTOCOL, RELOAD_SOCKET_NAME, ReloadOutcome, ReloadRequest, ReloadStage,
-    RestartOutcome, bind_endpoint, connect_endpoint, decode_outcome, encode_request,
-    encode_restart, read_line, send_line, socket_path,
+    DecodedOutcome, RELOAD_PROTOCOL, RELOAD_SOCKET_NAME, ReloadListener, ReloadOutcome,
+    ReloadRequest, ReloadStage, ReloadStream, RestartOutcome, bind_endpoint, connect_endpoint,
+    decode_outcome, encode_request, encode_restart, read_line, send_line, socket_path,
 };
 
 use std::collections::VecDeque;
