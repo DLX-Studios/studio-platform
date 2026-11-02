@@ -5,6 +5,7 @@
 )]
 
 pub mod actions;
+pub mod dev_rpc;
 mod error;
 pub mod lifecycle;
 pub mod navigation;

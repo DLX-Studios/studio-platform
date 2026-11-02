@@ -1,6 +1,7 @@
 //! Native development host owned by the `studio` executable.
 //! One worker hashes and compiles inputs; the UI thread owns live state and commits updates.
 mod compiler;
+mod rpc;
 mod surface;
 
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use gpui_kit::component::{Root, Theme, ThemeMode};
 use gpui_kit::{px, size, App, AppContext, Bounds, WindowBounds, WindowOptions};
 use studio_components::native_view::NativeRuntimeView;
 use studio_package::TrustStore;
+use studio_protocol::dev_rpc::DevPhase;
 use studio_runtime::gpui_https_client::GpuiHttpsClient;
 use studio_runtime::{
     cli::{LaunchMode, LaunchRequest},
@@ -86,6 +88,17 @@ pub fn run(mut request: BuildRequest, _port: u16) -> i32 {
         cancelled: Arc::clone(&cancelled),
         socket: Some(socket),
     };
+    let status = rpc::StatusSnapshot::default();
+    let status_server =
+        match rpc::Server::start(&request.project_root.join("build"), status.clone()) {
+            Ok(server) => server,
+            Err(error) => {
+                report(format!(
+                    "could not start the development status endpoint: {error}"
+                ));
+                return BuildPhase::Watch.exit_code();
+            }
+        };
     let (restart_sender, restart_receiver) = mpsc::sync_channel(1);
     let socket_cancel = Arc::clone(&cancelled);
     let control_thread =
@@ -94,8 +107,16 @@ pub fn run(mut request: BuildRequest, _port: u16) -> i32 {
         "studio dev {} — native host; content-hashed IR/Wasm updates",
         request.example
     );
-    let code = window(Some(request), None, cancelled, Some(restart_receiver));
+    let code = window(
+        Some(request),
+        None,
+        cancelled,
+        Some(restart_receiver),
+        Some(status.clone()),
+    );
+    status.set_phase(DevPhase::Stopping);
     drop(guard);
+    drop(status_server);
     let _ = control_thread.join();
     code
 }
@@ -107,6 +128,7 @@ pub fn preview(bundle: &Path) -> i32 {
         Some(bundle.to_path_buf()),
         Arc::new(AtomicBool::new(false)),
         None,
+        None,
     )
 }
 
@@ -115,8 +137,15 @@ fn window(
     bundle: Option<PathBuf>,
     cancelled: Arc<AtomicBool>,
     restarts: Option<mpsc::Receiver<Restart>>,
+    dev_status: Option<rpc::StatusSnapshot>,
 ) -> i32 {
     if NativeDisplayAvailability::from_environment() == NativeDisplayAvailability::Unavailable {
+        if let Some(status) = &dev_status {
+            status.set_failure(
+                "DEV_DISPLAY_UNAVAILABLE",
+                "Studio requires a graphical session (Wayland or X11 on Linux)",
+            );
+        }
         report("Studio requires a graphical session (Wayland or X11 on Linux)");
         return 2;
     }
@@ -128,6 +157,9 @@ fn window(
     ) {
         Ok(host) => host,
         Err(error) => {
+            if let Some(status) = &dev_status {
+                status.set_failure("DEV_HOST_INIT", error.to_string());
+            }
             report(error);
             return 2;
         }
@@ -146,6 +178,7 @@ fn window(
     let worker = Arc::new(std::sync::Mutex::new(None));
     let app_worker = Arc::clone(&worker);
     let cancel_app = Arc::clone(&cancelled);
+    let status_for_ui = dev_status.clone();
     gpui_kit::platform::application()
         .with_assets(Assets)
         .run(move |cx: &mut App| {
@@ -154,8 +187,11 @@ fn window(
             Theme::change(ThemeMode::Light, None, cx);
             if let Some(request) = request {
                 let cancelled = Arc::clone(&cancel_app);
+                let status = dev_status
+                    .clone()
+                    .expect("dev sessions expose a status snapshot");
                 *app_worker.lock().expect("worker handle") = Some(std::thread::spawn(move || {
-                    watch(request, host, sender, restarts, cancelled)
+                    watch(request, host, sender, restarts, cancelled, status)
                 }));
             }
             let close_cancel = Arc::clone(&cancel_app);
@@ -174,6 +210,7 @@ fn window(
                 },
                 move |window, cx| {
                     let reduced_motion = cx.reduce_motion();
+                    let poll_status = status_for_ui.clone();
                     let view = cx.new(|cx| {
                         NativeRuntimeView::with_surface(reduced_motion, initial, window, cx)
                     });
@@ -211,7 +248,12 @@ fn window(
                                 }
                                 match view.pump_host_actions() {
                                     Ok(true) => cx.notify(),
-                                    Err(error) => report(error),
+                                    Err(error) => {
+                                        if let Some(status) = &poll_status {
+                                            status.set_diagnostic("DEV_HOST_ACTION", error.clone());
+                                        }
+                                        report(error);
+                                    }
                                     Ok(false) => {}
                                 }
                             });
@@ -241,6 +283,7 @@ fn watch(
     updates: mpsc::SyncSender<Update>,
     restarts: Option<mpsc::Receiver<Restart>>,
     cancelled: Arc<AtomicBool>,
+    status: rpc::StatusSnapshot,
 ) {
     let mut compiler = DevCompiler::new(request);
     compiler.set_cancellation(Arc::clone(&cancelled));
@@ -254,6 +297,11 @@ fn watch(
         let inputs = match compiler.inputs() {
             Ok(inputs) => inputs,
             Err(error) => {
+                if let Some(diagnostic) = error.diagnostics.last() {
+                    status.set_failure(diagnostic.code.clone(), diagnostic.message.clone());
+                } else {
+                    status.set_failure("DEV_INPUTS", "development inputs are unavailable");
+                }
                 error.report();
                 if let Some(Restart(sender)) = restart {
                     let _ = sender.send(Err("development inputs are unavailable".into()));
@@ -271,10 +319,16 @@ fn watch(
         let reset = restart.is_some();
         if reset || pending.is_some_and(|since| since.elapsed() >= Duration::from_millis(150)) {
             pending = None;
+            status.set_phase(DevPhase::Compiling);
+            let mut compile_diagnostic = None;
             let outcome = compiler
                 .compile(&inputs)
                 .map_err(|failure| {
                     failure.report();
+                    compile_diagnostic = failure
+                        .diagnostics
+                        .last()
+                        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.message.clone()));
                     String::from("development compilation failed; keeping the previous revision")
                 })
                 .and_then(|artifact| {
@@ -285,6 +339,7 @@ fn watch(
                             old_hash == &hash && old_manifest == &manifest
                         });
                     let replacement = prepare(artifact, &host, assets_only)?;
+                    status.set_phase(DevPhase::Applying);
                     let (acknowledge, receiver) = mpsc::sync_channel(1);
                     updates
                         .send(Update {
@@ -300,17 +355,25 @@ fn watch(
                             Err(mpsc::RecvTimeoutError::Timeout)
                                 if !cancelled.load(Ordering::SeqCst) =>
                             {
-                                continue
+                                continue;
                             }
                             _ => return Err("development window closed".to_owned()),
                         }
                     };
-                    if result.is_ok() {
-                        committed = Some((hash, manifest));
+                    match result {
+                        Ok(revision) => {
+                            committed = Some((hash.clone(), manifest));
+                            status.set_applied(revision, hash);
+                            Ok(revision)
+                        }
+                        Err(error) => Err(error),
                     }
-                    result
                 });
             if let Err(error) = &outcome {
+                let (code, message) = compile_diagnostic
+                    .take()
+                    .unwrap_or_else(|| ("DEV_RELOAD".to_owned(), error.clone()));
+                status.set_failure(code, message);
                 report(error.clone());
             }
             if let Some(Restart(sender)) = restart {
@@ -394,7 +457,7 @@ fn control_server(
                     Err(mpsc::RecvTimeoutError::Timeout)
                         if Instant::now() < deadline && !cancelled.load(Ordering::SeqCst) =>
                     {
-                        continue
+                        continue;
                     }
                     _ => break Err("development restart ended before commit".into()),
                 }
@@ -447,8 +510,16 @@ mod tests {
         let (restart_sender, restarts) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancelled);
-        let worker =
-            std::thread::spawn(move || watch(request, host, sender, Some(restarts), worker_cancel));
+        let worker = std::thread::spawn(move || {
+            watch(
+                request,
+                host,
+                sender,
+                Some(restarts),
+                worker_cancel,
+                rpc::StatusSnapshot::default(),
+            )
+        });
         // The guard cancels even when an assertion unwinds, so a failed test cannot leave a worker running.
         let guard = SessionGuard {
             cancelled,

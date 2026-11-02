@@ -55,8 +55,10 @@ pub use resilience::{
 };
 pub use settings::*;
 pub mod agent_adapter;
+pub mod agent_rpc;
 pub mod content_editors;
 pub mod conversation_composer;
 pub mod library_panel;
 pub mod mcp_surface;
 pub mod plugin_template_ux;
+pub mod source_workspace;
