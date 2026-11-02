@@ -79,16 +79,37 @@ These build on the source and preview RPCs after the first milestone lands.
 - [x] Document that this ticket controls the one mounted entry and does not
   claim screen switching or visual zoom.
 
-### T015-8 — Add multi-screen routing and visual zoom to studio dev
+### T015-8 — Compile the folder-based Studio source project
 
-- [ ] Define how a project declares screen entries and stable screen IDs.
-- [ ] Compile and hot-reload the declared screen set while preserving the
-  selected entry when it remains available.
-- [ ] Switch the mounted screen through the bounded dev RPC and report each
-  screen's source map to Designer.
-- [ ] Apply visual zoom to the rendered tree and keep pointer hit targets
-  aligned with the scaled output.
-- [ ] Add Designer controls for screen switching and zoom after the runtime
-  supports both operations.
-- [ ] Test route selection, hot reload, source links, zoom bounds, and input
-  coordinate behavior.
+- [x] Define optional `studio.project.json` screen entries with stable IDs and
+  project-relative `.studio` source paths.
+- [x] Validate schema version, entry count, unique IDs, normalized paths,
+  canonical root containment, file type, and source-size limits.
+- [x] Compile the declared source files into one in-memory IR module in
+  declaration order; retain the current one-entry and AssemblyScript fallback
+  when no project descriptor is present.
+- [x] Hash the descriptor and all declared sources so add/edit/delete changes
+  trigger hot reload; do not create a `.studio` archive during development.
+- [x] Preserve each component's source path for selection/source links.
+- [x] Test descriptor validation, legacy fallback, source graph changes,
+  component identities, and source-map paths.
+
+### T015-9 — Add multi-screen routing to the dev preview
+
+- [x] Preserve the selected screen across source reloads when its ID remains
+  declared, and fall back deterministically when it is removed.
+- [x] Switch the mounted screen through the bounded dev RPC and return the
+  active screen identity and source map.
+- [x] Add Designer controls for the declared screen IDs and selected-screen
+  source links.
+- [x] Test route selection, state retention per screen, hot reload, and source
+  links for multiple screen files.
+
+### T015-10 — Add visual zoom to the dev preview
+
+- [x] Scale native preview layout dimensions and text metrics before GPUI
+  layout so generated hitboxes stay aligned with the rendered controls.
+- [x] Apply zoom updates through the bounded dev RPC with validated limits.
+- [x] Add Designer zoom controls and report the applied zoom in preview status.
+- [x] Test zoom bounds, visible geometry at multiple scales, and pointer hit
+  targets at scaled coordinates.

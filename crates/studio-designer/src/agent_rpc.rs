@@ -495,7 +495,7 @@ fn tools() -> Value {
         },
         {
             "name": "preview.presentation.set",
-            "description": "Set the live preview viewport and orientation, or validate its current screen identity. This dev host mounts one screen entry and rejects non-default zoom until visual scaling is supported.",
+            "description": "Select a declared screen and set the live preview viewport, orientation, or zoom.",
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": {
                 "type": "object",

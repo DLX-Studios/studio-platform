@@ -98,11 +98,13 @@ impl StatusSnapshot {
         status.code_hash = Some(code_hash.into());
     }
 
-    /// Replace the node-to-source map and the current one-screen identity.
+    /// Replace the node-to-source map and the active screen identity.
     pub(super) fn set_surface_identity(
         &self,
         component_id: Option<String>,
         screen_id: Option<String>,
+        available_screen_ids: Vec<String>,
+        screen_source_path: Option<String>,
         source_locations: BTreeMap<String, DevSourceLocation>,
     ) {
         *self
@@ -116,7 +118,8 @@ impl StatusSnapshot {
         status.selection = None;
         status.presentation.component_id = component_id;
         status.presentation.screen_id = screen_id.clone();
-        status.presentation.available_screen_ids = screen_id.into_iter().collect();
+        status.presentation.available_screen_ids = available_screen_ids;
+        status.presentation.screen_source_path = screen_source_path;
     }
 
     /// Record a native authoring selection and its source link, if available.
@@ -540,6 +543,8 @@ mod tests {
         snapshot.set_surface_identity(
             Some("home".to_owned()),
             Some("home".to_owned()),
+            vec!["home".to_owned(), "settings".to_owned()],
+            Some("src/app.studio".to_owned()),
             BTreeMap::from([("cta".to_owned(), source.clone())]),
         );
         snapshot.set_selection("cta".to_owned());
@@ -628,6 +633,8 @@ mod tests {
         snapshot.set_surface_identity(
             Some("home".to_owned()),
             Some("home".to_owned()),
+            vec!["home".to_owned()],
+            Some("screens/home.studio".to_owned()),
             BTreeMap::new(),
         );
         let (commands, receiver) = mpsc::sync_channel(16);
@@ -666,6 +673,7 @@ mod tests {
                 component_id: Some("home".to_owned()),
                 screen_id: Some("home".to_owned()),
                 available_screen_ids: vec!["home".to_owned()],
+                screen_source_path: Some("screens/home.studio".to_owned()),
                 ..DevPresentation::default()
             }
         );

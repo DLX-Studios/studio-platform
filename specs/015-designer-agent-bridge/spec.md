@@ -41,3 +41,26 @@ file causes a conflict instead of an overwrite. When `studio dev` is running
 for that root, it detects the write and its local status endpoint eventually
 reports the applied revision; failed compilation leaves the previous preview
 live and returns a diagnostic through status.
+
+## Folder-based development sources
+
+`studio dev <project-folder>` uses the folder as the editable source project.
+The `.studio` ZIP archive is a build/release artifact and is not the source
+mounted by dev. An optional root `studio.project.json` declares ordered screen
+entries and their stable IDs:
+
+```json
+{
+  "schemaVersion": 1,
+  "screens": [
+    { "id": "home", "source": "app.studio" },
+    { "id": "settings", "source": "screens/settings.studio" }
+  ]
+}
+```
+
+Every source path is normalized, project-relative, canonicalized within the
+project folder, and points to a bounded `.studio` text file. Without the
+descriptor, existing single-entry `.studio` and AssemblyScript projects keep
+their current behavior. Changes to the descriptor or declared sources trigger
+the in-memory dev compiler without creating a `.studio` archive.

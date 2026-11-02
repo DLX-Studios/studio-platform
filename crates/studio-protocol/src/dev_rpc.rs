@@ -116,15 +116,18 @@ pub struct DevSelection {
 pub struct DevPresentation {
     /// Entry component identity that owns the current preview.
     pub component_id: Option<String>,
-    /// The identity of the one screen currently mounted by this dev session.
+    /// The identity of the screen currently mounted by this dev session.
     pub screen_id: Option<String>,
     /// Screen identities available to this dev session.
     pub available_screen_ids: Vec<String>,
+    /// Project-relative source file for the active screen, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen_source_path: Option<String>,
     /// Logical-pixel preview viewport.
     pub viewport: DevViewport,
     /// Orientation derived from the viewport dimensions.
     pub orientation: DevOrientation,
-    /// Applied preview zoom in thousandths (currently fixed at 1000, or 100%).
+    /// Applied preview zoom in thousandths (1000 is 100%).
     pub zoom_milli: u32,
 }
 
@@ -134,6 +137,7 @@ impl Default for DevPresentation {
             component_id: None,
             screen_id: None,
             available_screen_ids: Vec::new(),
+            screen_source_path: None,
             viewport: DevViewport {
                 width: 1440,
                 height: 900,
@@ -148,14 +152,14 @@ impl Default for DevPresentation {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DevPresentationUpdate {
-    /// Requested screen identity. Only the currently mounted screen is available.
+    /// Requested screen identity from `available_screen_ids`.
     #[serde(alias = "screen_id")]
     pub screen_id: Option<String>,
     /// Replace the logical-pixel viewport dimensions.
     pub viewport: Option<DevViewport>,
     /// Set orientation. When dimensions are omitted, width and height are rotated.
     pub orientation: Option<DevOrientation>,
-    /// Request zoom in thousandths (1000 is 100%); non-default values are rejected until scaling is supported.
+    /// Request zoom in thousandths (1000 is 100%).
     #[serde(alias = "zoom_milli")]
     pub zoom_milli: Option<u32>,
 }
@@ -163,7 +167,7 @@ pub struct DevPresentationUpdate {
 /// Failure while validating a preview presentation update.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum DevPresentationError {
-    /// A requested screen is not the screen mounted by this session.
+    /// A requested screen is not declared by this dev session.
     #[error("screen `{0}` is unavailable in this dev session")]
     ScreenUnavailable(String),
     /// The update contains viewport dimensions outside the supported bounds.
@@ -175,9 +179,6 @@ pub enum DevPresentationError {
     /// Zoom falls outside the supported range.
     #[error("zoom must be between 250 and 4000 thousandths")]
     InvalidZoom,
-    /// Native preview scaling has not been implemented.
-    #[error("native preview zoom is not supported yet")]
-    ZoomUnavailable,
 }
 
 impl DevPresentationUpdate {
@@ -189,13 +190,17 @@ impl DevPresentationUpdate {
         &self,
         current: &DevPresentation,
     ) -> Result<DevPresentation, DevPresentationError> {
-        if let Some(screen_id) = &self.screen_id
-            && current.screen_id.as_deref() != Some(screen_id.as_str())
-        {
-            return Err(DevPresentationError::ScreenUnavailable(screen_id.clone()));
-        }
-
         let mut updated = current.clone();
+        if let Some(screen_id) = &self.screen_id {
+            if !current
+                .available_screen_ids
+                .iter()
+                .any(|available| available == screen_id)
+            {
+                return Err(DevPresentationError::ScreenUnavailable(screen_id.clone()));
+            }
+            updated.screen_id = Some(screen_id.clone());
+        }
         if let Some(viewport) = self.viewport {
             if !(320..=8192).contains(&viewport.width) || !(320..=8192).contains(&viewport.height) {
                 return Err(DevPresentationError::InvalidViewport);
@@ -221,9 +226,7 @@ impl DevPresentationUpdate {
             if !(250..=4_000).contains(&zoom_milli) {
                 return Err(DevPresentationError::InvalidZoom);
             }
-            if zoom_milli != updated.zoom_milli {
-                return Err(DevPresentationError::ZoomUnavailable);
-            }
+            updated.zoom_milli = zoom_milli;
         }
         Ok(updated)
     }
@@ -551,6 +554,31 @@ mod tests {
     }
 
     #[test]
+    fn presentation_updates_select_a_declared_screen_and_apply_zoom() {
+        let current = DevPresentation {
+            component_id: Some("home".to_owned()),
+            screen_id: Some("home".to_owned()),
+            available_screen_ids: vec!["home".to_owned(), "settings".to_owned()],
+            screen_source_path: Some("screens/home.studio".to_owned()),
+            ..DevPresentation::default()
+        };
+        let updated = DevPresentationUpdate {
+            screen_id: Some("settings".to_owned()),
+            zoom_milli: Some(1_250),
+            ..DevPresentationUpdate::default()
+        }
+        .apply_to(&current)
+        .unwrap();
+        assert_eq!(updated.screen_id.as_deref(), Some("settings"));
+        assert_eq!(updated.zoom_milli, 1_250);
+        assert_eq!(
+            updated.screen_source_path.as_deref(),
+            Some("screens/home.studio"),
+            "the host replaces the active source path after switching screens"
+        );
+    }
+
+    #[test]
     fn presentation_updates_reject_invalid_viewports_orientation_and_zoom() {
         let current = DevPresentation::default();
         assert_eq!(
@@ -593,8 +621,9 @@ mod tests {
                 ..DevPresentationUpdate::default()
             }
             .apply_to(&current)
-            .unwrap_err(),
-            DevPresentationError::ZoomUnavailable
+            .unwrap()
+            .zoom_milli,
+            1_250
         );
     }
 

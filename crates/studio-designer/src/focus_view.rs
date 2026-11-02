@@ -15,9 +15,10 @@ use std::{
 };
 
 use gpui_kit::component::{
-    Disableable,
+    Disableable, Selectable,
     button::{Button, ButtonVariants},
     input::{Editor, EditorState, Input, InputEvent, InputState},
+    tab::{Tab, TabBar},
 };
 use gpui_kit::{
     Context as GpuiContext, Entity, FocusHandle, IntoElement, ParentElement, Render, Role,
@@ -2988,11 +2989,23 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 )
             })
         });
+        let preview_screen_source = preview_presentation.screen_source_path.clone();
+        let preview_screen_ids = preview_presentation.available_screen_ids.clone();
+        let preview_screen_tabs = preview_screen_ids
+            .iter()
+            .map(|screen_id| Tab::new().label(screen_id.clone()))
+            .collect::<Vec<_>>();
+        let preview_active_screen_index =
+            preview_presentation.screen_id.as_ref().and_then(|active| {
+                preview_screen_ids
+                    .iter()
+                    .position(|screen| screen == active)
+            });
         let preview_status_text = preview_status.as_ref().map_or_else(
             || "Preview not connected".to_owned(),
             |status| {
                 format!(
-                    "{} · revision {} · screen {} · {}×{} · {:?} · zoom request {}%",
+                    "{} · revision {} · screen {} · {}×{} · {:?} · zoom {}%",
                     format!("{:?}", status.phase),
                     status.applied_revision,
                     status
@@ -3336,6 +3349,31 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                             .text_sm()
                             .child(preview_status_text),
                     )
+                    .when(preview_screen_tabs.len() > 1, |element| {
+                        let screen_ids = preview_screen_ids.clone();
+                        element.child(
+                            TabBar::new("focus-preview-screens")
+                                .underline()
+                                .menu(true)
+                                .w_full()
+                                .max_width(px(180.0))
+                                .selected_index(preview_active_screen_index.unwrap_or(0))
+                                .children(preview_screen_tabs)
+                                .on_click(cx.listener(move |this, index: &usize, _, cx| {
+                                    if let Some(screen_id) = screen_ids.get(*index) {
+                                        this.request_preview_control(
+                                            PreviewRequest::Presentation(
+                                                studio_protocol::dev_rpc::DevPresentationUpdate {
+                                                    screen_id: Some(screen_id.clone()),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    }
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .id("focus-preview-controls")
@@ -3459,8 +3497,47 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                                             cx,
                                         );
                                     }))
-                            }),
+                            })
+                            .children([750, 1_000, 1_250, 1_500].into_iter().map(|zoom_milli| {
+                                let selected = preview_presentation.zoom_milli == zoom_milli;
+                                let label = format!("{}%", zoom_milli / 10);
+                                Button::new(format!("focus-preview-zoom-{zoom_milli}"))
+                                    .label(label)
+                                    .secondary()
+                                    .selected(selected)
+                                    .disabled(!preview_enabled || preview_command_pending)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_preview_control(
+                                            PreviewRequest::Presentation(
+                                                studio_protocol::dev_rpc::DevPresentationUpdate {
+                                                    zoom_milli: Some(zoom_milli),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    }))
+                            })),
                     )
+                    .children(preview_screen_source.map(|path| {
+                        let source_path = path.clone();
+                        Button::new("focus-preview-open-screen-source")
+                            .label(format!("Open screen source · {path}"))
+                            .accessibility_label(format!("Open screen source {path}"))
+                            .max_w(px(420.0))
+                            .secondary()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_preview_source(
+                                    source_path.clone(),
+                                    1,
+                                    1,
+                                    0,
+                                    window,
+                                    cx,
+                                );
+                                cx.notify();
+                            }))
+                    }))
                     .child(
                         div()
                             .id("focus-preview-selection")

@@ -21,6 +21,7 @@ pub(crate) struct Artifact {
     pub code_hash: String,
     pub manifest: Vec<u8>,
     pub assets: BTreeMap<String, Vec<u8>>,
+    pub screen_source_paths: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -149,6 +150,32 @@ impl DevCompiler {
     }
 
     pub fn compile(&mut self, inputs: &Inputs) -> Result<Artifact, BuildFailure> {
+        let declared_screens = super::project::load_screen_entries(&self.request.project_root)?;
+        let legacy_entry = if declared_screens.is_none() {
+            build::studio_entry(&self.request)
+        } else {
+            None
+        };
+        let screen_source_paths = if let Some(screens) = &declared_screens {
+            screens
+                .iter()
+                .map(|screen| (screen.id.clone(), screen.source_path.clone()))
+                .collect()
+        } else if let Some(entry) = &legacy_entry {
+            let name = entry
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("app")
+                .to_owned();
+            let source_path = entry
+                .strip_prefix(&self.request.project_root)
+                .unwrap_or(entry)
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            BTreeMap::from([(name, source_path)])
+        } else {
+            BTreeMap::new()
+        };
         let declared_manifest = std::fs::read(self.request.project_root.join("manifest.json"))
             .map_err(|error| failure(error.to_string()))?;
         studio_package::parse_manifest(
@@ -164,33 +191,16 @@ impl DevCompiler {
         let code = if let Some(code) = self.cache.get(&inputs.code_hash) {
             code.clone()
         } else {
-            let code = if let Some(entry) = build::studio_entry(&self.request) {
-                let source =
-                    std::fs::read_to_string(&entry).map_err(|error| failure(error.to_string()))?;
+            let code = if let Some(screens) = &declared_screens {
+                Code::Ir(Arc::new(compile_studio_project(screens)?))
+            } else if let Some(entry) = &legacy_entry {
+                let source = std::fs::read_to_string(entry)
+                    .map_err(|error| failure(format!("{}: {error}", entry.display())))?;
                 let name = entry
                     .file_stem()
                     .and_then(|name| name.to_str())
                     .unwrap_or("app");
-                let module = studio_script::compile_studio(&source, &entry.to_string_lossy(), name)
-                    .map_err(|diagnostics| {
-                        BuildFailure::new(
-                            BuildPhase::Compile,
-                            diagnostics
-                                .into_iter()
-                                .map(|diagnostic| {
-                                    BuildDiagnostic::error(
-                                        BuildPhase::Compile,
-                                        diagnostic.code,
-                                        format!("{}: {}", entry.display(), diagnostic.message),
-                                    )
-                                    .at(
-                                        diagnostic.span.start.line as u64,
-                                        diagnostic.span.start.column as u64,
-                                    )
-                                })
-                                .collect(),
-                        )
-                    })?;
+                let module = compile_studio_source(&source, &entry.to_string_lossy(), name)?;
                 Code::Ir(Arc::new(module))
             } else {
                 Code::Wasm(Arc::new(self.compile_wasm(&inputs.code_hash)?))
@@ -207,6 +217,7 @@ impl DevCompiler {
             code_hash: inputs.code_hash.clone(),
             manifest,
             assets,
+            screen_source_paths,
         })
     }
 
@@ -311,19 +322,95 @@ impl DevCompiler {
     }
 }
 
+fn compile_studio_project(
+    screens: &[super::project::ScreenEntry],
+) -> Result<StudioModule, BuildFailure> {
+    let mut components = Vec::with_capacity(screens.len());
+    let mut version = None;
+    for screen in screens {
+        let module = compile_studio_source(&screen.source, &screen.source_path, &screen.id)?;
+        if let Some(expected) = version {
+            if module.version != expected {
+                return Err(failure(
+                    "declared screens use incompatible Studio IR versions",
+                ));
+            }
+        } else {
+            version = Some(module.version);
+        }
+        let mut component = module.components.into_iter().next().ok_or_else(|| {
+            failure(format!(
+                "screen `{}` compiled without a component",
+                screen.id
+            ))
+        })?;
+        component.id.clone_from(&screen.id);
+        component.name.clone_from(&screen.id);
+        components.push(component);
+    }
+    let exports = components
+        .iter()
+        .map(|component| component.name.clone())
+        .collect();
+    Ok(StudioModule {
+        version: version.unwrap_or(studio_script::ir::STUDIO_IR_VERSION),
+        id: "studio-project".to_owned(),
+        imports: Vec::new(),
+        exports,
+        components,
+        dependencies: Vec::new(),
+    })
+}
+
+fn compile_studio_source(
+    source: &str,
+    source_path: &str,
+    component_name: &str,
+) -> Result<StudioModule, BuildFailure> {
+    studio_script::compile_studio(source, source_path, component_name).map_err(|diagnostics| {
+        BuildFailure::new(
+            BuildPhase::Compile,
+            diagnostics
+                .into_iter()
+                .map(|diagnostic| {
+                    BuildDiagnostic::error(
+                        BuildPhase::Compile,
+                        diagnostic.code,
+                        format!("{source_path}: {}", diagnostic.message),
+                    )
+                    .at(
+                        diagnostic.span.start.line as u64,
+                        diagnostic.span.start.column as u64,
+                    )
+                })
+                .collect(),
+        )
+    })
+}
+
 fn source_files(root: &Path) -> Vec<PathBuf> {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     walkdir::WalkDir::new(root)
         .follow_links(true)
         .into_iter()
         .filter_entry(|entry| {
-            !matches!(
+            let allowed_name = !matches!(
                 entry.file_name().to_str(),
                 Some("build" | "node_modules" | ".git")
-            )
+            );
+            let within_root = entry
+                .path()
+                .canonicalize()
+                .is_ok_and(|canonical| canonical.starts_with(&canonical_root));
+            allowed_name && within_root
         })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(|entry| entry.into_path())
+        .filter(|path| {
+            path.canonicalize()
+                .is_ok_and(|canonical| canonical.starts_with(&canonical_root))
+        })
         .filter(|path| !generated(path))
         .collect()
 }
@@ -411,6 +498,116 @@ mod tests {
         assert!(!root.join("build/dev.studio").exists());
         std::fs::write(root.join("app.studio"), "<Text id=\"hello\">Hello</Text>").unwrap();
         assert_eq!(compiler.inputs().unwrap().code_hash, first.code_hash);
+    }
+
+    #[test]
+    fn declared_project_screens_compile_in_order_with_stable_ids_and_source_paths() {
+        let (directory, mut compiler) = project();
+        let root = directory.path();
+        std::fs::create_dir(root.join("screens")).unwrap();
+        std::fs::write(
+            root.join("screens/home.studio"),
+            "<script lang=\"ts\">let count = $state(1);</script><Text id=\"title\">{count}</Text>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("screens/settings.studio"),
+            "<script lang=\"ts\">let count = $state(2);</script><Text id=\"title\">{count}</Text>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("studio.project.json"),
+            r#"{"schemaVersion":1,"screens":[{"id":"home","source":"screens/home.studio"},{"id":"settings","source":"screens/settings.studio"}]}"#,
+        )
+        .unwrap();
+
+        let inputs = compiler.inputs().unwrap();
+        assert!(inputs.files.contains_key(&root.join("studio.project.json")));
+        let artifact = compiler.compile(&inputs).unwrap();
+        let Code::Ir(module) = artifact.code else {
+            panic!("declared Studio screens compile to IR");
+        };
+        assert_eq!(
+            module
+                .components
+                .iter()
+                .map(|component| component.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["home", "settings"]
+        );
+        assert_eq!(
+            module
+                .exports
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["home", "settings"]
+        );
+        assert_eq!(
+            artifact.screen_source_paths,
+            BTreeMap::from([
+                ("home".to_owned(), "screens/home.studio".to_owned()),
+                ("settings".to_owned(), "screens/settings.studio".to_owned()),
+            ])
+        );
+        assert_eq!(module.components[0].state[0].id, "home#count");
+        assert_eq!(module.components[1].state[0].id, "settings#count");
+    }
+
+    #[test]
+    fn folder_descriptor_and_declared_screen_edits_invalidate_the_code_hash() {
+        let (directory, mut compiler) = project();
+        let root = directory.path();
+        std::fs::remove_file(root.join("app.studio")).unwrap();
+        std::fs::create_dir(root.join("screens")).unwrap();
+        std::fs::write(root.join("screens/home.studio"), "<Text>Home</Text>").unwrap();
+        std::fs::write(
+            root.join("screens/settings.studio"),
+            "<Text>Settings</Text>",
+        )
+        .unwrap();
+        let declaration = root.join("studio.project.json");
+        std::fs::write(
+            &declaration,
+            r#"{"schemaVersion":1,"screens":[{"id":"home","source":"screens/home.studio"},{"id":"settings","source":"screens/settings.studio"}]}"#,
+        )
+        .unwrap();
+        let initial = compiler.inputs().unwrap();
+        assert!(initial.files.contains_key(&declaration));
+        assert!(matches!(
+            compiler.compile(&initial).unwrap().code,
+            Code::Ir(_)
+        ));
+        assert!(!root.join("build/dev.studio").exists());
+
+        std::fs::write(root.join("screens/home.studio"), "<Text>Edited home</Text>").unwrap();
+        let source_edit = compiler.inputs().unwrap();
+        assert_ne!(initial.code_hash, source_edit.code_hash);
+
+        std::fs::write(
+            &declaration,
+            r#"{"schemaVersion":1,"screens":[{"id":"settings","source":"screens/settings.studio"},{"id":"home","source":"screens/home.studio"}]}"#,
+        )
+        .unwrap();
+        let reordered = compiler.inputs().unwrap();
+        assert_ne!(source_edit.code_hash, reordered.code_hash);
+
+        std::fs::write(root.join("screens/profile.studio"), "<Text>Profile</Text>").unwrap();
+        std::fs::write(
+            &declaration,
+            r#"{"schemaVersion":1,"screens":[{"id":"settings","source":"screens/settings.studio"},{"id":"home","source":"screens/home.studio"},{"id":"profile","source":"screens/profile.studio"}]}"#,
+        )
+        .unwrap();
+        let added = compiler.inputs().unwrap();
+        assert_ne!(reordered.code_hash, added.code_hash);
+
+        std::fs::remove_file(root.join("screens/profile.studio")).unwrap();
+        std::fs::write(
+            &declaration,
+            r#"{"schemaVersion":1,"screens":[{"id":"settings","source":"screens/settings.studio"},{"id":"home","source":"screens/home.studio"}]}"#,
+        )
+        .unwrap();
+        assert_ne!(added.code_hash, compiler.inputs().unwrap().code_hash);
     }
 
     #[test]

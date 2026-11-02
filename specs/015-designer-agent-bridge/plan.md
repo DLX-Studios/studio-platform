@@ -1,9 +1,9 @@
 # Follow-up implementation plan
 
-This plan covers T015-6 and T015-7. The authenticated Designer project remains
-the owner of local workspace preferences, `studio dev` remains the owner of
-the live preview, and source files remain the persistence boundary between an
-agent and the preview.
+The authenticated Designer project owns local workspace preferences,
+`studio dev` owns the live preview, and the project folder's source files are
+the persistence boundary between an agent and the preview. Compressed `.studio`
+archives remain build/release artifacts; dev reads the folder directly.
 
 ## T015-6: agent edits in Designer
 
@@ -34,16 +34,46 @@ agent and the preview.
    connection, selection mode, source location, and presentation controls in
    the Designer UI.
 
-The current `studio dev` compiler mounts one `.studio` entry per session. This
-ticket reports that mounted entry and does not claim screen switching. The
-pinned GPUI API also lacks a general element transform, so non-default visual
-zoom is tracked with multi-screen support in T015-8 rather than represented as
-an accepted control that has no effect.
+## T015-8: folder-based source project
+
+1. Add optional root `studio.project.json` with schema version 1 and ordered
+   `screens`, each containing a stable lowercase slug `id` and a normalized,
+   project-relative `.studio` `source` path. A project without this descriptor
+   keeps the current single-entry `.studio` or AssemblyScript behavior.
+2. Reject unknown descriptor fields, unsupported versions, empty or oversized
+   screen lists, duplicate IDs, non-normalized or escaping paths, files outside
+   the canonical project root, non-`.studio` entries, and source files above
+   the compiler's existing source-size ceiling.
+3. Compile each declared file from the folder directly and combine its
+   component definition into one in-memory module in declaration order. No
+   `.studio` package archive is created by dev.
+4. Keep the descriptor and declared sources in content-hash invalidation and
+   retain the source path per screen so selection resolves to the right file.
+   The first declared screen is the initial route; subsequent screen changes
+   retain that identity across reloads when it remains declared.
+
+## T015-9: multi-screen routing
+
+1. Preserve the active screen ID through source reloads if it remains present;
+   fall back to the first declared screen if it was removed.
+2. Apply screen changes over the existing bounded JSON-RPC command queue on
+   the GPUI thread. Return the active screen identity and source map.
+3. Show declared screen IDs and source links in Designer and expose screen
+   selection to MCP clients.
+
+## T015-10: visual zoom
+
+The pinned GPUI API has no general element transform. Zoom therefore scales
+layout inputs and text metrics before GPUI lays out the native preview. GPUI
+then derives hitboxes from the scaled layout, keeping click and selection
+targets aligned. Validate zoom bounds before applying changes and test both
+rendered geometry and pointer activation at multiple scales.
 
 ## Validation
 
-Add focused tests for workspace preference compatibility, clean and dirty
-source refresh, stale-safe revert, JSON-RPC validation, and presentation range
-checks. At the integration checkpoint run format, workspace tests, and Clippy
-sequentially with the shared Cargo target, then the focused native hot-reload
-check when a display is available.
+Add focused tests for workspace preference compatibility, source conflicts,
+descriptor validation and path confinement, module composition and source
+maps, route selection and reload preservation, RPC queue bounds, zoom ranges,
+and hit targets under scaled layouts. At the integration checkpoint run
+format, workspace tests, and Clippy sequentially with the shared Cargo target,
+then the focused native hot-reload check when a display is available.

@@ -1,6 +1,7 @@
 //! Native development host owned by the `studio` executable.
 //! One worker hashes and compiles inputs; the UI thread owns live state and commits updates.
 mod compiler;
+mod project;
 mod rpc;
 mod surface;
 
@@ -185,13 +186,14 @@ impl DevPreview {
                 hash,
                 acknowledge,
             } = update;
-            let metadata = replacement.metadata();
             let status = self.status.clone();
+            let mut metadata = None;
             let mut outcome = Err(String::from("no live surface"));
             self.view.update(cx, |view, view_cx| {
                 view.update_surface(
                     |surface| match surface.replace(replacement, reset) {
                         Ok(()) => {
+                            metadata = surface.metadata();
                             *revision += 1;
                             println!(
                                 "[dev] committed revision {} ({})",
@@ -210,9 +212,14 @@ impl DevPreview {
                 );
                 if outcome.is_ok() {
                     if let (Some(status), Some(metadata)) = (&status, metadata) {
+                        debug_assert!(metadata.source_locations.values().all(|location| {
+                            metadata.screen_source_path.as_deref() == Some(location.path.as_str())
+                        }));
                         status.set_surface_identity(
                             metadata.component_id,
                             metadata.screen_id,
+                            metadata.available_screen_ids,
+                            metadata.screen_source_path,
                             metadata.source_locations,
                         );
                     }
@@ -256,16 +263,65 @@ impl DevPreview {
                     let requested = update.apply_to(&previous);
                     match requested {
                         Ok(requested) => {
-                            let status = status.set_presentation(&update);
-                            if status.as_ref().is_ok_and(|current| {
-                                current.presentation.viewport != previous.viewport
-                            }) {
-                                window.resize(size(
-                                    px(requested.viewport.width as f32),
-                                    px(requested.viewport.height as f32),
-                                ));
+                            let screen_changed = requested.screen_id != previous.screen_id;
+                            let zoom_changed = requested.zoom_milli != previous.zoom_milli;
+                            let mut metadata = None;
+                            let mut switch_error = None;
+                            self.view.update(cx, |view, view_cx| {
+                                if screen_changed {
+                                    if let Some(screen_id) = requested.screen_id.as_deref() {
+                                        view.update_surface(
+                                            |surface| match surface.switch_screen(screen_id) {
+                                                Ok(_) => {
+                                                    metadata = surface.metadata();
+                                                    true
+                                                }
+                                                Err(error) => {
+                                                    switch_error = Some(error);
+                                                    false
+                                                }
+                                            },
+                                            view_cx,
+                                        );
+                                    }
+                                    if switch_error.is_none() {
+                                        view.set_authoring(
+                                            status.read().authoring_selection,
+                                            None,
+                                            view_cx,
+                                        );
+                                    }
+                                }
+                                if switch_error.is_none() && zoom_changed {
+                                    view.set_zoom_milli(requested.zoom_milli, window, view_cx);
+                                }
+                            });
+                            if let Some(error) = switch_error {
+                                Err(rpc::RpcCommandError {
+                                    code: -32602,
+                                    message: error,
+                                })
+                            } else {
+                                if let Some(metadata) = metadata {
+                                    status.set_surface_identity(
+                                        metadata.component_id,
+                                        metadata.screen_id,
+                                        metadata.available_screen_ids,
+                                        metadata.screen_source_path,
+                                        metadata.source_locations,
+                                    );
+                                }
+                                let status = status.set_presentation(&update);
+                                if status.as_ref().is_ok_and(|current| {
+                                    current.presentation.viewport != previous.viewport
+                                }) {
+                                    window.resize(size(
+                                        px(requested.viewport.width as f32),
+                                        px(requested.viewport.height as f32),
+                                    ));
+                                }
+                                status
                             }
-                            status
                         }
                         Err(error) => Err(rpc::RpcCommandError {
                             code: -32602,
@@ -442,14 +498,6 @@ fn watch(
     cancelled: Arc<AtomicBool>,
     status: rpc::StatusSnapshot,
 ) {
-    let source_path = crate::build::studio_entry(&request)
-        .and_then(|entry| {
-            entry
-                .strip_prefix(&request.project_root)
-                .ok()
-                .map(Path::to_path_buf)
-        })
-        .map(|path| path.to_string_lossy().replace('\\', "/"));
     let mut compiler = DevCompiler::new(request);
     compiler.set_cancellation(Arc::clone(&cancelled));
     let mut observed = None;
@@ -503,8 +551,7 @@ fn watch(
                         && committed.as_ref().is_some_and(|(old_hash, old_manifest)| {
                             old_hash == &hash && old_manifest == &manifest
                         });
-                    let replacement =
-                        prepare(artifact, &host, assets_only, source_path.as_deref())?;
+                    let replacement = prepare(artifact, &host, assets_only)?;
                     status.set_phase(DevPhase::Applying);
                     let (acknowledge, receiver) = mpsc::sync_channel(1);
                     updates
@@ -554,7 +601,6 @@ fn prepare(
     artifact: Artifact,
     host: &StudioHost,
     assets_only: bool,
-    source_path: Option<&str>,
 ) -> Result<Replacement, String> {
     let policy = studio_package::ArchivePolicy::default();
     let asset_bytes: usize = artifact.assets.values().map(Vec::len).sum();
@@ -575,7 +621,7 @@ fn prepare(
             module,
             manifest: artifact.manifest,
             assets: artifact.assets,
-            source_path: source_path.map(str::to_owned),
+            screen_source_paths: artifact.screen_source_paths,
         }),
         Code::Wasm(module) => host
             .prepare_development(&artifact.manifest, (*module).clone(), artifact.assets)

@@ -34,8 +34,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, Image, ImageFormat,
-    IntoElement, KeyDownEvent, ParentElement, Render, Role, SharedString, Subscription, Window,
-    div, img, prelude::*, px, rgb, text,
+    IntoElement, KeyDownEvent, ParentElement, Pixels, Render, Role, SharedString, Subscription,
+    Window, div, img, prelude::*, px, rgb, text,
 };
 use studio_navigation::MotionPreference;
 use studio_protocol::NodeKind;
@@ -493,6 +493,8 @@ pub struct NativeRuntimeView<S: NativeSurface> {
     component_color_picker: Entity<ColorPickerState>,
     _component_subscriptions: Vec<Subscription>,
     plugin_surface: Option<S>,
+    base_rem_size: f32,
+    zoom_milli: u32,
 }
 
 impl<S: NativeSurface> NativeRuntimeView<S> {
@@ -531,6 +533,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             component_color_picker,
             _component_subscriptions: Vec::new(),
             plugin_surface: None,
+            base_rem_size: window.rem_size().as_f32(),
+            zoom_milli: 1_000,
         }
     }
 
@@ -585,6 +589,34 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
         {
             cx.notify();
         }
+    }
+
+    /// Apply a bounded layout zoom, always derived from the original window scale.
+    pub fn set_zoom_milli(
+        &mut self,
+        zoom_milli: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !(250..=4_000).contains(&zoom_milli) || self.zoom_milli == zoom_milli {
+            return false;
+        }
+        self.zoom_milli = zoom_milli;
+        window.set_rem_size(px(self.base_rem_size * self.zoom_factor()));
+        cx.notify();
+        true
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "zoom is restricted to 250..=4000 thousandths"
+    )]
+    fn zoom_factor(&self) -> f32 {
+        self.zoom_milli as f32 / 1_000.0
+    }
+
+    fn scaled_px(&self, value: f32) -> Pixels {
+        px(value * self.zoom_factor())
     }
 
     /// Enable author selection without changing component layout or source properties.
@@ -1148,7 +1180,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             .when(horizontal, gpui_kit::Styled::flex_row)
             .when(!horizontal, gpui_kit::Styled::flex_col)
             .when(scrollable, |element| {
-                element.max_h(px(320.0)).overflow_y_scroll()
+                element.max_h(self.scaled_px(320.0)).overflow_y_scroll()
             })
             .when(monospace, |element| element.font_family("monospace"))
             .gap_1()
@@ -1211,14 +1243,15 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
     }
 
     fn overlay_panel(
+        &self,
         title: String,
         message: Option<String>,
         width: f32,
         children: Vec<AnyElement>,
     ) -> gpui_kit::Div {
         div()
-            .w(px(width))
-            .max_w(px(560.0))
+            .w(self.scaled_px(width))
+            .max_w(self.scaled_px(560.0))
             .p_6()
             .rounded_xl()
             .bg(rgb(COLOR_SURFACE))
@@ -1496,7 +1529,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                         alignment == "space_between",
                         gpui_kit::Styled::justify_between,
                     )
-                    .gap(px(gap))
+                    .gap(self.scaled_px(gap))
                     .children(children)
                     .into_any_element()
             }
@@ -1527,7 +1560,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                         alignment == Some("space_between"),
                         gpui_kit::Styled::justify_between,
                     )
-                    .gap(px(gap))
+                    .gap(self.scaled_px(gap))
                     .children(children)
                     .into_any_element()
             }
@@ -1547,7 +1580,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .min_w_0()
                     .flex_grow_1()
                     .flex_shrink_1()
-                    .gap(px(gap))
+                    .gap(self.scaled_px(gap))
                     .when(
                         horizontal,
                         gpui_kit::StatefulInteractiveElement::overflow_x_scroll,
@@ -1600,7 +1633,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .min_w_0()
                     .grid()
                     .grid_cols(columns)
-                    .gap(px(gap))
+                    .gap(self.scaled_px(gap))
                     .children(children)
                     .into_any_element()
             }
@@ -1648,13 +1681,13 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .when_some(accessibility_label.clone(), |element, label| {
                         element.aria_label(label)
                     })
-                    .min_w(px(150.0))
-                    .min_h(px(238.0))
+                    .min_w(self.scaled_px(150.0))
+                    .min_h(self.scaled_px(238.0))
                     .flex()
                     .flex_col()
                     .min_w_0()
                     .overflow_hidden()
-                    .p(px(padding))
+                    .p(self.scaled_px(padding))
                     .rounded_lg()
                     .border_1()
                     .border_color(rgb(COLOR_BORDER))
@@ -1692,13 +1725,13 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                         element.aria_label(label)
                     })
                     .min_w_0()
-                    .when_some(width, |element, width| element.w(px(width)))
-                    .when_some(height, |element, height| element.h(px(height)))
+                    .when_some(width, |element, width| element.w(self.scaled_px(width)))
+                    .when_some(height, |element, height| element.h(self.scaled_px(height)))
                     .flex_grow(flex)
                     .flex()
                     .flex_col()
                     .when(shrink, gpui_kit::Styled::flex_shrink_0)
-                    .p(px(padding))
+                    .p(self.scaled_px(padding))
                     .bg(background)
                     .children(children)
                     .into_any_element()
@@ -1715,8 +1748,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .when_some(accessibility_label.clone(), |element, label| {
                         element.aria_label(label)
                     })
-                    .w(px(size))
-                    .h(px(size))
+                    .w(self.scaled_px(size))
+                    .h(self.scaled_px(size))
                     .flex_shrink_0()
                     .into_any_element()
             }
@@ -1733,7 +1766,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                         element.aria_label(label)
                     })
                     .w_full()
-                    .h(px(thickness))
+                    .h(self.scaled_px(thickness))
                     .bg(rgb(COLOR_BORDER))
                     .into_any_element()
             }
@@ -1751,7 +1784,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .when_some(accessibility_label.clone(), |element, label| {
                         element.aria_label(label)
                     })
-                    .size(px(20.0))
+                    .size(self.scaled_px(20.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1804,8 +1837,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     div()
                         .flex()
                         .items_center()
-                        .px(px(8.0))
-                        .py(px(2.0))
+                        .px(self.scaled_px(8.0))
+                        .py(self.scaled_px(2.0))
                         .rounded_full()
                         .text_xs()
                         .font_weight(gpui_kit::FontWeight::MEDIUM)
@@ -1842,8 +1875,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     })
                     .child(
                         Skeleton::new()
-                            .when_some(width, |element, width| element.w(px(width)))
-                            .when_some(height, |element, height| element.h(px(height))),
+                            .when_some(width, |element, width| element.w(self.scaled_px(width)))
+                            .when_some(height, |element, height| element.h(self.scaled_px(height))),
                     )
                     .into_any_element()
             }
@@ -1902,8 +1935,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                             gpui_kit::StatefulInteractiveElement::aria_label,
                         )
                         .when(width.is_none(), gpui_kit::Styled::w_full)
-                        .when_some(width, |element, width| element.w(px(width)))
-                        .when_some(height, |element, height| element.h(px(height)))
+                        .when_some(width, |element, width| element.w(self.scaled_px(width)))
+                        .when_some(height, |element, height| element.h(self.scaled_px(height)))
                         .object_fit(gpui_kit::ObjectFit::Cover)
                         .rounded_md()
                         .into_any_element(),
@@ -1921,8 +1954,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                             gpui_kit::StatefulInteractiveElement::aria_label,
                         )
                         .when(width.is_none(), gpui_kit::Styled::w_full)
-                        .when_some(width, |element, width| element.w(px(width)))
-                        .when_some(height, |element, height| element.h(px(height)))
+                        .when_some(width, |element, width| element.w(self.scaled_px(width)))
+                        .when_some(height, |element, height| element.h(self.scaled_px(height)))
                         .rounded_md()
                         .bg(rgb(COLOR_SURFACE_VARIANT))
                         .into_any_element(),
@@ -2027,12 +2060,12 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                 });
                 let content = match source {
                     Some(source) => img(source)
-                        .size(px(40.0))
+                        .size(self.scaled_px(40.0))
                         .object_fit(gpui_kit::ObjectFit::Cover)
                         .rounded_full()
                         .into_any_element(),
                     None => div()
-                        .size(px(40.0))
+                        .size(self.scaled_px(40.0))
                         .rounded_full()
                         .flex()
                         .items_center()
@@ -2102,7 +2135,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                 .when_some(accessibility_label.clone(), |element, aria| {
                     element.aria_label(aria)
                 })
-                .w(px(220.0))
+                .w(self.scaled_px(220.0))
                 .h_full()
                 .min_h_0()
                 .flex_shrink_0()
@@ -2118,7 +2151,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             NodeKind::MenuBar => div()
                 .id(node.id)
                 .w_full()
-                .h(px(32.0))
+                .h(self.scaled_px(32.0))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -2137,7 +2170,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     element.aria_label(aria)
                 })
                 .w_full()
-                .h(px(56.0))
+                .h(self.scaled_px(56.0))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -2226,7 +2259,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     element.aria_label(aria)
                 })
                 .w_full()
-                .h(px(24.0))
+                .h(self.scaled_px(24.0))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -2361,7 +2394,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                 })
                 .w_full()
                 .min_w_0()
-                .max_h(px(320.0))
+                .max_h(self.scaled_px(320.0))
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
@@ -2493,10 +2526,10 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .opacity(opacity)
                     .flex()
                     .items_center()
-                    .min_h(px(crate::TargetSize::INTERACTIVE.height))
+                    .min_h(self.scaled_px(crate::TargetSize::INTERACTIVE.height))
                     .child(
                         gpui_kit::base::TimeField::new(node.id, &state)
-                            .min_h(px(crate::TargetSize::INTERACTIVE.height))
+                            .min_h(self.scaled_px(crate::TargetSize::INTERACTIVE.height))
                             .disabled(!enabled)
                             .flex()
                             .items_center()
@@ -2528,7 +2561,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
-                let panel = Self::overlay_panel(title, None, 480.0, children)
+                let panel = self
+                    .overlay_panel(title, None, 480.0, children)
                     .id(format!("{}:panel", node.id))
                     .role(Role::Dialog)
                     .when_some(accessibility_label.clone(), |element, aria| {
@@ -2561,7 +2595,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                 let Some(depth) = self.overlay_gate(&node.id, open, cx) else {
                     return div().id(node.id).hidden().into_any_element();
                 };
-                let panel = Self::overlay_panel(title, message, 420.0, children)
+                let panel = self
+                    .overlay_panel(title, message, 420.0, children)
                     .id(format!("{}:panel", node.id))
                     .role(Role::AlertDialog)
                     .when_some(accessibility_label.clone(), |element, aria| {
@@ -2616,11 +2651,21 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .children(children);
                 // Sheets anchor to their declared edge; drawers dock left like sheets.
                 let panel = match node.kind {
-                    NodeKind::BottomSheet => {
-                        panel.w_full().max_h(px(320.0)).rounded_t_xl().border_t_1()
-                    }
-                    NodeKind::Drawer => panel.w(px(280.0)).h_full().rounded_r_xl().border_r_1(),
-                    _ => panel.w(px(360.0)).h_full().rounded_l_xl().border_l_1(),
+                    NodeKind::BottomSheet => panel
+                        .w_full()
+                        .max_h(self.scaled_px(320.0))
+                        .rounded_t_xl()
+                        .border_t_1(),
+                    NodeKind::Drawer => panel
+                        .w(self.scaled_px(280.0))
+                        .h_full()
+                        .rounded_r_xl()
+                        .border_r_1(),
+                    _ => panel
+                        .w(self.scaled_px(360.0))
+                        .h_full()
+                        .rounded_l_xl()
+                        .border_l_1(),
                 };
                 let root = self.overlay_root(&node.id, depth, true, cx);
                 let root = if node.kind == NodeKind::BottomSheet {
@@ -2701,7 +2746,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                             .when_some(accessibility_label.clone(), |element, aria| {
                                 element.aria_label(aria)
                             })
-                            .w(px(320.0))
+                            .w(self.scaled_px(320.0))
                             .p_3()
                             .rounded_md()
                             .bg(rgb(COLOR_CARD))
@@ -2754,7 +2799,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .when_some(accessibility_label.clone(), |element, aria| {
                         element.aria_label(aria)
                     })
-                    .min_w(px(200.0))
+                    .min_w(self.scaled_px(200.0))
                     .p_2()
                     .rounded_md()
                     .bg(rgb(COLOR_CARD))
@@ -2794,8 +2839,8 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .when_some(accessibility_label.clone(), |element, aria| {
                         element.aria_label(aria)
                     })
-                    .w(px(520.0))
-                    .max_h(px(400.0))
+                    .w(self.scaled_px(520.0))
+                    .max_h(self.scaled_px(400.0))
                     .overflow_y_scroll()
                     .p_2()
                     .rounded_lg()
@@ -2936,7 +2981,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .role(Role::Button)
                     .aria_label(accessibility_label.unwrap_or_else(|| icon.clone()))
                     .opacity(opacity)
-                    .size(px(36.0))
+                    .size(self.scaled_px(36.0))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
@@ -3027,7 +3072,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .flex_wrap()
                     .when(vertical, gpui_kit::Styled::flex_col)
                     .when(!vertical, gpui_kit::Styled::flex_row)
-                    .gap(px(gap))
+                    .gap(self.scaled_px(gap))
                     .children(children)
                     .into_any_element()
             }
@@ -3179,7 +3224,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                         element.aria_label(label)
                     })
                     .min_w_0()
-                    .w(px(160.0))
+                    .w(self.scaled_px(160.0))
                     .child(NumberInput::new(&state).disabled(!enabled))
                     .into_any_element()
             }
