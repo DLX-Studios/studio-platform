@@ -21,7 +21,7 @@ fn request(key: &str, minor: i64, owner: PluginPrincipal, authorized: bool) -> P
     let now = std::time::Instant::now();
     let mut confirmation = Checkout::new(
         "checkout-1",
-        "Nova Barbers",
+        "Northwind Barbers",
         "Example Publisher",
         Money::new("USD", minor).unwrap(),
     )

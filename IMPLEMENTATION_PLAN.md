@@ -6,7 +6,7 @@
 
 
 Status: approved for implementation
-Repository: `/home/sir/Nova_Projects/studio-platform`
+Repository: `<workspace>/studio-platform`
 Initial milestone: Wayland-only native POS checkout using a sandboxed AssemblyScript plugin
 
 ## 1. Summary

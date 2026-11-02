@@ -7,7 +7,7 @@ use studio_actions::{Checkout, ConfirmationErrorCode, Money, TrustedPaymentConfi
 fn checkout() -> Checkout {
     Checkout::new(
         "checkout-1",
-        "Nova Barbers",
+        "Northwind Barbers",
         "Example Publisher",
         Money::new("USD", 8_500).unwrap(),
     )
@@ -22,7 +22,7 @@ fn trusted_surface_displays_verified_identity_exact_money_and_simulator_status()
         .unwrap();
     let view = confirmation.view();
 
-    assert_eq!(view.merchant, "Nova Barbers");
+    assert_eq!(view.merchant, "Northwind Barbers");
     assert_eq!(view.publisher, "Example Publisher");
     assert_eq!(view.amount.currency(), "USD");
     assert_eq!(view.amount.minor(), 8_500);
@@ -43,7 +43,7 @@ fn confirmation_freezes_amount_currency_and_identity_against_later_cart_changes(
     let snapshot = confirmation.confirm(now).unwrap();
 
     assert_eq!(snapshot.checkout_session_id(), "checkout-1");
-    assert_eq!(snapshot.merchant(), "Nova Barbers");
+    assert_eq!(snapshot.merchant(), "Northwind Barbers");
     assert_eq!(snapshot.publisher(), "Example Publisher");
     assert_eq!(snapshot.amount().currency(), "USD");
     assert_eq!(snapshot.amount().minor(), 8_500);

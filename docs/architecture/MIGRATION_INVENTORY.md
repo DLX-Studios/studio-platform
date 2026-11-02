@@ -5,10 +5,10 @@ Status: active migration control document. Update this file before moving a vert
 ## Repository boundary
 
 `studio-runtime` is the public native runtime repository and migration target.
-`/home/sir/Nova_Projects/studio-nova/apps/website` is explicitly out of scope: it is not a source,
-reference, test fixture, or asset provider for this migration and must never be copied into this
-repository. The rest of `studio-nova` is also not imported wholesale. A file may cross that
-repository boundary only after an individual provenance, license, secret, and ownership review.
+`<former-studio-site>/apps/website` is explicitly out of scope: it is not a source, reference,
+test fixture, or asset provider for this migration and must never be copied into this repository.
+The rest of that repository is not imported wholesale. A file may cross that repository boundary
+only after an individual provenance, license, secret, and ownership review.
 
 Use copy-then-adapt for approved source imports so the source repository remains intact. Record the
 source path, upstream revision, license, destination, and changes in `THIRD_PARTY_NOTICES.md` before
