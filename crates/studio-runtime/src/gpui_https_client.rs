@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 /// available once GPUI starts, so this adapter is created before launch and initialized from the
 /// app context before any guest action can use it.
 #[derive(Clone, Default)]
-pub(crate) struct GpuiHttpsClient {
+pub struct GpuiHttpsClient {
     client: Arc<OnceLock<Arc<dyn HttpClient>>>,
 }
 
@@ -25,7 +25,7 @@ impl std::fmt::Debug for GpuiHttpsClient {
 }
 
 impl GpuiHttpsClient {
-    pub(crate) fn install(&self, client: Arc<dyn HttpClient>) -> bool {
+    pub fn install(&self, client: Arc<dyn HttpClient>) -> bool {
         self.client.set(client).is_ok()
     }
 

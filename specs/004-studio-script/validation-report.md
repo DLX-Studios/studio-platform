@@ -50,8 +50,33 @@ ignored). The root foundation/documentation suite also passed 27 tests. These ar
 checkpoints, not newly executed native/editor/live-service acceptance. The full feature gate's
 remaining Bun, graphical and external requirements must be reconciled separately.
 
-Source audit found a shipped-path gap despite the existing checked task list: `studio dev`
-uses `watch::run` to rebuild bundles and spawn the Runtime child, rather than wiring the Rust
-IR evaluator/hot swap required by FR-004/FR-011. This feature is not fully converged; see C016.
+At that snapshot, the source audit found a shipped-path gap despite the checked task list:
+`studio dev` used `watch::run` to rebuild bundles and spawn the Runtime child, rather than
+wiring the Rust IR evaluator/hot swap required by FR-004/FR-011. The native follow-up below
+addresses that integration gap; other acceptance requirements remain separate.
 
 See [completion audit](../../docs/development/PROJECT_COMPLETION_AUDIT.md) for source findings.
+
+## Native CLI hot reload follow-up — 2026-11-01
+
+The audited shipped-path gap is now wired through `studio-cli::dev`: the CLI owns its native
+window and commits loose IR/Wasm artifacts, with no archive build per edit. Shared host code
+moved into `studio-runtime`; `studio-app` accepts production bundle input only. The SDK's
+development entry exports support optional state transfer for linked Wasm module replacements.
+
+The native Wayland smoke scenario committed seven revisions spanning IR edits, invalid-edit
+rejection/recovery, an asset edit, two Wasm versions and an explicit restart. One CLI process
+and one compositor window persisted, and no `.studio` package was created. Unit coverage
+executes real compiled SDK snapshot/restore and IR state migration. See
+[`HOT_RELOAD.md`](../../docs/development/HOT_RELOAD.md) for the current single-entry/compiler
+unit boundaries. This evidence does not close unrelated feature 004 acceptance gates or claim
+native Windows/macOS execution.
+
+Validation for this follow-up: 1,317 workspace Rust tests passed (2 intentionally ignored),
+with focused CLI/compiler and Wasm policy tests reused after final cache/lint refinements.
+Formatting and workspace Clippy with warnings denied passed. TypeScript/SDK checks passed,
+as did 17 SDK tests, 27 foundation/documentation checks, the updated native startup test and
+the seven-revision native hot reload scenario (including long relative project paths and clean
+window-close shutdown). A standalone `studio-app` binary check passed without development
+features, and its normal dependency tree excludes `studio-script`, `studio-design`, `rsvelte`
+and the source parser. Release artifact sizes were not remeasured.

@@ -10,15 +10,15 @@
 
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 
 use studio_host::reload::{ReloadOutcome, ReloadRequest, ReloadStage, SwapSession};
 
-use crate::cli::{LaunchMode, LaunchRequest};
-use crate::host::{LaunchError, StudioHost};
-use crate::plugin_surface::PluginSurface;
+use studio_runtime::cli::{LaunchMode, LaunchRequest};
+use studio_runtime::host::{LaunchError, StudioHost};
+use studio_runtime::plugin_surface::PluginSurface;
 
 /// Current-route provider for the reload route policy.
 pub trait RouteSource: Send + Sync {
@@ -182,7 +182,7 @@ impl ReloadInbox {
 
 /// Map a host admission failure onto the reload stage vocabulary.
 fn launch_outcome(error: &LaunchError) -> (ReloadStage, &'static str, String) {
-    use crate::host::LaunchErrorCode;
+    use studio_runtime::host::LaunchErrorCode;
     let stage = match error.code() {
         LaunchErrorCode::GuestInvalid | LaunchErrorCode::UiInvalid => ReloadStage::Instantiate,
         LaunchErrorCode::DisplayUnavailable => ReloadStage::Commit,

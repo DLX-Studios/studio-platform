@@ -42,22 +42,43 @@ impl ModulePolicy {
     ) -> Result<ValidatedModule, PolicyError> {
         let module = Module::new(&engine.inner, bytes)
             .map_err(|error| PolicyError::CompilationRejected(error.to_string()))?;
-        Self::validate_imports(&module)?;
+        Self::validate_imports(&module, false)?;
         self.validate_resources(bytes, &module)?;
-        Self::validate_exports(&module)?;
+        Self::validate_exports(&module, false)?;
         Ok(ValidatedModule { module })
     }
 
-    fn validate_imports(module: &Module) -> Result<(), PolicyError> {
+    /// Validate a development module, permitting the optional paired SDK hot-state exports.
+    /// Production validation continues to require exactly the five normal ABI entries.
+    ///
+    /// # Errors
+    /// Returns normal policy failures, or rejects incomplete/incorrect development hooks.
+    #[cfg(feature = "development")]
+    pub fn validate_development(
+        &self,
+        engine: &SandboxEngine,
+        bytes: &[u8],
+    ) -> Result<ValidatedModule, PolicyError> {
+        let module = Module::new(&engine.inner, bytes)
+            .map_err(|error| PolicyError::CompilationRejected(error.to_string()))?;
+        Self::validate_imports(&module, true)?;
+        self.validate_resources(bytes, &module)?;
+        Self::validate_exports(&module, true)?;
+        Ok(ValidatedModule { module })
+    }
+
+    fn validate_imports(module: &Module, development: bool) -> Result<(), PolicyError> {
         let imports: Vec<_> = module.imports().collect();
-        // Exactly `studio_host.emit`, plus AssemblyScript's optional
-        // `env.abort` trap import — nothing else.
-        if imports.is_empty() || imports.len() > 2 {
+        // A development wrapper may declare the same emit function separately
+        // from handwritten application code. Both imports bind the same host function.
+        let maximum_emit_imports = if development { 2 } else { 1 };
+        if imports.is_empty() || imports.len() > maximum_emit_imports + 1 {
             return Err(PolicyError::ImportInvalid(
                 "module must import studio_host.emit with optional env.abort".to_owned(),
             ));
         }
-        let mut saw_emit = false;
+        let mut emit_count = 0;
+        let mut abort_count = 0;
         for import in &imports {
             if import.module() == "studio_host" && import.name() == "emit" {
                 let ExternType::Func(function) = import.ty() else {
@@ -70,8 +91,9 @@ impl ModulePolicy {
                         "studio_host.emit must have (i32, i32) -> i32".to_owned(),
                     ));
                 }
-                saw_emit = true;
+                emit_count += 1;
             } else if import.module() == "env" && import.name() == "abort" {
+                abort_count += 1;
                 let ExternType::Func(function) = import.ty() else {
                     return Err(PolicyError::ImportInvalid(
                         "env.abort must be a function".to_owned(),
@@ -92,7 +114,9 @@ impl ModulePolicy {
                 ));
             }
         }
-        if !saw_emit {
+        if emit_count == 0
+            || (development && (emit_count > maximum_emit_imports || abort_count > 1))
+        {
             return Err(PolicyError::ImportInvalid(
                 "module must import exactly studio_host.emit".to_owned(),
             ));
@@ -185,7 +209,7 @@ impl ModulePolicy {
         Ok(())
     }
 
-    fn validate_exports(module: &Module) -> Result<(), PolicyError> {
+    fn validate_exports(module: &Module, development: bool) -> Result<(), PolicyError> {
         let exports: BTreeMap<_, _> = module
             .exports()
             .map(|export| (export.name().to_owned(), export.ty()))
@@ -197,6 +221,21 @@ impl ModulePolicy {
             "studio_event",
             "studio_init",
         ];
+        let mut expected = expected.to_vec();
+        if development
+            && (exports.contains_key("studio_dev_snapshot")
+                || exports.contains_key("studio_dev_restore"))
+        {
+            expected.extend(["studio_dev_snapshot", "studio_dev_restore"]);
+            for name in ["studio_dev_snapshot", "studio_dev_restore"] {
+                check_function(
+                    &exports,
+                    name,
+                    &[ValType::I32, ValType::I32],
+                    &[ValType::I32],
+                )?;
+            }
+        }
         if exports.len() != expected.len()
             || expected.iter().any(|name| !exports.contains_key(*name))
         {

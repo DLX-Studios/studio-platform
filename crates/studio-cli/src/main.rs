@@ -34,8 +34,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Watch sources, rebuild the bundle on change, and present it through the
-    /// runtime host in development mode.
+    /// Open the native development host with content-hashed IR/Wasm hot reload.
     Dev {
         #[arg(default_value = "pos-desktop")]
         example: String,
@@ -200,15 +199,7 @@ fn dev(example: &str, port: u16) -> i32 {
             return failure.exit_code();
         }
     };
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
-    watch::run(
-        &request.project_root,
-        &request.example,
-        port,
-        &cancelled,
-        watch::WatchConfig::default(),
-        None,
-    )
+    studio_cli::dev::run(request, port)
 }
 
 /// JSON envelope accepted by the headless Designer replay command.
@@ -540,6 +531,9 @@ fn print_io_diagnostic(path: &Path, error: &std::io::Error) {
 }
 
 fn preview(example: &str) -> i32 {
+    if Path::new(example).is_file() {
+        return studio_cli::dev::preview(Path::new(example));
+    }
     let request = match build::BuildRequest::resolve(example) {
         Ok(request) => request,
         Err(failure) => {
@@ -560,34 +554,7 @@ fn preview(example: &str) -> i32 {
         .report();
         return BuildPhase::Watch.exit_code();
     }
-    watch::raise_dev_stack();
-    let status = Command::new(watch::runtime_binary())
-        .arg("--dev")
-        .arg(&bundle)
-        .env("LIBGL_ALWAYS_SOFTWARE", "1")
-        .env("GALLIUM_DRIVER", "llvmpipe")
-        .status();
-    match status {
-        Ok(status) if status.success() => build::EXIT_SUCCESS,
-        Ok(status) => {
-            BuildDiagnostic::error(
-                BuildPhase::Watch,
-                "BUILD_WATCH_RUNTIME_EXITED",
-                format!("runtime host exited: {status}"),
-            )
-            .report();
-            BuildPhase::Watch.exit_code()
-        }
-        Err(error) => {
-            BuildDiagnostic::error(
-                BuildPhase::Watch,
-                "BUILD_WATCH_RUNTIME",
-                format!("launch runtime host: {error}"),
-            )
-            .report();
-            BuildPhase::Watch.exit_code()
-        }
-    }
+    studio_cli::dev::preview(&bundle)
 }
 
 fn generate() -> i32 {

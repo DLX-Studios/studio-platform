@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-studio_binary="${STUDIO_APP_BINARY:-${repository_root}/target/debug/studio-app}"
+studio_binary="${STUDIO_CLI_BINARY:-${repository_root}/target/debug/studio}"
 compositor_config="${repository_root}/tests/platform/sway-headless.conf"
 
 if ! grep -Eq '^xwayland[[:space:]]+disable$' "${compositor_config}"; then
@@ -26,7 +26,7 @@ if ! command -v setsid >/dev/null 2>&1; then
 fi
 
 if [[ ! -x "${studio_binary}" ]]; then
-  cargo build --locked -p studio-app
+  cargo build --locked -p studio-cli
 fi
 
 # The native host requires a launch target; the starter bundle built by the
@@ -44,7 +44,7 @@ fi
 set +e
 unsupported_output="$(
   env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET \
-    "${studio_binary}" 2>&1
+    "${studio_binary}" preview "${bundle}" 2>&1
 )"
 unsupported_status=$?
 set -e
@@ -119,7 +119,7 @@ fi
 
 export WAYLAND_DISPLAY="${wayland_socket##*/}"
 
-"${studio_binary}" --dev "${bundle}" >"${runtime_dir}/studio.log" 2>&1 &
+"${studio_binary}" preview "${bundle}" >"${runtime_dir}/studio.log" 2>&1 &
 studio_pid=$!
 
 for _ in {1..20}; do

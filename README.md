@@ -91,7 +91,9 @@ Developers can write plugins by hand, generate them with an LLM, or mix both. St
 bun install --frozen-lockfile
 cargo build --locked --release -p studio-app   # Native binary
 bun run ./scripts/build-example.ts pos-desktop  # asc → wasm → .studio (deterministic)
-./target/release/studio-app --dev examples/pos-desktop/build/pos-desktop.studio
+cargo run --locked -p studio-cli -- dev pos-desktop  # Native development host, no bundle per edit
+# Preview an existing local bundle: studio preview examples/pos-desktop/build/pos-desktop.studio
+# Production: studio-app --bundle /absolute/path/app.studio (requires provisioned publisher trust)
 
 # launch the standalone native Designer
 cargo run --locked -p studio-designer
@@ -177,9 +179,13 @@ public/private repository boundary are recorded in
 
 Dev: `studio dev` watches source inputs, `studio-script` adapts a pinned `rsvelte` AST into typed
 Studio IR, and the Rust development runtime atomically swaps compatible IR while preserving retained
-GPUI identity. Production lowers the same validated IR to AssemblyScript and compiles it with ASC.
+GPUI identity. AssemblyScript projects compile cached Wasm modules directly; the CLI injects optional
+SDK hot state hooks and swaps the guest in the same window. Asset edits refresh without restarting
+the guest. Production lowers the same validated IR to AssemblyScript and compiles it with ASC.
 QuickJS is not part of the architecture. Full pipeline:
 [docs/STUDIO_SCRIPT_TRANSFORM_PIPELINE.md](docs/STUDIO_SCRIPT_TRANSFORM_PIPELINE.md).
+
+Native reload details and SDK state registration: [docs/development/HOT_RELOAD.md](docs/development/HOT_RELOAD.md).
 
 File convention (planned): `app.studio.ts`, `components/*.studio`, `routes/*.studio`, generated `assembly/routes.generated.ts` (`declaredRoutes`).
 

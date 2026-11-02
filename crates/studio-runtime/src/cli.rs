@@ -66,6 +66,25 @@ impl LaunchRequest {
         })
     }
 
+    /// Parse the production executable's sole supported command line.
+    ///
+    /// # Errors
+    /// Rejects development selectors and reload sockets before loading a file.
+    pub fn parse_runtime_from<I, T>(arguments: I) -> Result<Self, LaunchError>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString>,
+    {
+        let mut arguments = arguments.into_iter().map(Into::into);
+        let _program = arguments.next();
+        let selector = arguments.next().ok_or(LaunchError::ArgumentsInvalid)?;
+        let path = arguments.next().ok_or(LaunchError::ArgumentsInvalid)?;
+        if selector != "--bundle" || path.is_empty() || arguments.next().is_some() {
+            return Err(LaunchError::ArgumentsInvalid);
+        }
+        Ok(Self::new(LaunchMode::Production, PathBuf::from(path)))
+    }
+
     /// Selected trust mode.
     #[must_use]
     pub const fn mode(&self) -> LaunchMode {

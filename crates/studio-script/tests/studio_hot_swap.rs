@@ -140,3 +140,21 @@ fn swaps_never_mutate_their_inputs() {
     let _ = replace_module(&live, &next);
     assert_eq!(live, snapshot, "planning is pure");
 }
+
+#[test]
+fn live_session_recomputes_derived_values_after_preserving_state() {
+    use std::collections::BTreeMap;
+    use studio_script::eval::InteractionSession;
+    let source = r#"<script lang="ts">
+let quantity = $state(1);
+let total = $derived(100 / quantity);
+function add() { quantity += 1; }
+</script><Column id="content"><Text id="total">{total}</Text><Button id="add" onclick={add}>Add</Button></Column>"#;
+    let old = compile("app", source).unwrap();
+    let (_, mut session) =
+        InteractionSession::mount(&old, &old.components[0], &BTreeMap::new()).unwrap();
+    session.apply(&old.components[0], "add", "pressed").unwrap();
+    let replacement = compile("app", &source.replace("$state(1)", "$state(0)")).unwrap();
+    let (tree, _) = session.hot_swap(&old, &replacement, "app").unwrap();
+    assert_eq!(tree.root.children[0].children[0].props["text"], "50");
+}

@@ -33,7 +33,11 @@ pub enum InstanceLifecycle {
 pub struct PluginInstance {
     engine: SandboxEngine,
     store: Store<StoreData>,
-    _instance: Instance,
+    #[allow(
+        dead_code,
+        reason = "retains the guest instance when optional development hooks are disabled"
+    )]
+    instance: Instance,
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
     dealloc: TypedFunc<(i32, i32), ()>,
@@ -148,7 +152,7 @@ impl PluginInstance {
         Ok(Self {
             engine,
             store,
-            _instance: instance,
+            instance,
             memory,
             alloc,
             dealloc,
@@ -191,6 +195,15 @@ impl PluginInstance {
     ///
     /// Returns a terminal [`RuntimeError`] for size, allocation, memory, ABI, or guest failures.
     pub fn invoke_event_bytes(&mut self, bytes: &[u8]) -> Result<CallOutcome, RuntimeError> {
+        let function = self.event.clone();
+        self.invoke_bytes(&function, bytes)
+    }
+
+    fn invoke_bytes(
+        &mut self,
+        function: &TypedFunc<(i32, i32), i32>,
+        bytes: &[u8],
+    ) -> Result<CallOutcome, RuntimeError> {
         if self.lifecycle == InstanceLifecycle::Terminated {
             return Err(RuntimeError::GuestTerminated);
         }
@@ -217,12 +230,67 @@ impl PluginInstance {
         self.memory
             .write(&mut self.store, pointer_usize, bytes)
             .map_err(|error| self.terminate(RuntimeError::AbiInvalid(error.to_string())))?;
-        let outcome = self.invoke_event(pointer, length)?;
+        let outcome =
+            self.invoke_with_fuel(function, pointer, length, self.budgets.fuel_per_call)?;
         let dealloc = self.dealloc.clone();
         dealloc
             .call(&mut self.store, (pointer, length))
             .map_err(|error| self.terminate(classify_trap(&error)))?;
         Ok(outcome)
+    }
+
+    /// Capture an optional bounded, guest-defined hot state document.
+    /// No hook or no emitted document means the new module starts with fresh state.
+    ///
+    /// # Errors
+    /// Returns guest failures or rejects multiple/oversized snapshot emissions.
+    #[cfg(feature = "development")]
+    pub fn snapshot_development_state(&mut self) -> Result<Option<Vec<u8>>, RuntimeError> {
+        let Some(function) = self
+            .instance
+            .get_func(&mut self.store, "studio_dev_snapshot")
+        else {
+            return Ok(None);
+        };
+        let function = function
+            .typed::<(i32, i32), i32>(&self.store)
+            .map_err(|error| RuntimeError::AbiInvalid(error.to_string()))?;
+        let outcome = self.invoke_with_fuel(&function, 0, 0, self.budgets.fuel_per_call)?;
+        if outcome.emissions.len() > 1
+            || outcome
+                .emissions
+                .first()
+                .is_some_and(|bytes| bytes.len() > 65_536)
+        {
+            return Err(RuntimeError::AbiInvalid(
+                "development snapshot must be one document of at most 64 KiB".into(),
+            ));
+        }
+        Ok(outcome.emissions.into_iter().next())
+    }
+
+    /// Restore a snapshot into a newly instantiated module before initialization.
+    ///
+    /// # Errors
+    /// Rejects missing/incompatible hooks and all ordinary bounded-call failures.
+    #[cfg(feature = "development")]
+    pub fn restore_development_state(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
+        if bytes.len() > 65_536 {
+            return Err(RuntimeError::AbiInvalid(
+                "development snapshot exceeds 64 KiB".into(),
+            ));
+        }
+        let function = self
+            .instance
+            .get_typed_func::<(i32, i32), i32>(&mut self.store, "studio_dev_restore")
+            .map_err(|error| RuntimeError::AbiInvalid(error.to_string()))?;
+        let outcome = self.invoke_bytes(&function, bytes)?;
+        if !outcome.emissions.is_empty() {
+            return Err(RuntimeError::AbiInvalid(
+                "development restore must not emit UI before initialization".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn invoke_with_fuel(

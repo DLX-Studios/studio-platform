@@ -473,12 +473,18 @@ Each stage should include focused diagnostics, malformed-input tests, determinis
 
 This pipeline belongs to **Feature 004 — Studio Script and Embedded Development Host** in [ROADMAP.md](ROADMAP.md). It depends on **003 — Studio Toolchain and Development Workflow** for reliable watching, cancellation, content-stable generation, deterministic module graphs, and one active build at a time.
 
-`studio dev` should reuse shared host and rendering libraries rather than launching or duplicating the complete `studio-app` executable:
+`studio dev` owns the native development window and reuses the same runtime and component libraries as the production executable:
 
 ```text
-studio-app  → studio-host + studio-shell + studio-renderer + studio-wasm
-studio dev  → studio-dev + studio-script + studio-host + studio-shell + studio-renderer
+studio-app  → studio-runtime + studio-components + studio-host + studio-wasm
+studio dev  → studio-cli::dev + studio-script + studio-runtime(development) + studio-components
 ```
+
+The CLI interprets Studio IR directly, or compiles a content-addressed linked Wasm artifact for
+AssemblyScript projects. Development updates pass through an in-process worker/UI commit channel;
+no archive is created. Production `studio-app` accepts only signed `--bundle` launches. Its normal
+dependency graph excludes Studio Script, the Svelte frontend, Designer persistence and reload
+server. See [native hot reload](development/HOT_RELOAD.md) for cache granularity and SDK hooks.
 
 ## File conventions
 

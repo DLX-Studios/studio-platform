@@ -46,7 +46,9 @@ impl BuildRequest {
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_else(|| "project".to_owned());
-            let root = candidate.to_path_buf();
+            let root = candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.to_path_buf());
             return Ok(Self {
                 output_bundle: root.join("build").join(format!("{name}.studio")),
                 example: name,
@@ -248,7 +250,7 @@ fn compile(request: &BuildRequest) -> Result<BTreeMap<String, Vec<u8>>, BuildFai
 /// single `components/*.studio` or `routes/*.studio` file. Multi-entry
 /// projects need the module-graph composer (STUDIO340 territory) and are not
 /// claimed here.
-fn studio_entry(request: &BuildRequest) -> Option<PathBuf> {
+pub(crate) fn studio_entry(request: &BuildRequest) -> Option<PathBuf> {
     let root = &request.project_root;
     let app = root.join("app.studio");
     if app.is_file() {
@@ -468,7 +470,7 @@ fn package(
 
 /// Merge staged asset keys into an in-memory copy of the project manifest
 /// so the packer sees exactly the supplied asset set.
-fn effective_manifest<'a>(
+pub(crate) fn effective_manifest<'a>(
     manifest_bytes: &[u8],
     keys: impl Iterator<Item = &'a String>,
 ) -> Result<Vec<u8>, BuildFailure> {
@@ -543,7 +545,7 @@ fn compiled_module_path(request: &BuildRequest) -> PathBuf {
 /// Read manifest-declared assets from the project, then overlay staged icon
 /// bytes (collected icons win on key collision; identical bytes when an
 /// override committed the same file the manifest already declares).
-fn read_assets(
+pub(crate) fn read_assets(
     request: &BuildRequest,
     staged: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<String, Vec<u8>>, BuildFailure> {
@@ -790,14 +792,14 @@ pub fn publish_template(request: &BuildRequest) -> Result<PathBuf, BuildFailure>
     Ok(destination)
 }
 
-fn asc_path() -> PathBuf {
+pub(crate) fn asc_path() -> PathBuf {
     repo_root().join("sdk/assemblyscript/node_modules/assemblyscript/bin/asc.js")
 }
 
 /// Guest memory pages declared to asc: the manifest `limits.memoryMiB`
 /// ceiling in 64 KiB pages. The host module policy requires a declared
 /// maximum, so every compiled guest carries the manifest ceiling.
-fn memory_pages(request: &BuildRequest) -> u64 {
+pub(crate) fn memory_pages(request: &BuildRequest) -> u64 {
     let mib = std::fs::read_to_string(request.project_root.join("manifest.json"))
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
@@ -818,7 +820,9 @@ pub fn repo_root() -> PathBuf {
 /// Typed lucide collection: references resolved by parsing, staged under
 /// `build/staging/icons/`, manifest never rewritten. Returns staged bytes by
 /// asset rel path (`assets/icons/<name>.svg`).
-fn collect_lucide(request: &BuildRequest) -> Result<BTreeMap<String, Vec<u8>>, BuildFailure> {
+pub(crate) fn collect_lucide(
+    request: &BuildRequest,
+) -> Result<BTreeMap<String, Vec<u8>>, BuildFailure> {
     use crate::assets::{collect_references, resolve_collection, stage_collection};
 
     let references = collect_references(&request.project_root);
@@ -852,46 +856,6 @@ fn collect_lucide(request: &BuildRequest) -> Result<BTreeMap<String, Vec<u8>>, B
         bytes.insert(format!("assets/icons/{name}.svg"), icon.bytes.clone());
     }
     Ok(bytes)
-}
-
-/// Scan a project's `routes/` directory into sorted route paths.
-pub(crate) fn scan_routes(project: &std::path::Path) -> Vec<String> {
-    let routes_dir = project.join("routes");
-    let mut routes = Vec::new();
-    if !routes_dir.is_dir() {
-        return routes;
-    }
-    let walk = walkdir::WalkDir::new(&routes_dir);
-    for entry in walk.into_iter().filter_map(Result::ok) {
-        if entry
-            .path()
-            .extension()
-            .is_none_or(|extension| extension != "ts")
-        {
-            continue;
-        }
-        let Ok(rel) = entry.path().strip_prefix(&routes_dir) else {
-            continue;
-        };
-        let mut route = format!(
-            "/{}",
-            rel.with_extension("").to_string_lossy().replace('\\', "/")
-        );
-        if route == "/index" {
-            route = "/".to_string();
-        } else if route.ends_with("/index") {
-            route = route.trim_end_matches("index").to_string();
-            if route.ends_with('/') && route.len() > 1 {
-                route.pop();
-            }
-            if route.is_empty() {
-                route = "/".to_string();
-            }
-        }
-        routes.push(route);
-    }
-    routes.sort();
-    routes
 }
 
 /// Content-stable route generation: `routes.generated.ts` is rewritten only

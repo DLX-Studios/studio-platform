@@ -64,7 +64,7 @@ requires a graphical session (Wayland or X11 on Linux).
 
 Routine CI reuses the debug profile for its native startup probe, with debug symbols and
 incremental compilation disabled. It reports filesystem and artifact usage so exhaustion
-can be diagnosed without deleting unrelated caches. Set `STUDIO_APP_BINARY` to the actual
+can be diagnosed without deleting unrelated caches. Set `STUDIO_CLI_BINARY` to the actual
 configured target directory when using the shared development cache.
 
 Release builds belong to an explicit release checkpoint (`cargo build --locked --release -p studio-app`);
@@ -84,8 +84,8 @@ bun test sdk/assemblyscript/tests/component-catalog.test.ts
 bun run generate:protocol
 git diff --exit-code -- protocol sdk/assemblyscript/assembly/generated
 ./scripts/check-platform-features.sh
-cargo build --locked -p studio-app
-STUDIO_APP_BINARY=target/debug/studio-app ./scripts/test-headless-wayland.sh
+cargo build --locked -p studio-app -p studio-cli
+STUDIO_CLI_BINARY=target/debug/studio ./scripts/test-headless-wayland.sh
 ```
 
 On VFAT/exFAT or another symlink-hostile checkout, replace `bun install --frozen-lockfile` with

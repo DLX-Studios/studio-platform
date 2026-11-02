@@ -53,6 +53,13 @@ fn validate(builder: WasmFixtureBuilder) -> Result<(), PolicyErrorCode> {
 #[test]
 fn accepts_exact_studio_v1_surface() {
     validate(abi_builder()).unwrap();
+    // Existing modules may alias the same host function through two import entries.
+    validate(abi_builder().import_function(
+        "studio_host",
+        "emit",
+        signature(&[ValueType::I32, ValueType::I32], &[ValueType::I32]),
+    ))
+    .unwrap();
 }
 
 #[test]

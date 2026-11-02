@@ -8,16 +8,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-use crate::build::{build_example, BuildDiagnostic, BuildPhase, BuildRequest, EXIT_CANCELLED};
+use crate::build::{BuildDiagnostic, BuildPhase};
 use studio_protocol::reload::{
     connect_endpoint, decode_outcome, encode_request, encode_restart, read_line, send_line,
-    socket_path, DecodedOutcome, ReloadRequest,
+    DecodedOutcome, ReloadRequest,
 };
 
 /// Watch tuning; the defaults match the documented contract.
@@ -180,12 +178,12 @@ impl WatchSession {
     }
 }
 
-/// Raise the soft stack ceiling before launching the runtime host.
+/// Raise the soft stack ceiling before opening the CLI development window.
 ///
 /// Unoptimized GPUI frames are large: a 10-deep plugin tree overflows the
 /// default 8 MiB main-thread stack in dev builds (release inlines this
 /// away). Best-effort — keeps the inherited limit when raising fails — and
-/// inherited by the spawned runtime.
+/// applied to the native development host.
 #[allow(
     clippy::useless_conversion,
     reason = "libc::rlim_t width is platform-dependent; u64::from is a no-op only on 64-bit targets"
@@ -225,138 +223,6 @@ pub fn raise_dev_stack() {
 /// Windows uses the stack reservation of the executable; Unix resource limits do not apply.
 #[cfg(not(unix))]
 pub fn raise_dev_stack() {}
-
-pub fn runtime_binary() -> PathBuf {
-    if let Ok(binary) = std::env::var("STUDIO_APP_BINARY") {
-        return PathBuf::from(binary);
-    }
-    if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
-        let candidate = PathBuf::from(target)
-            .join("debug")
-            .join(format!("studio-app{}", std::env::consts::EXE_SUFFIX));
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("target/debug")
-        .join(format!("studio-app{}", std::env::consts::EXE_SUFFIX))
-}
-
-/// Run the dev watch loop until cancelled or the runtime exits.
-///
-/// Builds once up front, launches the runtime host in development mode, then
-/// rebuilds on settled source changes. Returns the process exit code.
-/// `runtime_override` replaces the resolved runtime binary (used by tests).
-pub fn run(
-    project: &Path,
-    example: &str,
-    port: u16,
-    cancel: &AtomicBool,
-    config: WatchConfig,
-    runtime_override: Option<&Path>,
-) -> i32 {
-    println!(
-        "studio dev {example} on :{port} watching assembly/ routes/ assets/ (generator outputs excluded)"
-    );
-    let bundle = match build_example(&BuildRequest {
-        example: example.to_owned(),
-        project_root: project.to_path_buf(),
-        output_bundle: project.join("build").join(format!("{example}.studio")),
-    }) {
-        Ok(bundle) => bundle,
-        Err(failure) => {
-            failure.report();
-            return failure.exit_code();
-        }
-    };
-    println!("built {}", bundle.display());
-
-    let socket = socket_path(&project.join("build"));
-    let binary = runtime_override
-        .map(Path::to_path_buf)
-        .unwrap_or_else(runtime_binary);
-    raise_dev_stack();
-    let child = Command::new(&binary)
-        .arg("--dev")
-        .arg(&bundle)
-        .arg("--reload-socket")
-        .arg(&socket)
-        .env("LIBGL_ALWAYS_SOFTWARE", "1")
-        .env("GALLIUM_DRIVER", "llvmpipe")
-        .spawn();
-    let mut child = match child {
-        Ok(child) => child,
-        Err(error) => {
-            BuildDiagnostic::error(
-                BuildPhase::Watch,
-                "BUILD_WATCH_RUNTIME",
-                format!("launch runtime host {}: {error}", binary.display()),
-            )
-            .report();
-            return BuildPhase::Watch.exit_code();
-        }
-    };
-
-    let mut session = WatchSession::new();
-    loop {
-        if cancel.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return EXIT_CANCELLED;
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                BuildDiagnostic::error(
-                    BuildPhase::Watch,
-                    "BUILD_WATCH_RUNTIME_EXITED",
-                    format!("runtime host exited: {status}"),
-                )
-                .report();
-                return BuildPhase::Watch.exit_code();
-            }
-            Ok(None) => {}
-            Err(error) => {
-                BuildDiagnostic::error(
-                    BuildPhase::Watch,
-                    "BUILD_WATCH_RUNTIME",
-                    format!("poll runtime host: {error}"),
-                )
-                .report();
-                return BuildPhase::Watch.exit_code();
-            }
-        }
-        std::thread::sleep(config.poll);
-        session.detect_changes(project);
-        if session.pending() && session.settle_elapsed(config.settle) {
-            session.consume_pending();
-            println!("change detected — rebuilding");
-            let request = BuildRequest {
-                example: example.to_owned(),
-                project_root: project.to_path_buf(),
-                output_bundle: project.join("build").join(format!("{example}.studio")),
-            };
-            let rebuilt = match build_example(&request) {
-                Ok(bundle) => bundle,
-                Err(failure) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    failure.report();
-                    return failure.exit_code();
-                }
-            };
-            // A change that arrived while building was already captured by the
-            // next detect_changes; the loop naturally performs exactly one
-            // trailing rebuild with the final state.
-            println!("rebuild ok — reloading {}", rebuilt.display());
-            let routes = crate::build::scan_routes(project);
-            if let Err(code) = request_reload(&rebuilt, &socket, &routes) {
-                return code;
-            }
-        }
-    }
-}
 
 /// Send one reload request for a fresh bundle and await the outcome.
 ///

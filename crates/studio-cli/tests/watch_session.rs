@@ -4,7 +4,6 @@
 
 mod common;
 
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -105,67 +104,6 @@ fn change_during_build_yields_a_single_trailing_rebuild() {
     // No further changes: no additional builds are pending.
     assert!(!session.detect_changes(&project));
     assert!(!session.pending());
-}
-
-#[test]
-#[cfg(unix)]
-fn cancellation_stops_cleanly_and_leaves_the_bundle_intact() {
-    let root = TempDir::new().unwrap();
-    let project = common::seed_project(root.path(), "watched");
-    let script = root.path().join("runtime.sh");
-    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-
-    let cancelled = AtomicBool::new(true);
-    let code = studio_cli::watch::run(
-        &project,
-        "watched",
-        0,
-        &cancelled,
-        WatchConfig::default(),
-        Some(script.as_path()),
-    );
-    assert_eq!(code, 130, "cancel maps to the documented cancelled family");
-
-    let bundle = project.join("build/watched.studio");
-    assert!(bundle.is_file(), "initial build completed atomically");
-    let leftovers: Vec<_> = std::fs::read_dir(project.join("build"))
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.ends_with(".tmp"))
-        .collect();
-    assert!(leftovers.is_empty(), "no partial output remains");
-
-    // A subsequent session runs normally (no lock state was left behind).
-    let fresh = AtomicBool::new(true);
-    assert_eq!(
-        studio_cli::watch::run(
-            &project,
-            "watched",
-            0,
-            &fresh,
-            WatchConfig::default(),
-            Some(script.as_path()),
-        ),
-        130
-    );
-}
-
-#[test]
-fn missing_runtime_is_a_structured_watch_failure() {
-    let root = TempDir::new().unwrap();
-    let project = common::seed_project(root.path(), "watched");
-    let cancelled = AtomicBool::new(false);
-    let code = studio_cli::watch::run(
-        &project,
-        "watched",
-        0,
-        &cancelled,
-        WatchConfig::default(),
-        Some(std::path::Path::new("/nonexistent/studio-app")),
-    );
-    assert_eq!(code, 14, "watch family exit code");
 }
 
 #[test]

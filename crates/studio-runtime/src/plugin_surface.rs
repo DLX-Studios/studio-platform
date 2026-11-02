@@ -83,6 +83,26 @@ impl PluginSurface {
         }
     }
 
+    /// Capture the SDK's opt-in state document for a development module replacement.
+    ///
+    /// # Errors
+    /// Returns a guest failure if its snapshot hook violates the bounded ABI.
+    #[cfg(feature = "development")]
+    pub fn snapshot_development_state(&mut self) -> Result<Option<Vec<u8>>, SurfaceError> {
+        self.instance
+            .snapshot_development_state()
+            .map_err(SurfaceError::from)
+    }
+
+    /// Refresh admitted asset bytes without restarting an unchanged guest.
+    #[cfg(feature = "development")]
+    pub fn replace_development_assets(
+        &mut self,
+        assets: std::collections::BTreeMap<String, Vec<u8>>,
+    ) {
+        self.assets = assets;
+    }
+
     /// Returns bytes for an asset admitted with the mounted bundle.
     #[must_use]
     pub(crate) fn asset(&self, path: &str) -> Option<&[u8]> {

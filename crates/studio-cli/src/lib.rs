@@ -8,3 +8,7 @@ pub mod build;
 pub mod new;
 pub mod routes;
 pub mod watch;
+
+/// Compatibility bundle reload server for SDK clients.
+pub mod bundle_reload;
+pub mod dev;

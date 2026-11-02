@@ -14,6 +14,12 @@ name = "studio_cli"
 path = "src/lib.rs"
 
 [dependencies]
+gpui-kit.workspace = true
+studio-runtime = { path = "../studio-runtime", features = ["development"] }
+studio-components = { path = "../studio-components" }
+studio-ui = { path = "../studio-ui" }
+studio-host = { path = "../studio-host", default-features = false, features = ["development"] }
+
 anyhow = "1"
 clap = { version = "4.6.6", features = ["derive"] }
 libc.workspace = true

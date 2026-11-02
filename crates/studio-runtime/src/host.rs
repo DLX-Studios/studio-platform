@@ -124,7 +124,7 @@ pub enum LaunchErrorCode {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LaunchError {
     /// CLI did not select exactly one explicit mode and path.
-    #[error("usage: studio-app (--bundle <absolute-path> | --dev <local-path>)")]
+    #[error("usage: studio-app --bundle <absolute-path>")]
     ArgumentsInvalid,
     /// Path is not permitted for the selected mode.
     #[error("selected bundle path is invalid")]
@@ -451,6 +451,10 @@ impl StudioHost {
             return Err(LaunchError::DisplayUnavailable);
         }
         let (mode, path) = request.into_parts();
+        #[cfg(not(feature = "development"))]
+        if mode == LaunchMode::Development {
+            return Err(LaunchError::ArgumentsInvalid);
+        }
         if (mode == LaunchMode::Production && !path.is_absolute())
             || !path.metadata().is_ok_and(|metadata| {
                 metadata.file_type().is_file()
@@ -479,7 +483,6 @@ impl StudioHost {
             module: archive.module.clone(),
             assets: archive.assets,
         };
-        let render_assets = canonical_input.assets.clone();
         if mode == LaunchMode::Production {
             if self.config.trust_store.is_empty() {
                 return Err(LaunchError::TrustConfigurationInvalid(
@@ -498,6 +501,82 @@ impl StudioHost {
             canonical_bundle_document(&canonical_input)
                 .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
         }
+        self.prepare_application(
+            mode,
+            manifest,
+            canonical_input,
+            &archive_bytes,
+            migrations_complete,
+            https_client,
+            false,
+        )?
+        .mount()
+    }
+
+    /// Validate loose development artifacts without creating or reading an archive.
+    /// The returned guest is not initialized until the UI thread supplies live hot state.
+    ///
+    /// # Errors
+    /// Returns the same resource, manifest, capability and Wasm rejections as bundle admission.
+    #[cfg(feature = "development")]
+    pub fn prepare_development(
+        &self,
+        manifest_bytes: &[u8],
+        module: Vec<u8>,
+        assets: std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Result<PreparedPlugin, LaunchError> {
+        if self.display == NativeDisplayAvailability::Unavailable {
+            return Err(LaunchError::DisplayUnavailable);
+        }
+        let policy = self.config.archive_policy;
+        if module.len() > policy.max_module_bytes
+            || assets.values().map(Vec::len).sum::<usize>() > policy.max_asset_bytes
+            || assets.len() + 3 > policy.max_entries
+        {
+            return Err(LaunchError::BundleInvalid(
+                "development artifact exceeds resource limits".into(),
+            ));
+        }
+        let manifest = parse_manifest(manifest_bytes, self.config.manifest_policy)
+            .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+        if manifest.assets != assets.keys().cloned().collect::<Vec<_>>() {
+            return Err(LaunchError::BundleInvalid(
+                "declared assets do not match development assets".into(),
+            ));
+        }
+        let input = CanonicalBundleInput {
+            manifest: serde_json::from_slice(manifest_bytes)
+                .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?,
+            module_path: manifest.entry.clone(),
+            module,
+            assets,
+        };
+        let identity = canonical_bundle_document(&input)
+            .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
+        self.prepare_application(
+            LaunchMode::Development,
+            manifest,
+            input,
+            &identity,
+            false,
+            self.https_client.clone(),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_application(
+        &self,
+        mode: LaunchMode,
+        manifest: studio_package::ManifestV1,
+        canonical_input: CanonicalBundleInput,
+        identity_bytes: &[u8],
+        migrations_complete: bool,
+        https_client: Option<Arc<dyn HttpsClient>>,
+        development_exports: bool,
+    ) -> Result<PreparedPlugin, LaunchError> {
+        #[cfg(not(feature = "development"))]
+        let _ = development_exports;
         if !manifest.migrations.is_empty() && !migrations_complete {
             return Err(LaunchError::MigrationRequired);
         }
@@ -510,7 +589,7 @@ impl StudioHost {
 
         let provider_services = prepare_provider_services(
             &manifest,
-            &archive_bytes,
+            identity_bytes,
             mode,
             &provider_plan,
             https_client,
@@ -528,42 +607,100 @@ impl StudioHost {
             max_memory_pages: u64::from(manifest.limits.memory_mib) * 16,
             ..ModulePolicy::default()
         };
-        let validated = module_policy
-            .validate(&engine, &canonical_input.module)
-            .map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
+        let validated = {
+            #[cfg(feature = "development")]
+            if development_exports {
+                module_policy.validate_development(&engine, &canonical_input.module)
+            } else {
+                module_policy.validate(&engine, &canonical_input.module)
+            }
+            #[cfg(not(feature = "development"))]
+            module_policy.validate(&engine, &canonical_input.module)
+        }
+        .map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
         let budgets = RuntimeBudgets {
             max_memory_bytes: usize::from(manifest.limits.memory_mib) * 1024 * 1024,
             fuel_per_call: manifest.limits.event_fuel,
             ..RuntimeBudgets::default()
         };
-        let mut instance = PluginInstance::instantiate(engine, validated, budgets)
+        let instance = PluginInstance::instantiate(engine, validated, budgets)
             .map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
-        let outcome = instance
+        Ok(PreparedPlugin {
+            mode,
+            instance,
+            owner: manifest.id,
+            assets: canonical_input.assets,
+            protocol_limits: self.config.protocol_limits,
+            provider_plan,
+            provider_services,
+        })
+    }
+}
+
+/// A validated and instantiated guest awaiting initialization on its owning UI thread.
+/// Constructed by the host so development updates never bypass manifest or Wasm policy.
+pub struct PreparedPlugin {
+    mode: LaunchMode,
+    instance: PluginInstance,
+    owner: String,
+    assets: std::collections::BTreeMap<String, Vec<u8>>,
+    protocol_limits: ProtocolLimits,
+    provider_plan: studio_package::ProviderAdmissionPlan,
+    provider_services: Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>,
+}
+
+impl PreparedPlugin {
+    /// Application namespace declared by the admitted candidate.
+    #[must_use]
+    pub fn application_id(&self) -> &str {
+        &self.owner
+    }
+
+    /// Initialize and mount a guest without retained development state.
+    ///
+    /// # Errors
+    /// Returns guest or UI admission failures without affecting another live surface.
+    pub fn mount(mut self) -> Result<PluginSurface, LaunchError> {
+        let outcome = self
+            .instance
             .invoke_init(0, 0)
             .map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
-        let mount = decode_single_mount(&outcome.emissions, self.config.protocol_limits)?;
-
-        let owner = InstanceId::new(manifest.id)
+        let mount = decode_single_mount(&outcome.emissions, self.protocol_limits)?;
+        let owner = InstanceId::new(self.owner)
             .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
         let mut dispatcher = HostEventDispatcher::new(owner.clone());
         register_events(&mut dispatcher, &mount.root)?;
-        let mut registry = UiRegistry::new(owner, self.config.protocol_limits);
+        let mut registry = UiRegistry::new(owner, self.protocol_limits);
         registry
             .mount(mount)
             .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
         let native_state = NativeStateStore::from_registry(dispatcher.owner(), &registry)
             .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
         Ok(PluginSurface::new(
-            mode,
+            self.mode,
             registry,
             native_state,
             dispatcher,
-            instance,
-            render_assets,
-            self.config.protocol_limits,
-            provider_plan,
-            provider_services,
+            self.instance,
+            self.assets,
+            self.protocol_limits,
+            self.provider_plan,
+            self.provider_services,
         ))
+    }
+
+    /// Restore SDK-managed development state before the new guest mounts its UI.
+    ///
+    /// # Errors
+    /// Rejects a failed restore or mount before the caller replaces its live surface.
+    #[cfg(feature = "development")]
+    pub fn mount_development(mut self, state: Option<&[u8]>) -> Result<PluginSurface, LaunchError> {
+        if let Some(state) = state {
+            self.instance
+                .restore_development_state(state)
+                .map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
+        }
+        self.mount()
     }
 }
 

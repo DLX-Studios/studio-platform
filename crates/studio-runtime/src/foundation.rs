@@ -6,10 +6,9 @@ pub use studio_components::native_view::{
     AnimationPolicy, FoundationFeature, FoundationGalleryModel, FoundationSnapshot,
 };
 
-/// Runtime window content and reload route ownership.
+/// Runtime window content around an admitted native guest surface.
 pub struct FoundationGallery {
     view: Entity<NativeRuntimeView<PluginSurface>>,
-    last_reload_route: Option<crate::reload::ResolvedRoute>,
 }
 impl FoundationGallery {
     /// Create the native foundation gallery.
@@ -17,7 +16,6 @@ impl FoundationGallery {
     pub fn new(reduced_motion: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             view: cx.new(|cx| NativeRuntimeView::new(reduced_motion, window, cx)),
-            last_reload_route: None,
         }
     }
     /// Mount an admitted guest using the shared native renderer.
@@ -30,7 +28,6 @@ impl FoundationGallery {
     ) -> Self {
         Self {
             view: cx.new(|cx| NativeRuntimeView::with_surface(reduced_motion, surface, window, cx)),
-            last_reload_route: None,
         }
     }
     /// Drain completed host actions and invalidate the native view when needed.
@@ -42,18 +39,6 @@ impl FoundationGallery {
             }
             Ok(changed)
         })
-    }
-    /// Install an admitted reload while retaining the window and native identities.
-    pub fn apply_reload_swap(&mut self, swap: crate::reload::PreparedSwap, cx: &mut Context<Self>) {
-        self.last_reload_route = Some(swap.route);
-        self.view
-            .update(cx, |view, cx| view.replace_surface(swap.surface, cx));
-        cx.notify();
-    }
-    /// Route chosen by the most recent reload.
-    #[must_use]
-    pub fn last_reload_route(&self) -> Option<&crate::reload::ResolvedRoute> {
-        self.last_reload_route.as_ref()
     }
 }
 impl Render for FoundationGallery {

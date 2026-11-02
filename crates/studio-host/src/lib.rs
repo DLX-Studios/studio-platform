@@ -11,10 +11,12 @@ pub mod audit_log;
 /// Versioned host-only HTTP/WebSocket center protocol and station client.
 pub mod center_protocol;
 /// Adapter from the host `LocalStore` to Studio Design persistence records.
+#[cfg(feature = "designer")]
 pub mod designer_persistence;
 /// Host-owned local identity and offline session authentication.
 pub mod identity;
 /// Host-owned, content-addressed Studio Library asset admission and catalog.
+#[cfg(feature = "designer")]
 pub mod library_assets;
 /// Embedded, host-owned local persistence.
 pub mod local_store;
@@ -22,6 +24,7 @@ pub mod migrations;
 /// Host-owned application users, credentials, roles, and row-scoped authorization.
 pub mod rbac;
 /// CLI-to-runtime reload protocol: versioned messages and the swap machine.
+#[cfg(feature = "development")]
 pub mod reload;
 /// Host-owned center authority, station enrollment, offline replay, and conflicts.
 pub mod topology;
@@ -53,12 +56,14 @@ pub use center_protocol::{
     CenterWebSocketClient, CenterWebSocketConnectRequest, CenterWebSocketConnection,
     CenterWebSocketFrame, CenterWebSocketTransport,
 };
+#[cfg(feature = "designer")]
 pub use designer_persistence::LocalStoreDesignerPersistence;
 pub use identity::{
     CreateIdentityRequest, IdentityError, IdentityErrorCode, IdentityKind, IdentityService,
     IdentitySession, IdentitySnapshot, IdentityState, IdentitySummary, SessionState,
     SessionSummary,
 };
+#[cfg(feature = "designer")]
 pub use library_assets::{
     AssetAdmission, AssetAdmissionRequest, AssetBlob, AssetFormat, AssetKind, AssetMetadata,
     AssetProvenance, AssetSourceKind, AssetUsage, BlobReference, DeletePolicy, DeleteResult,

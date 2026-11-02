@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["designer", "development"]
+designer = ["dep:studio-design"]
+development = []
+
 [dependencies]
 ed25519-dalek.workspace = true
 getrandom.workspace = true
@@ -13,7 +18,7 @@ serde_json.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 studio-security = { path = "../studio-security" }
-studio-design = { path = "../studio-design" }
+studio-design = { path = "../studio-design", optional = true }
 studio-package = { path = "../studio-package" }
 studio-protocol = { path = "../studio-protocol" }
 surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-rocksdb"] }
@@ -27,3 +32,8 @@ tempfile = "=3.27.0"
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "designer_session_crash_worker"
+path = "src/bin/designer_session_crash_worker.rs"
+required-features = ["designer"]

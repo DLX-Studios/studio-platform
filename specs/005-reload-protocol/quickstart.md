@@ -35,6 +35,12 @@ Covered inside `reload_session`: preserved route, reset-to-default, fresh instan
 
 ## 5. Manual headless scenario (display-level, gate pattern)
 
-Launch `studio-app --dev <bundle> --reload-socket <path>` under the headless compositor,
-deliver a reload request via the socket, and observe the same-window swap. Record evidence
-per the release checklist pattern.
+Launch `studio dev <project>` under the headless compositor and edit source or assets. The
+CLI owns the native window and commits loose IR/Wasm updates without packaging. Use
+`studio restart-session <project>` to request a deliberate state reset. The production
+`studio-app` executable accepts only `--bundle <absolute-path>`.
+
+Run `python3 scripts/test-native-hot-reload.py --studio <path-to-studio>` for the native
+same-window edit/rejection/recovery smoke test. See `docs/development/HOT_RELOAD.md` for
+state transfer and the content-addressed artifact cache. The scripted bundle protocol tests
+above remain compatibility coverage.

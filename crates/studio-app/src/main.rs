@@ -1,6 +1,6 @@
 //! Native Runtime guest host and platform feasibility probe.
 
-mod gpui_https_client;
+use studio_runtime::gpui_https_client;
 
 use std::sync::Arc;
 
@@ -9,36 +9,14 @@ use gpui_kit::component::{Root, Theme, ThemeMode};
 use gpui_kit::platform::application;
 use gpui_kit::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use studio_app::{
-    cli::LaunchRequest,
-    foundation::FoundationGallery,
-    host::{HostConfig, NativeDisplayAvailability, RedirectBrokerConfig, StudioHost},
+    cli::LaunchRequest, foundation::FoundationGallery, host::NativeDisplayAvailability,
     plugin_surface::PluginSurface,
 };
 use studio_package::TrustStore;
-use studio_security::{ProtectedSecretKey, SecretInput};
-
-/// Read the hosted redirect broker configuration from the environment.
-///
-/// A half-configured broker is a configuration error rather than a fallback: the host would
-/// sign in one way while the developer registered the redirect URI another.
-fn redirect_broker_from_environment() -> Result<Option<RedirectBrokerConfig>, String> {
-    match (
-        std::env::var("STUDIO_OAUTH_BROKER_URL").ok(),
-        std::env::var("STUDIO_OAUTH_BROKER_SECRET").ok(),
-    ) {
-        (None, None) => Ok(None),
-        (Some(url), Some(secret)) => Ok(Some(RedirectBrokerConfig::new(url, secret.into_bytes()))),
-        _ => Err(String::from(
-            "the OAuth redirect broker needs both STUDIO_OAUTH_BROKER_URL and \
-             STUDIO_OAUTH_BROKER_SECRET",
-        )),
-    }
-}
 
 fn run(
     application: Application,
     plugin_surface: Option<PluginSurface>,
-    reload_inbox: Option<std::sync::Arc<studio_app::reload::ReloadInbox>>,
     https_client: Arc<gpui_https_client::GpuiHttpsClient>,
 ) {
     application.run(move |cx: &mut App| {
@@ -88,33 +66,6 @@ fn run(
                     })
                     .detach();
                 }
-                // Drain prepared reload swaps without recreating the window:
-                // the daemon server thread validates and instantiates, and the
-                // frame loop applies each accepted replacement here.
-                if let Some(inbox) = reload_inbox {
-                    let shell = shell.downgrade();
-                    cx.spawn(async move |cx| {
-                        use std::time::Duration;
-                        loop {
-                            cx.background_executor()
-                                .timer(Duration::from_millis(250))
-                                .await;
-                            let swaps = inbox.drain();
-                            if swaps.is_empty() {
-                                continue;
-                            }
-                            let applied = shell.update(&mut cx.clone(), |shell, cx| {
-                                for swap in swaps {
-                                    shell.apply_reload_swap(swap, cx);
-                                }
-                            });
-                            if applied.is_err() {
-                                break;
-                            }
-                        }
-                    })
-                    .detach();
-                }
                 cx.new(|cx| Root::new(shell, window, cx))
             },
         )
@@ -132,78 +83,44 @@ fn main() {
 
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if arguments.len() == 1 {
-        eprintln!("usage: studio-app (--bundle <absolute-path> | --dev <local-path>)");
+        eprintln!("usage: studio-app --bundle <absolute-path>");
         std::process::exit(2);
     }
-    let (plugin_surface, reload_inbox, https_client) = {
-        let request = match LaunchRequest::parse_from(arguments) {
+    let (plugin_surface, https_client) = {
+        let request = match LaunchRequest::parse_runtime_from(arguments) {
             Ok(request) => request,
             Err(error) => {
                 eprintln!("{error}");
                 std::process::exit(2);
             }
         };
-        let trust_store = match request.mode() {
-            studio_app::cli::LaunchMode::Production => match TrustStore::load_from_environment() {
-                Ok(store) => store,
-                Err(error) => {
-                    eprintln!(
-                        "{}",
-                        studio_app::host::LaunchError::TrustConfigurationInvalid(error)
-                    );
-                    std::process::exit(2);
-                }
-            },
-            studio_app::cli::LaunchMode::Development => TrustStore::default(),
-        };
-        let socket = request.reload_socket().map(std::path::Path::to_path_buf);
-        let https_client = Arc::new(gpui_https_client::GpuiHttpsClient::default());
-        let mut host = StudioHost::new(HostConfig::new(trust_store), display)
-            .with_https_client(https_client.clone());
-        // A hosted redirect broker is optional. Without one the host signs in over a loopback
-        // redirect exactly as it did before, and with half a configuration it refuses to start
-        // rather than silently signing in the other way.
-        match redirect_broker_from_environment() {
-            Ok(Some(broker)) => host = host.with_redirect_broker(broker),
-            Ok(None) => {}
-            Err(message) => {
-                eprintln!("{message}");
-                std::process::exit(2);
-            }
-        }
-        for descriptor in studio_package::maintained_oauth_descriptors() {
-            let Some(secret_name) = descriptor.required_secret_names.first() else {
-                continue;
-            };
-            let Some(purpose) = descriptor.required_secret_purposes.get(secret_name) else {
-                continue;
-            };
-            let variable = format!("STUDIO_{}_CLIENT_SECRET", descriptor.id.to_uppercase());
-            let Ok(secret) = std::env::var(variable) else {
-                continue;
-            };
-            let Ok(key) = ProtectedSecretKey::new(secret_name.clone(), purpose.clone()) else {
+        let trust_store = match TrustStore::load_from_environment() {
+            Ok(store) => store,
+            Err(error) => {
                 eprintln!(
-                    "protected client secret declaration is invalid: {}",
-                    descriptor.id
+                    "{}",
+                    studio_app::host::LaunchError::TrustConfigurationInvalid(error)
                 );
                 std::process::exit(2);
-            };
-            let Ok(value) = SecretInput::new(secret.into_bytes()) else {
-                eprintln!("protected client secret is invalid: {}", descriptor.id);
+            }
+        };
+        let https_client = Arc::new(gpui_https_client::GpuiHttpsClient::default());
+        let host = match studio_runtime::bootstrap::host_from_environment(
+            trust_store,
+            https_client.clone(),
+        ) {
+            Ok(host) => host,
+            Err(error) => {
+                eprintln!("{error}");
                 std::process::exit(2);
-            };
-            host = host.with_protected_secret(key, value);
-        }
+            }
+        };
         match host.prepare(request) {
             Ok(surface) => {
                 if let Some(warning) = surface.warning() {
                     eprintln!("{warning}");
                 }
-                let inbox = socket
-                    .as_deref()
-                    .map(|socket| start_reload_server(host, socket));
-                (Some(surface), inbox, https_client)
+                (Some(surface), https_client)
             }
             Err(error) => {
                 eprintln!("{error}");
@@ -214,43 +131,6 @@ fn main() {
     run(
         application().with_assets(Assets),
         plugin_surface,
-        reload_inbox,
         https_client,
     );
-}
-
-/// Never-signalled shutdown flag for the reload server thread: process exit
-/// ends the daemon loop, and the next session treats a leftover socket file
-/// as stale (refused-as-stale).
-static RELOAD_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Start the reload server thread when `--reload-socket` was requested.
-/// Returns the frame-loop inbox; the window drains it per poll cycle.
-fn start_reload_server(
-    host: StudioHost,
-    socket: &std::path::Path,
-) -> std::sync::Arc<studio_app::reload::ReloadInbox> {
-    use studio_app::reload::{ReloadInbox, ReloadServer, SharedRouteTracker};
-
-    let inbox = std::sync::Arc::new(ReloadInbox::new());
-    let tracker = std::sync::Arc::new(SharedRouteTracker::new());
-    let listener = match studio_host::reload::bind_endpoint(socket) {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!(
-                "reload channel unavailable at {}: {error}",
-                socket.display()
-            );
-            return inbox;
-        }
-    };
-    let thread_inbox = std::sync::Arc::clone(&inbox);
-    std::thread::Builder::new()
-        .name("studio-reload".to_owned())
-        .spawn(move || {
-            let mut server = ReloadServer::new(host, tracker, thread_inbox);
-            server.serve(listener, &RELOAD_CANCELLED);
-        })
-        .expect("reload server thread spawns");
-    inbox
 }

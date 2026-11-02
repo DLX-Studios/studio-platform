@@ -321,6 +321,27 @@ pub fn mount_tree(
     {
         return Err(EvalError::rule("component does not belong to the module"));
     }
+    let mut scope = initialize_scope(component, props)?;
+    for slot in &component.derived {
+        let value = evaluate(&slot.expression, &scope)?;
+        scope.derived.insert(slot.name.clone(), value);
+    }
+    let route = format!("/{}", component.name);
+    let root = project_root(component, &scope)?;
+    Ok((
+        MountTree {
+            protocol_version: studio_protocol::PROTOCOL_VERSION,
+            route,
+            root,
+        },
+        scope,
+    ))
+}
+
+fn initialize_scope(
+    component: &ComponentDefinition,
+    props: &BTreeMap<String, StudioValue>,
+) -> Result<EvalScope, EvalError> {
     let mut scope = EvalScope::default();
     for prop in &component.props {
         if let Some(value) = props.get(&prop.name) {
@@ -339,20 +360,7 @@ pub fn mount_tree(
             .state
             .insert(slot.name.clone(), evaluate(&slot.initial, &scope)?);
     }
-    for slot in &component.derived {
-        let value = evaluate(&slot.expression, &scope)?;
-        scope.derived.insert(slot.name.clone(), value);
-    }
-    let route = format!("/{}", component.name);
-    let root = project_root(component, &scope)?;
-    Ok((
-        MountTree {
-            protocol_version: studio_protocol::PROTOCOL_VERSION,
-            route,
-            root,
-        },
-        scope,
-    ))
+    Ok(scope)
 }
 
 /// Project one component template against a live scope.
@@ -420,6 +428,58 @@ impl InteractionSession {
     ) -> Result<(studio_protocol::MountTree, Self), EvalError> {
         let (tree, scope) = mount_tree(module, component, props)?;
         Ok((tree, Self { scope, sequence: 0 }))
+    }
+
+    /// Prepare a replacement tree and session while preserving compatible stable state slots.
+    /// The caller commits both together after native/protocol admission succeeds.
+    ///
+    /// # Errors
+    /// Rejects incompatible IR versions, removed live components, or invalid replacement evaluation.
+    pub fn hot_swap(
+        &self,
+        old: &StudioModule,
+        new: &StudioModule,
+        component_id: &str,
+    ) -> Result<(studio_protocol::MountTree, Self), EvalError> {
+        use crate::hot_swap::{SlotOutcome, SwapOutcome, replace_module};
+        let migrations = match replace_module(old, new) {
+            SwapOutcome::Accepted { components } => components,
+            SwapOutcome::Rejected { code, message } => return Err(EvalError { code, message }),
+        };
+        let component = new
+            .components
+            .iter()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| EvalError::rule("live component was removed"))?;
+        let mut session = Self {
+            scope: initialize_scope(component, &self.scope.props)?,
+            sequence: 0,
+        };
+        if let Some(migration) = migrations
+            .iter()
+            .find(|component| component.id == component_id)
+        {
+            for slot in &migration.slots {
+                if slot.outcome == SlotOutcome::Preserved
+                    && let Some(value) = self.scope.state.get(&slot.name)
+                {
+                    session.scope.state.insert(slot.name.clone(), value.clone());
+                }
+            }
+        }
+        for slot in &component.derived {
+            let value = evaluate(&slot.expression, &session.scope)?;
+            session.scope.derived.insert(slot.name.clone(), value);
+        }
+        let root = project_root(component, &session.scope)?;
+        Ok((
+            studio_protocol::MountTree {
+                protocol_version: studio_protocol::PROTOCOL_VERSION,
+                route: format!("/{}", component.name),
+                root,
+            },
+            session,
+        ))
     }
 
     /// Apply one node event: run handler mutations, recompute derived slots,

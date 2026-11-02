@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+development = []
+
 [dependencies]
 studio-security = { path = "../studio-security" }
 thiserror.workspace = true
