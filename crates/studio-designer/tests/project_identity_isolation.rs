@@ -104,6 +104,7 @@ fn owned_source_survives_restart_and_foreign_or_expired_sessions_are_denied() {
         let workspace = WorkspaceRecord {
             schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             project_id: project.clone(),
+            linked_source_root: None,
             state: WorkspaceState::default(),
         };
         block_on(WorkspacePersistence::save(&persistence, &workspace)).unwrap();

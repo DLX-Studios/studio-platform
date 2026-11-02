@@ -13,10 +13,13 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::assets::Assets;
 use gpui_kit::component::{Root, Theme, ThemeMode};
-use gpui_kit::{px, size, App, AppContext, Bounds, WindowBounds, WindowOptions};
-use studio_components::native_view::NativeRuntimeView;
+use gpui_kit::{
+    px, size, App, AppContext, Bounds, Context as GpuiContext, Entity, IntoElement, Render,
+    Subscription, Window, WindowBounds, WindowOptions,
+};
+use studio_components::native_view::{NativeRuntimeView, NativeViewEvent};
 use studio_package::TrustStore;
-use studio_protocol::dev_rpc::DevPhase;
+use studio_protocol::dev_rpc::{DevPhase, DevViewport};
 use studio_runtime::gpui_https_client::GpuiHttpsClient;
 use studio_runtime::{
     cli::{LaunchMode, LaunchRequest},
@@ -89,16 +92,20 @@ pub fn run(mut request: BuildRequest, _port: u16) -> i32 {
         socket: Some(socket),
     };
     let status = rpc::StatusSnapshot::default();
-    let status_server =
-        match rpc::Server::start(&request.project_root.join("build"), status.clone()) {
-            Ok(server) => server,
-            Err(error) => {
-                report(format!(
-                    "could not start the development status endpoint: {error}"
-                ));
-                return BuildPhase::Watch.exit_code();
-            }
-        };
+    let (preview_command_sender, preview_command_receiver) = mpsc::sync_channel(16);
+    let status_server = match rpc::Server::start(
+        &request.project_root.join("build"),
+        status.clone(),
+        preview_command_sender,
+    ) {
+        Ok(server) => server,
+        Err(error) => {
+            report(format!(
+                "could not start the development status endpoint: {error}"
+            ));
+            return BuildPhase::Watch.exit_code();
+        }
+    };
     let (restart_sender, restart_receiver) = mpsc::sync_channel(1);
     let socket_cancel = Arc::clone(&cancelled);
     let control_thread =
@@ -113,6 +120,7 @@ pub fn run(mut request: BuildRequest, _port: u16) -> i32 {
         cancelled,
         Some(restart_receiver),
         Some(status.clone()),
+        Some(preview_command_receiver),
     );
     status.set_phase(DevPhase::Stopping);
     drop(guard);
@@ -129,7 +137,176 @@ pub fn preview(bundle: &Path) -> i32 {
         Arc::new(AtomicBool::new(false)),
         None,
         None,
+        None,
     )
+}
+
+struct DevPreview {
+    view: Entity<NativeRuntimeView<DevSurface>>,
+    _selection_subscription: Subscription,
+    status: Option<rpc::StatusSnapshot>,
+}
+
+impl DevPreview {
+    fn new(
+        reduced_motion: bool,
+        initial: DevSurface,
+        window: &mut Window,
+        cx: &mut GpuiContext<Self>,
+        status: Option<rpc::StatusSnapshot>,
+    ) -> Self {
+        let view =
+            cx.new(|cx| NativeRuntimeView::with_surface(reduced_motion, initial, window, cx));
+        let selection_subscription =
+            cx.subscribe(&view, |this, _, event: &NativeViewEvent, _cx| {
+                if let NativeViewEvent::Selected(node_id) = event {
+                    if let Some(status) = &this.status {
+                        status.set_selection(node_id.clone());
+                    }
+                }
+            });
+        Self {
+            view,
+            _selection_subscription: selection_subscription,
+            status,
+        }
+    }
+
+    fn apply_surface_updates(
+        &mut self,
+        updates: &mpsc::Receiver<Update>,
+        revision: &mut u64,
+        cx: &mut GpuiContext<Self>,
+    ) {
+        while let Ok(update) = updates.try_recv() {
+            let Update {
+                replacement,
+                reset,
+                hash,
+                acknowledge,
+            } = update;
+            let metadata = replacement.metadata();
+            let status = self.status.clone();
+            let mut outcome = Err(String::from("no live surface"));
+            self.view.update(cx, |view, view_cx| {
+                view.update_surface(
+                    |surface| match surface.replace(replacement, reset) {
+                        Ok(()) => {
+                            *revision += 1;
+                            println!(
+                                "[dev] committed revision {} ({})",
+                                *revision,
+                                &hash[..hash.len().min(12)]
+                            );
+                            outcome = Ok(*revision);
+                            true
+                        }
+                        Err(error) => {
+                            outcome = Err(error);
+                            false
+                        }
+                    },
+                    view_cx,
+                );
+                if outcome.is_ok() {
+                    if let (Some(status), Some(metadata)) = (&status, metadata) {
+                        status.set_surface_identity(
+                            metadata.component_id,
+                            metadata.screen_id,
+                            metadata.source_locations,
+                        );
+                    }
+                    if let Some(status) = &status {
+                        let current = status.read();
+                        view.set_authoring(
+                            current.authoring_selection,
+                            current.selection.map(|selection| selection.node_id),
+                            view_cx,
+                        );
+                    }
+                }
+            });
+            let _ = acknowledge.send(outcome);
+        }
+    }
+
+    fn apply_commands(
+        &mut self,
+        commands: &mpsc::Receiver<rpc::PendingCommand>,
+        window: &mut Window,
+        cx: &mut GpuiContext<Self>,
+    ) {
+        while let Ok(pending) = commands.try_recv() {
+            let status = self.status.clone();
+            let result = match (pending.command, status) {
+                (rpc::DevCommand::SetAuthoringSelection(enabled), Some(status)) => {
+                    let current = status.read();
+                    self.view.update(cx, |view, view_cx| {
+                        view.set_authoring(
+                            enabled,
+                            current.selection.map(|selection| selection.node_id),
+                            view_cx,
+                        );
+                    });
+                    status.set_authoring_selection(enabled);
+                    Ok(status.read())
+                }
+                (rpc::DevCommand::SetPresentation(update), Some(status)) => {
+                    let previous = status.read().presentation.clone();
+                    let requested = update.apply_to(&previous);
+                    match requested {
+                        Ok(requested) => {
+                            let status = status.set_presentation(&update);
+                            if status.as_ref().is_ok_and(|current| {
+                                current.presentation.viewport != previous.viewport
+                            }) {
+                                window.resize(size(
+                                    px(requested.viewport.width as f32),
+                                    px(requested.viewport.height as f32),
+                                ));
+                            }
+                            status
+                        }
+                        Err(error) => Err(rpc::RpcCommandError {
+                            code: -32602,
+                            message: error.to_string(),
+                        }),
+                    }
+                }
+                (_, None) => Err(rpc::RpcCommandError {
+                    code: -32603,
+                    message: "preview control is unavailable".to_owned(),
+                }),
+            };
+            let _ = pending.response.send(result);
+        }
+    }
+
+    fn pump_host_actions(&mut self, cx: &mut GpuiContext<Self>) {
+        let result = self.view.update(cx, |view, _cx| view.pump_host_actions());
+        match result {
+            Ok(true) => cx.notify(),
+            Err(error) => {
+                if let Some(status) = &self.status {
+                    status.set_diagnostic("DEV_HOST_ACTION", error.clone());
+                }
+                report(error);
+            }
+            Ok(false) => {}
+        }
+    }
+
+    fn set_observed_viewport(&self, viewport: DevViewport) {
+        if let Some(status) = &self.status {
+            status.set_observed_viewport(viewport);
+        }
+    }
+}
+
+impl Render for DevPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut GpuiContext<Self>) -> impl IntoElement {
+        self.view.clone()
+    }
 }
 
 fn window(
@@ -138,6 +315,7 @@ fn window(
     cancelled: Arc<AtomicBool>,
     restarts: Option<mpsc::Receiver<Restart>>,
     dev_status: Option<rpc::StatusSnapshot>,
+    preview_commands: Option<mpsc::Receiver<rpc::PendingCommand>>,
 ) -> i32 {
     if NativeDisplayAvailability::from_environment() == NativeDisplayAvailability::Unavailable {
         if let Some(status) = &dev_status {
@@ -210,52 +388,31 @@ fn window(
                 },
                 move |window, cx| {
                     let reduced_motion = cx.reduce_motion();
-                    let poll_status = status_for_ui.clone();
-                    let view = cx.new(|cx| {
-                        NativeRuntimeView::with_surface(reduced_motion, initial, window, cx)
+                    let window_handle = window.window_handle();
+                    let preview = cx.new(|cx| {
+                        DevPreview::new(reduced_motion, initial, window, cx, status_for_ui)
                     });
-                    let weak = view.downgrade();
+                    let weak = preview.downgrade();
                     cx.spawn(async move |cx| {
                         let mut revision = 0;
                         loop {
                             cx.background_executor()
                                 .timer(Duration::from_millis(32))
                                 .await;
-                            let result = weak.update(&mut cx.clone(), |view, cx| {
-                                while let Ok(update) = receiver.try_recv() {
-                                    let mut outcome = Err(String::from("no live surface"));
-                                    view.update_surface(
-                                        |surface| match surface
-                                            .replace(update.replacement, update.reset)
-                                        {
-                                            Ok(()) => {
-                                                revision += 1;
-                                                println!(
-                                                    "[dev] committed revision {revision} ({})",
-                                                    &update.hash[..update.hash.len().min(12)]
-                                                );
-                                                outcome = Ok(revision);
-                                                true
-                                            }
-                                            Err(error) => {
-                                                outcome = Err(error);
-                                                false
-                                            }
-                                        },
-                                        cx,
-                                    );
-                                    let _ = update.acknowledge.send(outcome);
-                                }
-                                match view.pump_host_actions() {
-                                    Ok(true) => cx.notify(),
-                                    Err(error) => {
-                                        if let Some(status) = &poll_status {
-                                            status.set_diagnostic("DEV_HOST_ACTION", error.clone());
-                                        }
-                                        report(error);
+                            let mut async_cx = cx.clone();
+                            let result = async_cx.update_window(window_handle, |_, window, app| {
+                                weak.update(app, |preview, cx| {
+                                    preview.apply_surface_updates(&receiver, &mut revision, cx);
+                                    if let Some(commands) = preview_commands.as_ref() {
+                                        preview.apply_commands(commands, window, cx);
                                     }
-                                    Ok(false) => {}
-                                }
+                                    let size = window.viewport_size();
+                                    preview.set_observed_viewport(DevViewport {
+                                        width: size.width.as_f32().round().max(0.0) as u32,
+                                        height: size.height.as_f32().round().max(0.0) as u32,
+                                    });
+                                    preview.pump_host_actions(cx);
+                                })
                             });
                             if result.is_err() {
                                 break;
@@ -263,7 +420,7 @@ fn window(
                         }
                     })
                     .detach();
-                    cx.new(|cx| Root::new(view, window, cx))
+                    cx.new(|cx| Root::new(preview, window, cx))
                 },
             )
             .expect("Studio could not create its development window");
@@ -285,6 +442,14 @@ fn watch(
     cancelled: Arc<AtomicBool>,
     status: rpc::StatusSnapshot,
 ) {
+    let source_path = crate::build::studio_entry(&request)
+        .and_then(|entry| {
+            entry
+                .strip_prefix(&request.project_root)
+                .ok()
+                .map(Path::to_path_buf)
+        })
+        .map(|path| path.to_string_lossy().replace('\\', "/"));
     let mut compiler = DevCompiler::new(request);
     compiler.set_cancellation(Arc::clone(&cancelled));
     let mut observed = None;
@@ -338,7 +503,8 @@ fn watch(
                         && committed.as_ref().is_some_and(|(old_hash, old_manifest)| {
                             old_hash == &hash && old_manifest == &manifest
                         });
-                    let replacement = prepare(artifact, &host, assets_only)?;
+                    let replacement =
+                        prepare(artifact, &host, assets_only, source_path.as_deref())?;
                     status.set_phase(DevPhase::Applying);
                     let (acknowledge, receiver) = mpsc::sync_channel(1);
                     updates
@@ -388,6 +554,7 @@ fn prepare(
     artifact: Artifact,
     host: &StudioHost,
     assets_only: bool,
+    source_path: Option<&str>,
 ) -> Result<Replacement, String> {
     let policy = studio_package::ArchivePolicy::default();
     let asset_bytes: usize = artifact.assets.values().map(Vec::len).sum();
@@ -408,6 +575,7 @@ fn prepare(
             module,
             manifest: artifact.manifest,
             assets: artifact.assets,
+            source_path: source_path.map(str::to_owned),
         }),
         Code::Wasm(module) => host
             .prepare_development(&artifact.manifest, (*module).clone(), artifact.assets)

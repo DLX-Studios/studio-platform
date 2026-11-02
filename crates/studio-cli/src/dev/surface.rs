@@ -5,11 +5,12 @@ use std::sync::Arc;
 use studio_components::native_view::{NativeRenderNode, NativeSurface};
 use studio_components::{HostEventDispatcher, InputAction, NativeStateStore};
 use studio_package::{parse_manifest, ManifestPolicy};
+use studio_protocol::dev_rpc::DevSourceLocation;
 use studio_protocol::{HostEvent, MountTree, ProtocolLimits, UiNode};
 use studio_runtime::host::PreparedPlugin;
 use studio_runtime::plugin_surface::PluginSurface;
 use studio_script::eval::{InteractionSession, SessionMessage};
-use studio_script::ir::StudioModule;
+use studio_script::ir::{StudioModule, TemplateNode};
 use studio_ui::{InstanceId, UiRegistry};
 
 pub(crate) struct IrSurface {
@@ -25,9 +26,123 @@ pub(crate) enum Replacement {
         module: Arc<StudioModule>,
         manifest: Vec<u8>,
         assets: BTreeMap<String, Vec<u8>>,
+        source_path: Option<String>,
     },
     Wasm(Box<PreparedPlugin>),
     Assets(BTreeMap<String, Vec<u8>>),
+}
+
+/// Source and identity metadata for one prepared preview replacement.
+pub(crate) struct SurfaceMetadata {
+    pub component_id: Option<String>,
+    pub screen_id: Option<String>,
+    pub source_locations: BTreeMap<String, DevSourceLocation>,
+}
+
+impl Replacement {
+    /// Resolve identity and source links before the replacement is consumed.
+    pub(crate) fn metadata(&self) -> Option<SurfaceMetadata> {
+        match self {
+            Self::Assets(_) => None,
+            Self::Wasm(plugin) => Some(SurfaceMetadata {
+                component_id: Some(plugin.application_id().to_owned()),
+                screen_id: Some(plugin.application_id().to_owned()),
+                source_locations: BTreeMap::new(),
+            }),
+            Self::Ir {
+                module,
+                source_path,
+                ..
+            } => {
+                let component = module.components.first()?;
+                let mut source_locations = BTreeMap::new();
+                if let Some(path) = source_path {
+                    collect_source_locations(&component.template, path, &mut source_locations);
+                }
+                Some(SurfaceMetadata {
+                    component_id: Some(component.id.clone()),
+                    // `studio dev` currently mounts the module's sole entry component as its
+                    // only screen identity. Multi-screen routing is not represented by this IR.
+                    screen_id: Some(component.id.clone()),
+                    source_locations,
+                })
+            }
+        }
+    }
+}
+
+fn collect_source_locations(
+    nodes: &[TemplateNode],
+    path: &str,
+    locations: &mut BTreeMap<String, DevSourceLocation>,
+) {
+    for node in nodes {
+        match node {
+            TemplateNode::Component {
+                id, children, span, ..
+            } => {
+                locations.insert(
+                    id.clone(),
+                    DevSourceLocation {
+                        path: path.to_owned(),
+                        line: span.start.line as u64,
+                        column: span.start.column as u64,
+                        offset: span.start.offset as u64,
+                    },
+                );
+                collect_source_locations(children, path, locations);
+            }
+            TemplateNode::Text { id, span, .. } | TemplateNode::Interpolation { id, span, .. } => {
+                locations.insert(
+                    id.clone(),
+                    DevSourceLocation {
+                        path: path.to_owned(),
+                        line: span.start.line as u64,
+                        column: span.start.column as u64,
+                        offset: span.start.offset as u64,
+                    },
+                );
+            }
+            TemplateNode::If {
+                id,
+                consequent,
+                alternate,
+                span,
+                ..
+            } => {
+                locations.insert(
+                    id.clone(),
+                    DevSourceLocation {
+                        path: path.to_owned(),
+                        line: span.start.line as u64,
+                        column: span.start.column as u64,
+                        offset: span.start.offset as u64,
+                    },
+                );
+                collect_source_locations(consequent, path, locations);
+                collect_source_locations(alternate, path, locations);
+            }
+            TemplateNode::Each {
+                id,
+                body,
+                fallback,
+                span,
+                ..
+            } => {
+                locations.insert(
+                    id.clone(),
+                    DevSourceLocation {
+                        path: path.to_owned(),
+                        line: span.start.line as u64,
+                        column: span.start.column as u64,
+                        offset: span.start.offset as u64,
+                    },
+                );
+                collect_source_locations(body, path, locations);
+                collect_source_locations(fallback, path, locations);
+            }
+        }
+    }
 }
 
 pub(crate) enum DevSurface {
@@ -49,6 +164,7 @@ impl DevSurface {
                 module,
                 manifest,
                 assets,
+                source_path: _,
             } => {
                 let manifest = parse_manifest(&manifest, ManifestPolicy::default())
                     .map_err(|error| error.to_string())?;
@@ -234,6 +350,7 @@ function add() { quantity += 1; }
             module: Arc::new(studio_script::compile_studio(source, "app.studio", "app").unwrap()),
             manifest: include_bytes!("../../../../examples/starter/manifest.json").to_vec(),
             assets: BTreeMap::new(),
+            source_path: Some("app.studio".to_owned()),
         }
     }
     fn quantity(surface: &DevSurface) -> String {
@@ -248,6 +365,18 @@ function add() { quantity += 1; }
             node.children.iter().find_map(find)
         }
         find(&surface.render_tree().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn ir_metadata_exposes_the_single_screen_and_template_source_spans() {
+        let replacement = update(SOURCE);
+        let metadata = replacement.metadata().unwrap();
+        assert_eq!(metadata.component_id.as_deref(), Some("app"));
+        assert_eq!(metadata.screen_id.as_deref(), Some("app"));
+        let content = metadata.source_locations.get("content").unwrap();
+        assert_eq!(content.path, "app.studio");
+        assert_eq!(content.line, 5);
+        assert!(metadata.source_locations.contains_key("quantity"));
     }
 
     #[test]
@@ -267,6 +396,7 @@ function add() { quantity += 1; }
             module,
             manifest,
             assets,
+            source_path,
         } = update(&changed)
         else {
             unreachable!()
@@ -278,7 +408,8 @@ function add() { quantity += 1; }
                 Replacement::Ir {
                     module: Arc::new(incompatible),
                     manifest,
-                    assets
+                    assets,
+                    source_path,
                 },
                 false
             )

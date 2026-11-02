@@ -11,6 +11,7 @@ use std::{
     future::Future,
     sync::Arc,
     task::{Context, Poll, Wake, Waker},
+    time::Duration,
 };
 
 use gpui_kit::component::{
@@ -1217,6 +1218,8 @@ pub struct FocusView<P> {
     /// Durable per-project presentation preferences. This never stores a
     /// second design or session; it only records view/panel geometry.
     workspace_persistence: Arc<dyn WorkspacePersistence>,
+    /// Local source folder associated with the current authenticated project.
+    linked_source_root: Option<String>,
     /// Native editable Studio Script buffer and its event subscription.
     script_input: Option<Entity<EditorState>>,
     _script_subscription: Option<Subscription>,
@@ -1224,6 +1227,19 @@ pub struct FocusView<P> {
     script_source: String,
     script_syncing: bool,
     script_feedback: Option<String>,
+    /// File-backed source workspace linked to this authenticated project.
+    source_root_input: Entity<InputState>,
+    source_path_input: Entity<InputState>,
+    source_input: Option<Entity<EditorState>>,
+    _source_subscription: Option<Subscription>,
+    source_view: Option<crate::source_view::SourceView>,
+    source_event_relay: Option<crate::source_events::SourceEventRelay>,
+    source_files: Vec<crate::source_workspace::FileInfo>,
+    source_feedback: Option<String>,
+    source_syncing: bool,
+    preview_status: Option<studio_protocol::dev_rpc::DevStatus>,
+    preview_feedback: Option<String>,
+    preview_command_pending: bool,
     prototype_feedback: Option<String>,
     prototype: Option<studio_design::PrototypeSession>,
     prototype_mode: bool,
@@ -1233,6 +1249,12 @@ pub struct FocusView<P> {
     time_input: Entity<InputState>,
     time_input_binding: Option<(NodeId, String)>,
     inspector_feedback: Option<String>,
+}
+
+enum PreviewRequest {
+    Status,
+    Selection(bool),
+    Presentation(studio_protocol::dev_rpc::DevPresentationUpdate),
 }
 
 #[derive(Clone, Copy)]
@@ -1305,9 +1327,14 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         cx: &mut GpuiContext<Self>,
     ) -> Self {
         let project_id = model.session_state().project_id;
-        let workspace = block_on(workspace_persistence.load(&project_id))
+        let workspace_record = block_on(workspace_persistence.load(&project_id))
             .ok()
-            .flatten()
+            .flatten();
+        let linked_source_root = workspace_record
+            .as_ref()
+            .and_then(|record| record.linked_source_root.clone());
+        let workspace = workspace_record
+            .clone()
             .and_then(|record| WorkspaceController::from_state(record.state).ok())
             .unwrap_or_else(|| {
                 WorkspaceController::from_state(WorkspaceState::new())
@@ -1321,6 +1348,12 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 this.handle_preview_event(event);
                 cx.notify();
             });
+        let source_root_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(linked_source_root.clone().unwrap_or_default())
+        });
+        let source_path_input =
+            cx.new(|cx| InputState::new(window, cx).default_value("app.studio"));
         let mut view = Self {
             model: Some(model),
             root_focus: cx.focus_handle(),
@@ -1329,12 +1362,25 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             operation_in_flight: false,
             workspace,
             workspace_persistence,
+            linked_source_root,
             script_input: None,
             _script_subscription: None,
             script_editor: None,
             script_source: String::new(),
             script_syncing: false,
             script_feedback: None,
+            source_root_input,
+            source_path_input,
+            source_input: None,
+            _source_subscription: None,
+            source_view: None,
+            source_event_relay: None,
+            source_files: Vec::new(),
+            source_feedback: None,
+            source_syncing: false,
+            preview_status: None,
+            preview_feedback: None,
+            preview_command_pending: false,
             prototype_feedback: None,
             prototype: None,
             prototype_mode: false,
@@ -1346,6 +1392,9 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             inspector_feedback: None,
         };
         view.initialize_editor(window, cx);
+        if view.linked_source_root.is_some() {
+            view.start_source_relay(cx);
+        }
         view
     }
 
@@ -1393,9 +1442,382 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         let record = WorkspaceRecord {
             schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             project_id,
+            linked_source_root: self.linked_source_root.clone(),
             state: self.workspace.state().clone(),
         };
         let _ = block_on(self.workspace_persistence.save(&record));
+    }
+
+    fn source_workspace(&self) -> Result<crate::source_workspace::ProjectSourceWorkspace, String> {
+        let root = self
+            .linked_source_root
+            .as_deref()
+            .ok_or_else(|| "Link a local project folder first".to_owned())?;
+        crate::source_workspace::ProjectSourceWorkspace::open(root)
+            .map_err(|error| error.to_string())
+    }
+
+    fn link_source_root(&mut self, cx: &mut GpuiContext<Self>) {
+        let requested = self.source_root_input.read(cx).value().to_string();
+        match crate::source_workspace::ProjectSourceWorkspace::open(requested.trim()) {
+            Ok(workspace) => {
+                let root = workspace.root().to_string_lossy().into_owned();
+                let changed_root = self.linked_source_root.as_deref() != Some(root.as_str());
+                if !changed_root && self.source_event_relay.is_some() {
+                    self.source_files = workspace.list_files().unwrap_or_default();
+                    self.save_workspace();
+                    self.source_feedback = Some("Project folder is already linked".to_owned());
+                    return;
+                }
+                if changed_root
+                    && self
+                        .source_view
+                        .as_ref()
+                        .is_some_and(crate::source_view::SourceView::is_dirty)
+                {
+                    self.source_feedback = Some(
+                        "Save or resolve the open source buffer before changing folders".to_owned(),
+                    );
+                    return;
+                }
+                if changed_root {
+                    self.source_view = None;
+                    self.source_input = None;
+                    self._source_subscription = None;
+                }
+                self.linked_source_root = Some(root.clone());
+                self.source_files = workspace.list_files().unwrap_or_default();
+                self.source_event_relay = None;
+                self.start_source_relay(cx);
+                self.save_workspace();
+                if self.source_feedback.is_none() {
+                    self.source_feedback = Some("Project folder linked".to_owned());
+                }
+            }
+            Err(error) => {
+                self.source_feedback = Some(format!("Could not link project folder: {error}"));
+            }
+        }
+    }
+
+    fn start_source_relay(&mut self, cx: &mut GpuiContext<Self>) {
+        let Some(root) = self.linked_source_root.clone() else {
+            return;
+        };
+        match crate::source_events::SourceEventRelay::start(std::path::Path::new(&root)) {
+            Ok(relay) => {
+                self.source_event_relay = Some(relay);
+                if let Ok(workspace) = self.source_workspace() {
+                    self.source_files = workspace.list_files().unwrap_or_default();
+                }
+            }
+            Err(error) => {
+                self.source_feedback = Some(format!(
+                    "Folder linked · live agent updates unavailable: {error}"
+                ));
+            }
+        }
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                let alive = weak.update(&mut cx.clone(), |this, cx| {
+                    if this.linked_source_root.as_deref() != Some(root.as_str()) {
+                        return false;
+                    }
+                    if this.source_event_relay.is_some() && this.poll_source_events() {
+                        cx.notify();
+                    }
+                    true
+                });
+                if !alive.is_ok_and(|alive| alive) {
+                    break;
+                }
+                let build_dir = std::path::PathBuf::from(&root).join("build");
+                let status = cx
+                    .background_executor()
+                    .spawn(async move {
+                        studio_protocol::dev_rpc::request_status(
+                            &build_dir,
+                            Duration::from_millis(200),
+                        )
+                    })
+                    .await;
+                let _ = weak.update(&mut cx.clone(), |this, cx| {
+                    let (new_status, new_feedback) = match status {
+                        Ok(status) => (Some(status), "Preview connected".to_owned()),
+                        Err(error) if error.is_not_running() => {
+                            (None, "No studio dev preview running".to_owned())
+                        }
+                        Err(error) => (None, format!("Preview status unavailable: {error}")),
+                    };
+                    if this.linked_source_root.as_deref() == Some(root.as_str())
+                        && (this.preview_status != new_status
+                            || this.preview_feedback.as_deref() != Some(new_feedback.as_str()))
+                    {
+                        this.preview_status = new_status;
+                        this.preview_feedback = Some(new_feedback);
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn request_preview_control(&mut self, request: PreviewRequest, cx: &mut GpuiContext<Self>) {
+        let Some(root) = self.linked_source_root.clone() else {
+            self.preview_feedback = Some("Link a project folder first".to_owned());
+            return;
+        };
+        self.preview_command_pending = true;
+        self.preview_feedback = Some("Sending preview command…".to_owned());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let build_dir = std::path::PathBuf::from(root).join("build");
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match request {
+                        PreviewRequest::Status => studio_protocol::dev_rpc::request_status(
+                            &build_dir,
+                            Duration::from_secs(2),
+                        ),
+                        PreviewRequest::Selection(enabled) => {
+                            studio_protocol::dev_rpc::set_authoring_selection(
+                                &build_dir,
+                                enabled,
+                                Duration::from_secs(2),
+                            )
+                        }
+                        PreviewRequest::Presentation(update) => {
+                            studio_protocol::dev_rpc::set_presentation(
+                                &build_dir,
+                                &update,
+                                Duration::from_secs(2),
+                            )
+                        }
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.preview_command_pending = false;
+                match result {
+                    Ok(status) => {
+                        this.preview_status = Some(status);
+                        this.preview_feedback = Some("Preview updated".to_owned());
+                    }
+                    Err(error) if error.is_not_running() => {
+                        this.preview_status = None;
+                        this.preview_feedback = Some("No studio dev preview running".to_owned());
+                    }
+                    Err(error) => {
+                        this.preview_feedback = Some(format!("Preview command failed: {error}"));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn poll_source_events(&mut self) -> bool {
+        let mut changed = false;
+        loop {
+            let event = match self
+                .source_event_relay
+                .as_ref()
+                .map(crate::source_events::SourceEventRelay::try_recv)
+            {
+                Some(Ok(event)) => event,
+                Some(Err(
+                    std::sync::mpsc::TryRecvError::Empty
+                    | std::sync::mpsc::TryRecvError::Disconnected,
+                ))
+                | None => break,
+            };
+            let Ok(workspace) = self.source_workspace() else {
+                continue;
+            };
+            self.source_files = workspace.list_files().unwrap_or_default();
+            changed = true;
+            if !self
+                .source_view
+                .as_ref()
+                .is_some_and(|source_view| source_view.path() == event.path)
+            {
+                continue;
+            }
+            let current = workspace
+                .read_file(&event.path)
+                .map_err(|error| error.to_string());
+            match current {
+                Ok(snapshot) => match self
+                    .source_view
+                    .as_mut()
+                    .expect("matching source view remains open")
+                    .observe_agent_change(event, snapshot)
+                {
+                    Ok(crate::source_view::SourceRefresh::Refreshed) => {
+                        self.source_feedback = Some("Source refreshed from agent edit".to_owned());
+                        changed = true;
+                    }
+                    Ok(crate::source_view::SourceRefresh::Conflict) => {
+                        self.source_feedback =
+                            Some("Agent edit conflicts with unsaved source changes".to_owned());
+                        changed = true;
+                    }
+                    Err(error) => {
+                        self.source_feedback =
+                            Some(format!("Source update could not be applied: {error}"));
+                        changed = true;
+                    }
+                },
+                Err(error) => {
+                    self.source_feedback =
+                        Some(format!("Could not read agent-edited file: {error}"));
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    fn open_source_file(&mut self, path: String, window: &mut Window, cx: &mut GpuiContext<Self>) {
+        let snapshot = match self.source_workspace().and_then(|workspace| {
+            workspace
+                .read_file(&path)
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.source_feedback = Some(format!("Could not open source file: {error}"));
+                return;
+            }
+        };
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .default_value(snapshot.content.clone())
+                .language(source_language(&snapshot.path))
+        });
+        let subscription = cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) && !this.source_syncing {
+                if let Some(source_view) = this.source_view.as_mut() {
+                    source_view.replace_buffer(editor.read(cx).value().to_string());
+                    this.source_feedback = Some("Unsaved source changes".to_owned());
+                }
+                cx.notify();
+            }
+        });
+        self.source_path_input
+            .update(cx, |input, cx| input.set_value(path, window, cx));
+        self.source_view = Some(crate::source_view::SourceView::open(snapshot));
+        self.source_input = Some(editor);
+        self._source_subscription = Some(subscription);
+        self.source_feedback = Some("Source file opened".to_owned());
+    }
+
+    fn open_source_path(&mut self, window: &mut Window, cx: &mut GpuiContext<Self>) {
+        let path = self.source_path_input.read(cx).value().to_string();
+        self.open_source_file(path.trim().to_owned(), window, cx);
+    }
+
+    fn open_preview_source(
+        &mut self,
+        path: String,
+        line: u64,
+        column: u64,
+        offset: u64,
+        window: &mut Window,
+        cx: &mut GpuiContext<Self>,
+    ) {
+        self.open_source_file(path.clone(), window, cx);
+        if self.source_view.is_some() {
+            if let Ok(offset) = usize::try_from(offset)
+                && let Some(input) = self.source_input.as_ref()
+            {
+                input.update(cx, |editor, cx| {
+                    editor.set_selected_range(offset..offset, cx)
+                });
+            }
+            self.source_feedback = Some(format!("Opened preview source · {path}:{line}:{column}"));
+        }
+    }
+
+    fn save_source_file(&mut self) {
+        let Some(source_view) = self.source_view.as_ref() else {
+            return;
+        };
+        let plan = match source_view.save_plan() {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.source_feedback = Some(error.to_string());
+                return;
+            }
+        };
+        let result = self.source_workspace().and_then(|workspace| {
+            workspace
+                .write_file(&plan.path, &plan.content, Some(&plan.expected_revision))
+                .map_err(|error| error.to_string())
+        });
+        match result {
+            Ok(snapshot) => {
+                if let Some(source_view) = self.source_view.as_mut() {
+                    let _ = source_view.accept_saved(snapshot, &plan.buffer_at_request);
+                }
+                self.source_feedback = Some("Source saved · studio dev will reload it".to_owned());
+            }
+            Err(error) => {
+                self.source_feedback = Some(format!("Source save failed: {error}"));
+            }
+        }
+    }
+
+    fn accept_incoming_source(&mut self) {
+        if let Some(source_view) = self.source_view.as_mut() {
+            source_view.accept_disk();
+            self.source_feedback = Some("Using the latest saved source".to_owned());
+        }
+    }
+
+    fn keep_local_source(&mut self) {
+        if let Some(source_view) = self.source_view.as_mut() {
+            source_view.keep_local();
+            self.source_feedback =
+                Some("Local source kept · save will check the incoming revision".to_owned());
+        }
+    }
+
+    fn revert_agent_source(&mut self) {
+        let Some(source_view) = self.source_view.as_ref() else {
+            return;
+        };
+        let plan = match source_view.revert_plan() {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.source_feedback = Some(error.to_string());
+                return;
+            }
+        };
+        let result = self.source_workspace().and_then(|workspace| {
+            workspace
+                .write_file(&plan.path, &plan.content, Some(&plan.expected_revision))
+                .map_err(|error| error.to_string())
+        });
+        match result {
+            Ok(snapshot) => {
+                if let Some(source_view) = self.source_view.as_mut() {
+                    let _ = source_view.accept_saved(snapshot, &plan.buffer_at_request);
+                }
+                self.source_feedback = Some("Agent edit reverted with a revision check".to_owned());
+            }
+            Err(error) => {
+                self.source_feedback = Some(format!("Agent edit was not reverted: {error}"));
+            }
+        }
     }
 
     fn execute_workspace(&mut self, command: WorkspaceCommand) {
@@ -2041,6 +2463,17 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                 }
             }
         }
+        if let (Some(source_view), Some(input)) =
+            (self.source_view.as_ref(), self.source_input.as_ref())
+            && !source_view.is_dirty()
+        {
+            let source = source_view.buffer().to_owned();
+            if input.read(cx).value().to_string() != source {
+                self.source_syncing = true;
+                input.update(cx, |input, cx| input.set_value(source, window, cx));
+                self.source_syncing = false;
+            }
+        }
         let snapshot = self
             .model
             .as_ref()
@@ -2488,6 +2921,97 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .script_feedback
             .clone()
             .unwrap_or_else(|| "Studio Script · parser-of-record".to_owned());
+        let source_root_input = self.source_root_input.clone();
+        let source_path_input = self.source_path_input.clone();
+        let source_input = self.source_input.clone();
+        let source_feedback = self.source_feedback.clone().unwrap_or_else(|| {
+            "Link a local source folder to edit files used by studio dev".to_owned()
+        });
+        let source_status = self.source_view.as_ref().map_or_else(
+            || "No source file open".to_owned(),
+            |source_view| {
+                let state = if source_view.conflict().is_some() {
+                    "Conflict"
+                } else if source_view.is_dirty() {
+                    "Unsaved changes"
+                } else {
+                    "Saved"
+                };
+                format!("{} · {state}", source_view.path())
+            },
+        );
+        let source_conflict = self
+            .source_view
+            .as_ref()
+            .and_then(crate::source_view::SourceView::conflict);
+        let source_diff = source_conflict.map(source_conflict_summary);
+        let source_conflict_agent = source_conflict.map(|conflict| conflict.client_name.clone());
+        let source_has_conflict = source_conflict.is_some();
+        let source_is_dirty = self
+            .source_view
+            .as_ref()
+            .is_some_and(crate::source_view::SourceView::is_dirty);
+        let source_can_revert = self
+            .source_view
+            .as_ref()
+            .is_some_and(|source_view| source_view.revert_plan().is_ok());
+        let preview_status = self.preview_status.clone();
+        let preview_selection = preview_status
+            .as_ref()
+            .and_then(|status| status.selection.clone());
+        let preview_presentation = preview_status
+            .as_ref()
+            .map(|status| status.presentation.clone())
+            .unwrap_or_default();
+        let preview_enabled = preview_status.is_some();
+        let preview_selection_mode = preview_status
+            .as_ref()
+            .is_some_and(|status| status.authoring_selection);
+        let preview_selection_label = preview_selection.as_ref().map_or_else(
+            || "No component selected".to_owned(),
+            |selection| {
+                format!(
+                    "Selected node {} · component {} · screen {}",
+                    selection.node_id,
+                    selection.component_id.as_deref().unwrap_or("unknown"),
+                    selection.screen_id.as_deref().unwrap_or("unknown"),
+                )
+            },
+        );
+        let preview_source_link = preview_selection.as_ref().and_then(|selection| {
+            selection.source.as_ref().map(|source| {
+                (
+                    source.path.clone(),
+                    source.line,
+                    source.column,
+                    source.offset,
+                )
+            })
+        });
+        let preview_status_text = preview_status.as_ref().map_or_else(
+            || "Preview not connected".to_owned(),
+            |status| {
+                format!(
+                    "{} · revision {} · screen {} · {}×{} · {:?} · zoom request {}%",
+                    format!("{:?}", status.phase),
+                    status.applied_revision,
+                    status
+                        .presentation
+                        .screen_id
+                        .as_deref()
+                        .unwrap_or("loading"),
+                    status.presentation.viewport.width,
+                    status.presentation.viewport.height,
+                    status.presentation.orientation,
+                    status.presentation.zoom_milli / 10,
+                )
+            },
+        );
+        let preview_feedback = self
+            .preview_feedback
+            .clone()
+            .unwrap_or_else(|| "Studio dev status is checked automatically".to_owned());
+        let preview_command_pending = self.preview_command_pending;
         let prototype_feedback = self
             .prototype_feedback
             .clone()
@@ -2801,6 +3325,316 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                     )
                     .child(
                         div()
+                            .id("focus-preview-bridge")
+                            .role(Role::Pane)
+                            .child("Studio dev preview"),
+                    )
+                    .child(
+                        div()
+                            .id("focus-preview-status")
+                            .role(Role::Status)
+                            .text_sm()
+                            .child(preview_status_text),
+                    )
+                    .child(
+                        div()
+                            .id("focus-preview-controls")
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                Button::new("focus-preview-refresh")
+                                    .label("Refresh status")
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.request_preview_control(PreviewRequest::Status, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-preview-selection-mode")
+                                    .label(if preview_selection_mode {
+                                        "Disable select mode"
+                                    } else {
+                                        "Enable select mode"
+                                    })
+                                    .disabled(!preview_enabled || preview_command_pending)
+                                    .secondary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_preview_control(
+                                            PreviewRequest::Selection(!preview_selection_mode),
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-preview-phone")
+                                    .label("Phone")
+                                    .disabled(!preview_enabled || preview_command_pending)
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.request_preview_control(
+                                            PreviewRequest::Presentation(
+                                                studio_protocol::dev_rpc::DevPresentationUpdate {
+                                                    viewport: Some(studio_protocol::dev_rpc::DevViewport {
+                                                        width: 390,
+                                                        height: 844,
+                                                    }),
+                                                    orientation: Some(
+                                                        studio_protocol::dev_rpc::DevOrientation::Portrait,
+                                                    ),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-preview-tablet")
+                                    .label("Tablet")
+                                    .disabled(!preview_enabled || preview_command_pending)
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.request_preview_control(
+                                            PreviewRequest::Presentation(
+                                                studio_protocol::dev_rpc::DevPresentationUpdate {
+                                                    viewport: Some(studio_protocol::dev_rpc::DevViewport {
+                                                        width: 768,
+                                                        height: 1024,
+                                                    }),
+                                                    orientation: Some(
+                                                        studio_protocol::dev_rpc::DevOrientation::Portrait,
+                                                    ),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-preview-desktop")
+                                    .label("Desktop")
+                                    .disabled(!preview_enabled || preview_command_pending)
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.request_preview_control(
+                                            PreviewRequest::Presentation(
+                                                studio_protocol::dev_rpc::DevPresentationUpdate {
+                                                    viewport: Some(studio_protocol::dev_rpc::DevViewport {
+                                                        width: 1440,
+                                                        height: 900,
+                                                    }),
+                                                    orientation: Some(
+                                                        studio_protocol::dev_rpc::DevOrientation::Landscape,
+                                                    ),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child({
+                                let orientation = match preview_presentation.orientation {
+                                    studio_protocol::dev_rpc::DevOrientation::Portrait => {
+                                        studio_protocol::dev_rpc::DevOrientation::Landscape
+                                    }
+                                    studio_protocol::dev_rpc::DevOrientation::Landscape => {
+                                        studio_protocol::dev_rpc::DevOrientation::Portrait
+                                    }
+                                };
+                                Button::new("focus-preview-rotate")
+                                    .label("Rotate")
+                                    .disabled(!preview_enabled || preview_command_pending)
+                                    .secondary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_preview_control(
+                                            PreviewRequest::Presentation(
+                                                studio_protocol::dev_rpc::DevPresentationUpdate {
+                                                    orientation: Some(orientation),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    }))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("focus-preview-selection")
+                            .role(Role::Status)
+                            .text_sm()
+                            .child(preview_selection_label),
+                    )
+                    .children(preview_source_link.map(|(path, line, column, offset)| {
+                        Button::new("focus-preview-open-source")
+                            .label(format!("Open {path}:{line}:{column}"))
+                            .secondary()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_preview_source(
+                                    path.clone(),
+                                    line,
+                                    column,
+                                    offset,
+                                    window,
+                                    cx,
+                                );
+                                cx.notify();
+                            }))
+                    }))
+                    .child(
+                        div()
+                            .id("focus-preview-feedback")
+                            .text_sm()
+                            .child(preview_feedback),
+                    )
+                    .child(
+                        div()
+                            .id("focus-source-panel")
+                            .role(Role::Pane)
+                            .child("Project source files"),
+                    )
+                    .child(
+                        div()
+                            .id("focus-source-root-input")
+                            .role(Role::TextInput)
+                            .aria_label("Local project folder")
+                            .child(Input::new(&source_root_input).id("focus-source-root")),
+                    )
+                    .child(
+                        Button::new("focus-source-link")
+                            .label("Link folder")
+                            .secondary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.link_source_root(cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("focus-source-root-status")
+                            .text_xs()
+                            .child(self.linked_source_root.clone().unwrap_or_else(|| {
+                                "Not linked to this Designer project".to_owned()
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("focus-source-file-input")
+                            .role(Role::TextInput)
+                            .aria_label("Project-relative source file path")
+                            .child(Input::new(&source_path_input).id("focus-source-path")),
+                    )
+                    .child(
+                        Button::new("focus-source-open")
+                            .label("Open file")
+                            .disabled(self.linked_source_root.is_none())
+                            .secondary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_source_path(window, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("focus-source-file-list")
+                            .role(Role::List)
+                            .aria_label("Project source files")
+                            .text_xs()
+                            .child(format!("Accessible source files · {}", self.source_files.len()))
+                            .children(self.source_files.iter().take(20).map(|file| {
+                                let path = file.path.clone();
+                                Button::new(format!("focus-source-file-{}", path))
+                                    .label(path.clone())
+                                    .secondary()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_source_file(path.clone(), window, cx);
+                                        cx.notify();
+                                    }))
+                            })),
+                    )
+                    .child(div().id("focus-source-status").role(Role::Status).child(source_status))
+                    .child(
+                        div()
+                            .id("focus-source-editor")
+                            .role(Role::TextInput)
+                            .aria_label("Editable project source buffer")
+                            .h(px(260.0))
+                            .when_some(source_input, |element, input| {
+                                element.child(Editor::new(&input))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("focus-source-actions")
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                Button::new("focus-source-save")
+                                    .label("Save source")
+                                    .disabled(!source_is_dirty || source_has_conflict)
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.save_source_file();
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-source-keep-local")
+                                    .label("Keep local edits")
+                                    .disabled(!source_has_conflict)
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.keep_local_source();
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-source-use-incoming")
+                                    .label("Use agent version")
+                                    .disabled(!source_has_conflict)
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.accept_incoming_source();
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("focus-source-revert-agent")
+                                    .label("Revert agent edit")
+                                    .disabled(!source_can_revert)
+                                    .secondary()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.revert_agent_source();
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .children(source_conflict_agent.map(|agent| {
+                        div()
+                            .id("focus-source-agent-attribution")
+                            .role(Role::Status)
+                            .text_sm()
+                            .child(format!("Incoming edit reported by {agent}"))
+                    }))
+                    .children(source_diff.map(|diff| {
+                        div()
+                            .id("focus-source-diff")
+                            .role(Role::Status)
+                            .text_xs()
+                            .child(diff)
+                    }))
+                    .child(
+                        div()
+                            .id("focus-source-feedback")
+                            .text_sm()
+                            .child(source_feedback),
+                    )
+                    .child(
+                        div()
                             .id("focus-script-diagnostics")
                             .role(Role::Status)
                             .text_sm()
@@ -3041,6 +3875,58 @@ fn focus_actor() -> Result<Actor, studio_design::InvalidIdentity> {
 struct NoopWake;
 impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
+}
+
+fn source_language(path: &str) -> &'static str {
+    match std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+    {
+        Some("studio") => "studio",
+        Some("rs") => "rust",
+        Some("ts") | Some("tsx") => "typescript",
+        Some("js") | Some("jsx") => "javascript",
+        Some("json") => "json",
+        Some("toml") => "toml",
+        Some("md") => "markdown",
+        _ => "text",
+    }
+}
+
+fn source_conflict_summary(conflict: &crate::source_view::SourceConflict) -> String {
+    let base = conflict.base.content.lines().collect::<Vec<_>>();
+    let incoming = conflict.incoming.content.lines().collect::<Vec<_>>();
+    let mut changes = Vec::new();
+    for index in 0..base.len().max(incoming.len()) {
+        let before = base.get(index).copied();
+        let after = incoming.get(index).copied();
+        if before == after {
+            continue;
+        }
+        if let Some(before) = before {
+            changes.push(format!("− {}", truncate_source_line(before)));
+        }
+        if let Some(after) = after {
+            changes.push(format!("+ {}", truncate_source_line(after)));
+        }
+        if changes.len() >= 12 {
+            changes.push("… diff preview truncated".to_owned());
+            break;
+        }
+    }
+    if changes.is_empty() {
+        "Incoming revision differs; line preview is unavailable".to_owned()
+    } else {
+        changes.join("\n")
+    }
+}
+
+fn truncate_source_line(line: &str) -> String {
+    let mut shortened = line.chars().take(160).collect::<String>();
+    if line.chars().count() > 160 {
+        shortened.push('…');
+    }
+    shortened
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {

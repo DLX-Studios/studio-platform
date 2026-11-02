@@ -22,6 +22,12 @@ pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 /// Status method exposed by the `studio dev` host.
 pub const STATUS_METHOD: &str = "studio.dev.status";
 
+/// Toggle authoring selection mode in the running preview.
+pub const SELECTION_MODE_METHOD: &str = "studio.dev.selection.setMode";
+
+/// Change the active preview presentation.
+pub const PRESENTATION_METHOD: &str = "studio.dev.presentation.set";
+
 /// Native local listener for a development RPC session.
 pub use super::reload::ReloadListener as DevRpcListener;
 /// Native local stream for a development RPC session.
@@ -55,6 +61,182 @@ pub struct DevDiagnostic {
     pub message: String,
 }
 
+/// Current native preview viewport orientation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DevOrientation {
+    /// Viewport width is no greater than its height.
+    Portrait,
+    /// Viewport width is no less than its height.
+    Landscape,
+}
+
+/// Logical-pixel viewport requested by a preview client.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DevViewport {
+    /// Logical width in pixels.
+    pub width: u32,
+    /// Logical height in pixels.
+    pub height: u32,
+}
+
+/// Source span linked to a selected native preview node.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevSourceLocation {
+    /// Project-relative UTF-8 source path.
+    pub path: String,
+    /// One-based source line.
+    pub line: u64,
+    /// One-based source column.
+    pub column: u64,
+    /// Zero-based UTF-8 byte offset.
+    pub offset: u64,
+}
+
+/// Selected native preview node and its optional authoring source link.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevSelection {
+    /// Stable node identity from the mounted UI tree.
+    pub node_id: String,
+    /// Entry component identity that owns this node.
+    pub component_id: Option<String>,
+    /// Current screen identity, when the runtime can identify one.
+    pub screen_id: Option<String>,
+    /// Source location for `.studio` IR nodes, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<DevSourceLocation>,
+}
+
+/// Current preview presentation context.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevPresentation {
+    /// Entry component identity that owns the current preview.
+    pub component_id: Option<String>,
+    /// The identity of the one screen currently mounted by this dev session.
+    pub screen_id: Option<String>,
+    /// Screen identities available to this dev session.
+    pub available_screen_ids: Vec<String>,
+    /// Logical-pixel preview viewport.
+    pub viewport: DevViewport,
+    /// Orientation derived from the viewport dimensions.
+    pub orientation: DevOrientation,
+    /// Applied preview zoom in thousandths (currently fixed at 1000, or 100%).
+    pub zoom_milli: u32,
+}
+
+impl Default for DevPresentation {
+    fn default() -> Self {
+        Self {
+            component_id: None,
+            screen_id: None,
+            available_screen_ids: Vec::new(),
+            viewport: DevViewport {
+                width: 1440,
+                height: 900,
+            },
+            orientation: DevOrientation::Landscape,
+            zoom_milli: 1_000,
+        }
+    }
+}
+
+/// Partial presentation update sent to `studio.dev.presentation.set`.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevPresentationUpdate {
+    /// Requested screen identity. Only the currently mounted screen is available.
+    #[serde(alias = "screen_id")]
+    pub screen_id: Option<String>,
+    /// Replace the logical-pixel viewport dimensions.
+    pub viewport: Option<DevViewport>,
+    /// Set orientation. When dimensions are omitted, width and height are rotated.
+    pub orientation: Option<DevOrientation>,
+    /// Request zoom in thousandths (1000 is 100%); non-default values are rejected until scaling is supported.
+    #[serde(alias = "zoom_milli")]
+    pub zoom_milli: Option<u32>,
+}
+
+/// Failure while validating a preview presentation update.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum DevPresentationError {
+    /// A requested screen is not the screen mounted by this session.
+    #[error("screen `{0}` is unavailable in this dev session")]
+    ScreenUnavailable(String),
+    /// The update contains viewport dimensions outside the supported bounds.
+    #[error("viewport dimensions must be between 320 and 8192 logical pixels")]
+    InvalidViewport,
+    /// The supplied viewport dimensions disagree with the requested orientation.
+    #[error("viewport dimensions do not match the requested orientation")]
+    OrientationMismatch,
+    /// Zoom falls outside the supported range.
+    #[error("zoom must be between 250 and 4000 thousandths")]
+    InvalidZoom,
+    /// Native preview scaling has not been implemented.
+    #[error("native preview zoom is not supported yet")]
+    ZoomUnavailable,
+}
+
+impl DevPresentationUpdate {
+    /// Validate and merge this update against the current preview context.
+    ///
+    /// # Errors
+    /// Returns a screen, viewport, orientation, or zoom validation error.
+    pub fn apply_to(
+        &self,
+        current: &DevPresentation,
+    ) -> Result<DevPresentation, DevPresentationError> {
+        if let Some(screen_id) = &self.screen_id
+            && current.screen_id.as_deref() != Some(screen_id.as_str())
+        {
+            return Err(DevPresentationError::ScreenUnavailable(screen_id.clone()));
+        }
+
+        let mut updated = current.clone();
+        if let Some(viewport) = self.viewport {
+            if !(320..=8192).contains(&viewport.width) || !(320..=8192).contains(&viewport.height) {
+                return Err(DevPresentationError::InvalidViewport);
+            }
+            updated.viewport = viewport;
+        }
+        if let Some(orientation) = self.orientation {
+            if self.viewport.is_none() {
+                if orientation_for(updated.viewport) != orientation {
+                    updated.viewport = DevViewport {
+                        width: updated.viewport.height,
+                        height: updated.viewport.width,
+                    };
+                }
+            } else if orientation_for(updated.viewport) != orientation {
+                return Err(DevPresentationError::OrientationMismatch);
+            }
+            updated.orientation = orientation;
+        } else if self.viewport.is_some() {
+            updated.orientation = orientation_for(updated.viewport);
+        }
+        if let Some(zoom_milli) = self.zoom_milli {
+            if !(250..=4_000).contains(&zoom_milli) {
+                return Err(DevPresentationError::InvalidZoom);
+            }
+            if zoom_milli != updated.zoom_milli {
+                return Err(DevPresentationError::ZoomUnavailable);
+            }
+        }
+        Ok(updated)
+    }
+}
+
+fn orientation_for(viewport: DevViewport) -> DevOrientation {
+    if viewport.width > viewport.height {
+        DevOrientation::Landscape
+    } else {
+        DevOrientation::Portrait
+    }
+}
+
 /// Thread-safe snapshot payload returned by `studio.dev.status`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -69,6 +251,13 @@ pub struct DevStatus {
     /// Most recent failure, retained after a later successful update for context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_diagnostic: Option<DevDiagnostic>,
+    /// Whether preview clicks are intercepted as authoring selection.
+    pub authoring_selection: bool,
+    /// Most recently selected preview node, when authoring selection is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<DevSelection>,
+    /// Current preview screen, viewport, orientation, and zoom request.
+    pub presentation: DevPresentation,
 }
 
 impl Default for DevStatus {
@@ -78,6 +267,9 @@ impl Default for DevStatus {
             applied_revision: 0,
             code_hash: None,
             last_diagnostic: None,
+            authoring_selection: false,
+            selection: None,
+            presentation: DevPresentation::default(),
         }
     }
 }
@@ -170,6 +362,42 @@ pub fn connect_endpoint(path: &Path) -> io::Result<DevRpcStream> {
 ///
 /// Returns a timeout, transport, JSON-RPC, or decoding error.
 pub fn request_status(build_dir: &Path, timeout: Duration) -> Result<DevStatus, DevRpcError> {
+    request_dev_status(build_dir, timeout, STATUS_METHOD, &serde_json::json!({}))
+}
+
+/// Toggle authoring selection mode and return the updated preview status.
+///
+/// # Errors
+/// Returns a timeout, transport, JSON-RPC, or decoding error.
+pub fn set_authoring_selection(
+    build_dir: &Path,
+    enabled: bool,
+    timeout: Duration,
+) -> Result<DevStatus, DevRpcError> {
+    let params = serde_json::json!({ "enabled": enabled });
+    request_dev_status(build_dir, timeout, SELECTION_MODE_METHOD, &params)
+}
+
+/// Apply a validated preview presentation update and return the resulting status.
+///
+/// # Errors
+/// Returns a timeout, transport, JSON-RPC, or decoding error.
+pub fn set_presentation(
+    build_dir: &Path,
+    update: &DevPresentationUpdate,
+    timeout: Duration,
+) -> Result<DevStatus, DevRpcError> {
+    let params = serde_json::to_value(update)
+        .map_err(|error| DevRpcError::InvalidResponse(error.to_string()))?;
+    request_dev_status(build_dir, timeout, PRESENTATION_METHOD, &params)
+}
+
+fn request_dev_status(
+    build_dir: &Path,
+    timeout: Duration,
+    method: &str,
+    params: &Value,
+) -> Result<DevStatus, DevRpcError> {
     if timeout.is_zero() {
         return Err(DevRpcError::Timeout);
     }
@@ -191,8 +419,8 @@ pub fn request_status(build_dir: &Path, timeout: Duration) -> Result<DevStatus, 
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "id": request_id,
-        "method": STATUS_METHOD,
-        "params": {},
+        "method": method,
+        "params": params,
     });
     let line = serde_json::to_string(&request)
         .map_err(|error| DevRpcError::InvalidResponse(error.to_string()))?;
@@ -294,6 +522,83 @@ mod tests {
     }
 
     #[test]
+    fn presentation_updates_rotate_viewport_and_reject_unavailable_screens() {
+        let current = DevPresentation {
+            screen_id: Some("app".to_owned()),
+            available_screen_ids: vec!["app".to_owned()],
+            ..DevPresentation::default()
+        };
+        let rotated = DevPresentationUpdate {
+            orientation: Some(DevOrientation::Portrait),
+            ..DevPresentationUpdate::default()
+        }
+        .apply_to(&current)
+        .unwrap();
+        assert_eq!(rotated.viewport.width, 900);
+        assert_eq!(rotated.viewport.height, 1440);
+        assert_eq!(rotated.orientation, DevOrientation::Portrait);
+
+        let unavailable = DevPresentationUpdate {
+            screen_id: Some("settings".to_owned()),
+            ..DevPresentationUpdate::default()
+        }
+        .apply_to(&current)
+        .unwrap_err();
+        assert_eq!(
+            unavailable,
+            DevPresentationError::ScreenUnavailable("settings".to_owned())
+        );
+    }
+
+    #[test]
+    fn presentation_updates_reject_invalid_viewports_orientation_and_zoom() {
+        let current = DevPresentation::default();
+        assert_eq!(
+            DevPresentationUpdate {
+                viewport: Some(DevViewport {
+                    width: 200,
+                    height: 900,
+                }),
+                ..DevPresentationUpdate::default()
+            }
+            .apply_to(&current)
+            .unwrap_err(),
+            DevPresentationError::InvalidViewport
+        );
+        assert_eq!(
+            DevPresentationUpdate {
+                viewport: Some(DevViewport {
+                    width: 390,
+                    height: 844,
+                }),
+                orientation: Some(DevOrientation::Landscape),
+                ..DevPresentationUpdate::default()
+            }
+            .apply_to(&current)
+            .unwrap_err(),
+            DevPresentationError::OrientationMismatch
+        );
+        assert_eq!(
+            DevPresentationUpdate {
+                zoom_milli: Some(4_001),
+                ..DevPresentationUpdate::default()
+            }
+            .apply_to(&current)
+            .unwrap_err(),
+            DevPresentationError::InvalidZoom
+        );
+        assert_eq!(
+            DevPresentationUpdate {
+                zoom_milli: Some(1_250),
+                ..DevPresentationUpdate::default()
+            }
+            .apply_to(&current)
+            .unwrap_err(),
+            DevPresentationError::ZoomUnavailable
+        );
+    }
+
+    #[test]
     fn status_client_sends_json_rpc_and_decodes_the_snapshot() {
         let directory = tempfile::tempdir().unwrap();
         let endpoint = socket_path(directory.path());
@@ -313,6 +618,7 @@ mod tests {
                     code: "BUILD_COMPILE_ASC".to_owned(),
                     message: "kept last good revision".to_owned(),
                 }),
+                ..DevStatus::default()
             };
             let response = serde_json::json!({
                 "jsonrpc": "2.0",

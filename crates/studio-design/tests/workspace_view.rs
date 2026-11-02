@@ -109,6 +109,7 @@ fn panel_geometry_is_independent_and_survives_persistence_round_trip() {
         let record = WorkspaceRecord {
             schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             project_id: project_id.clone(),
+            linked_source_root: Some("/tmp/studio-project".to_owned()),
             state: state.clone(),
         };
         persistence.save(&record).await.expect("save succeeds");
@@ -119,6 +120,10 @@ fn panel_geometry_is_independent_and_survives_persistence_round_trip() {
             .expect("load succeeds")
             .expect("saved state exists");
         assert_eq!(reopened.state, state);
+        assert_eq!(
+            reopened.linked_source_root.as_deref(),
+            Some("/tmp/studio-project")
+        );
         assert_eq!(
             reopened
                 .state
@@ -137,6 +142,56 @@ fn panel_geometry_is_independent_and_survives_persistence_round_trip() {
                 .width,
             555
         );
+    });
+}
+
+#[test]
+fn workspace_record_without_a_linked_source_root_still_loads() {
+    let project_id = project_id();
+    let record = WorkspaceRecord {
+        schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
+        project_id,
+        linked_source_root: None,
+        state: WorkspaceState::default(),
+    };
+    let mut value = serde_json::to_value(record).expect("record serializes");
+    value
+        .as_object_mut()
+        .expect("record is an object")
+        .remove("linked_source_root");
+
+    let reopened: WorkspaceRecord =
+        serde_json::from_value(value).expect("older record remains readable");
+    assert_eq!(reopened.linked_source_root, None);
+}
+
+#[test]
+fn linked_source_roots_are_isolated_by_project_id() {
+    block_on(async {
+        let alice_id = ProjectId::new("alice-source-project").expect("valid Alice project id");
+        let bob_id = ProjectId::new("bob-source-project").expect("valid Bob project id");
+        let persistence = InMemoryWorkspacePersistence::default();
+        let alice = WorkspaceRecord {
+            schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
+            project_id: alice_id.clone(),
+            linked_source_root: Some("/projects/alice/app".to_owned()),
+            state: WorkspaceState::default(),
+        };
+        let bob = WorkspaceRecord {
+            schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
+            project_id: bob_id.clone(),
+            linked_source_root: Some("/projects/bob/app".to_owned()),
+            state: WorkspaceState::default(),
+        };
+
+        persistence
+            .save(&alice)
+            .await
+            .expect("save Alice workspace");
+        persistence.save(&bob).await.expect("save Bob workspace");
+
+        assert_eq!(persistence.load(&alice_id).await.unwrap().unwrap(), alice);
+        assert_eq!(persistence.load(&bob_id).await.unwrap().unwrap(), bob);
     });
 }
 

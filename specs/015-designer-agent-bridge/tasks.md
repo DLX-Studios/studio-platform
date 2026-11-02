@@ -53,15 +53,42 @@ These build on the source and preview RPCs after the first milestone lands.
 
 ### T015-6 — Connect agent edits to the open Designer project view
 
-- Associate a local source root with an authenticated Designer project.
-- Refresh open text buffers after agent writes and preserve unsaved edits as
-  explicit conflicts instead of silently replacing them.
-- Show file diffs, agent attribution, and undo/revert actions in Designer.
+- [x] Persist an optional canonical source root per authenticated `ProjectId`,
+  with backward-compatible workspace-record decoding.
+- [x] Publish bounded local change notifications after successful MCP writes
+  and patches, including revision-guarded before content when available.
+- [x] Add a source buffer model that refreshes clean buffers and preserves dirty
+  buffers as explicit base/local/incoming conflicts.
+- [x] Add Designer link/open/edit/save controls backed by project-relative file
+  access and expected-revision writes.
+- [x] Show diff and reported agent name; accept incoming content or revert only
+  when the disk revision still matches the agent edit.
+- [x] Test project isolation, clean refresh, dirty conflict, and stale revert.
 
-### T015-7 — Bridge preview selection and presentation controls
+### T015-7 — Bridge selection and viewport controls for the mounted preview
 
-- Report selected component IDs and screen IDs from the preview to Designer.
-- Let Designer change the active screen, viewport, orientation, and zoom over
-  the Studio dev JSON-RPC session.
-- Preserve source links where the compiler can map rendered components back to
-  files and spans.
+- [x] Extend the bounded dev RPC with opt-in selection, selected source spans,
+  mounted-entry identity, viewport, and orientation.
+- [x] Apply validated selection and presentation commands on the GPUI thread
+  through a bounded queue with bounded response deadlines.
+- [x] Add Designer MCP tools for preview status, selection mode, and viewport
+  updates.
+- [x] Show the connected preview, selected source link, viewport presets, and
+  rotation controls in Designer.
+- [x] Test RPC validation, queue bounds, and stable source-location reporting.
+- [x] Document that this ticket controls the one mounted entry and does not
+  claim screen switching or visual zoom.
+
+### T015-8 — Add multi-screen routing and visual zoom to studio dev
+
+- [ ] Define how a project declares screen entries and stable screen IDs.
+- [ ] Compile and hot-reload the declared screen set while preserving the
+  selected entry when it remains available.
+- [ ] Switch the mounted screen through the bounded dev RPC and report each
+  screen's source map to Designer.
+- [ ] Apply visual zoom to the rendered tree and keep pointer hit targets
+  aligned with the scaled output.
+- [ ] Add Designer controls for screen switching and zoom after the runtime
+  supports both operations.
+- [ ] Test route selection, hot reload, source links, zoom bounds, and input
+  coordinate behavior.

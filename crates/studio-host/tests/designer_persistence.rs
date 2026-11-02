@@ -270,6 +270,7 @@ fn real_local_store_persists_focus_and_workbench_panel_geometry() {
             let record = WorkspaceRecord {
                 schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
                 project_id: project_id(),
+                linked_source_root: None,
                 state,
             };
             persistence.save(&record).await.expect("workspace saves");

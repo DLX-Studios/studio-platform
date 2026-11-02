@@ -526,6 +526,13 @@ pub struct WorkspaceRecord {
     pub schema_version: u16,
     /// Project this presentation belongs to.
     pub project_id: ProjectId,
+    /// Canonical local source directory linked to this authenticated project.
+    ///
+    /// This is a local machine preference and is not part of the shared design
+    /// model. Missing values are accepted when reading records written before
+    /// source-folder linking was introduced.
+    #[serde(default)]
+    pub linked_source_root: Option<String>,
     /// Persisted presentation and per-view arrangements.
     pub state: WorkspaceState,
 }

@@ -190,4 +190,27 @@ fn agent_can_read_edit_and_reconcile_a_project_file_via_the_designer_server() {
     let status = client.tool("preview.status", &serde_json::json!({}));
     assert_eq!(status["isError"], false);
     assert_eq!(status["structuredContent"]["running"], false);
+
+    let presentation = client.tool(
+        "preview.presentation.set",
+        &serde_json::json!({
+            "viewport": { "width": 390, "height": 844 },
+            "orientation": "portrait"
+        }),
+    );
+    assert_eq!(presentation["isError"], true);
+    assert_eq!(
+        presentation["structuredContent"]["error"]["code"],
+        "PREVIEW_CONTROL_FAILED"
+    );
+
+    let selection = client.tool(
+        "preview.selection.set_mode",
+        &serde_json::json!({ "enabled": true }),
+    );
+    assert_eq!(selection["isError"], true);
+    assert_eq!(
+        selection["structuredContent"]["error"]["code"],
+        "PREVIEW_CONTROL_FAILED"
+    );
 }

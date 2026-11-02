@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::source_events::{self, SourceChangeEvent};
 use crate::source_workspace::{PatchEdit, ProjectSourceError, ProjectSourceWorkspace};
 
 const MAX_RPC_FRAME_BYTES: usize = 32 * 1024 * 1024;
@@ -37,6 +38,7 @@ pub fn run_stdio(project_root: &Path) -> i32 {
     let mut input = BufReader::new(stdin.lock());
     let mut output = stdout.lock();
     let mut frame = Vec::new();
+    let mut client_name = None;
 
     loop {
         let has_frame = match read_bounded_frame(&mut input, &mut frame, MAX_RPC_FRAME_BYTES) {
@@ -51,7 +53,7 @@ pub fn run_stdio(project_root: &Path) -> i32 {
         }
 
         let response = match serde_json::from_slice::<Value>(&frame) {
-            Ok(request) => dispatch(&request, &workspace),
+            Ok(request) => dispatch_with_context(&request, &workspace, &mut client_name),
             Err(error) => Some(json_rpc_error(Value::Null, -32700, error.to_string())),
         };
         if let Some(response) = response {
@@ -99,7 +101,16 @@ fn read_bounded_frame(
     Ok(true)
 }
 
+#[cfg(test)]
 fn dispatch(request: &Value, workspace: &ProjectSourceWorkspace) -> Option<Value> {
+    dispatch_with_context(request, workspace, &mut None)
+}
+
+fn dispatch_with_context(
+    request: &Value,
+    workspace: &ProjectSourceWorkspace,
+    client_name: &mut Option<String>,
+) -> Option<Value> {
     let id = request.get("id").cloned();
     let Some(object) = request.as_object() else {
         return id.map(|id| json_rpc_error(id, -32600, "request must be a JSON object"));
@@ -122,7 +133,13 @@ fn dispatch(request: &Value, workspace: &ProjectSourceWorkspace) -> Option<Value
     };
 
     match method {
-        "initialize" => id.map(|id| initialize(id, request)),
+        "initialize" => id.map(|id| {
+            *client_name = request
+                .pointer("/params/clientInfo/name")
+                .and_then(Value::as_str)
+                .map(|name| source_events::sanitize_client_name(Some(name)));
+            initialize(id, request)
+        }),
         "notifications/initialized" | "notifications/cancelled" => None,
         "ping" => id.map(|id| json_rpc_result(id, json!({}))),
         "tools/list" => id.map(|id| json_rpc_result(id, json!({ "tools": tools() }))),
@@ -140,7 +157,12 @@ fn dispatch(request: &Value, workspace: &ProjectSourceWorkspace) -> Option<Value
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            id.map(|id| json_rpc_result(id, call_tool(name, &arguments, workspace)))
+            id.map(|id| {
+                json_rpc_result(
+                    id,
+                    call_tool(name, &arguments, workspace, client_name.as_deref()),
+                )
+            })
         }
         _ => id.map(|id| json_rpc_error(id, -32601, "method not found")),
     }
@@ -167,7 +189,12 @@ fn initialize(id: Value, request: &Value) -> Value {
     )
 }
 
-fn call_tool(name: &str, arguments: &Value, workspace: &ProjectSourceWorkspace) -> Value {
+fn call_tool(
+    name: &str,
+    arguments: &Value,
+    workspace: &ProjectSourceWorkspace,
+    client_name: Option<&str>,
+) -> Value {
     let result = match name {
         "project.info" => Ok(json!({
             "project_root": workspace.root().to_string_lossy(),
@@ -217,16 +244,29 @@ fn call_tool(name: &str, arguments: &Value, workspace: &ProjectSourceWorkspace) 
                     );
                 }
             };
-            workspace
-                .write_file(path, content, expected_revision)
-                .map(|file| {
-                    json!({
+            let before = expected_revision
+                .and_then(|_| workspace.read_file(path).ok())
+                .filter(|snapshot| Some(snapshot.revision.as_str()) == expected_revision);
+            match workspace.write_file(path, content, expected_revision) {
+                Ok(file) => {
+                    if expected_revision.is_none() || before.is_some() {
+                        let event = SourceChangeEvent::new(
+                            file.path.clone(),
+                            before.as_ref().map(|snapshot| snapshot.revision.clone()),
+                            before.map(|snapshot| snapshot.content),
+                            file.revision.clone(),
+                            client_name,
+                        );
+                        let _ = source_events::publish(workspace.root(), &event);
+                    }
+                    Ok(json!({
                         "path": file.path,
                         "revision": file.revision,
                         "bytes": file.content.len()
-                    })
-                })
-                .map_err(project_error)
+                    }))
+                }
+                Err(error) => Err(project_error(error)),
+            }
         }
         "project.apply_patch" => {
             let Some(path) = arguments.get("path").and_then(Value::as_str) else {
@@ -246,16 +286,30 @@ fn call_tool(name: &str, arguments: &Value, workspace: &ProjectSourceWorkspace) 
                 },
                 None => return tool_error("invalid_arguments", "edits must be an array"),
             };
-            workspace
-                .apply_patch(path, &edits, expected_revision)
-                .map(|file| {
-                    json!({
+            let before = workspace
+                .read_file(path)
+                .ok()
+                .filter(|snapshot| snapshot.revision == expected_revision);
+            match workspace.apply_patch(path, &edits, expected_revision) {
+                Ok(file) => {
+                    if let Some(before) = before {
+                        let event = SourceChangeEvent::new(
+                            file.path.clone(),
+                            Some(before.revision),
+                            Some(before.content),
+                            file.revision.clone(),
+                            client_name,
+                        );
+                        let _ = source_events::publish(workspace.root(), &event);
+                    }
+                    Ok(json!({
                         "path": file.path,
                         "revision": file.revision,
                         "bytes": file.content.len()
-                    })
-                })
-                .map_err(project_error)
+                    }))
+                }
+                Err(error) => Err(project_error(error)),
+            }
         }
         "preview.status" => {
             match studio_protocol::dev_rpc::request_status(
@@ -276,6 +330,40 @@ fn call_tool(name: &str, arguments: &Value, workspace: &ProjectSourceWorkspace) 
                 Err(error) => Err(("PREVIEW_UNAVAILABLE".to_owned(), error.to_string())),
             }
         }
+        "preview.selection.set_mode" => {
+            let Some(enabled) = arguments.get("enabled").and_then(Value::as_bool) else {
+                return tool_error("invalid_arguments", "enabled must be a boolean");
+            };
+            studio_protocol::dev_rpc::set_authoring_selection(
+                &workspace.root().join("build"),
+                enabled,
+                Duration::from_secs(2),
+            )
+            .and_then(|status| {
+                serde_json::to_value(status).map_err(|error| {
+                    studio_protocol::dev_rpc::DevRpcError::InvalidResponse(error.to_string())
+                })
+            })
+            .map_err(|error| ("PREVIEW_CONTROL_FAILED".to_owned(), error.to_string()))
+        }
+        "preview.presentation.set" => {
+            let update: studio_protocol::dev_rpc::DevPresentationUpdate =
+                match serde_json::from_value(arguments.clone()) {
+                    Ok(update) => update,
+                    Err(error) => return tool_error("invalid_arguments", error.to_string()),
+                };
+            studio_protocol::dev_rpc::set_presentation(
+                &workspace.root().join("build"),
+                &update,
+                Duration::from_secs(2),
+            )
+            .and_then(|status| {
+                serde_json::to_value(status).map_err(|error| {
+                    studio_protocol::dev_rpc::DevRpcError::InvalidResponse(error.to_string())
+                })
+            })
+            .map_err(|error| ("PREVIEW_CONTROL_FAILED".to_owned(), error.to_string()))
+        }
         _ => unreachable!("dispatch validates Designer tool names"),
     };
 
@@ -294,6 +382,8 @@ fn is_known_tool(name: &str) -> bool {
             | "project.write_file"
             | "project.apply_patch"
             | "preview.status"
+            | "preview.selection.set_mode"
+            | "preview.presentation.set"
     )
 }
 
@@ -388,9 +478,43 @@ fn tools() -> Value {
         },
         {
             "name": "preview.status",
-            "description": "Return the currently applied Studio dev revision and the last reload diagnostic.",
+            "description": "Return the Studio dev revision, current selection, source link, viewport, and reload diagnostic.",
             "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "preview.selection.set_mode",
+            "description": "Enable or disable authoring selection in the live Studio dev preview.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": { "enabled": { "type": "boolean" } },
+                "required": ["enabled"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "preview.presentation.set",
+            "description": "Set the live preview viewport and orientation, or validate its current screen identity. This dev host mounts one screen entry and rejects non-default zoom until visual scaling is supported.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "screen_id": { "type": "string" },
+                    "viewport": {
+                        "type": "object",
+                        "properties": {
+                            "width": { "type": "integer", "minimum": 320, "maximum": 8192 },
+                            "height": { "type": "integer", "minimum": 320, "maximum": 8192 }
+                        },
+                        "required": ["width", "height"],
+                        "additionalProperties": false
+                    },
+                    "orientation": { "type": "string", "enum": ["portrait", "landscape"] },
+                    "zoom_milli": { "type": "integer", "minimum": 250, "maximum": 4000 }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -420,6 +544,7 @@ fn write_frame(writer: &mut impl Write, message: &Value) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::time::Duration;
 
     fn workspace() -> (tempfile::TempDir, ProjectSourceWorkspace) {
         let directory = tempfile::tempdir().unwrap();
@@ -452,13 +577,20 @@ mod tests {
             &workspace,
         )
         .unwrap();
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 8);
         assert!(
             tools["result"]["tools"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|tool| tool["name"] == "project.apply_patch")
+        );
+        assert!(
+            tools["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == "preview.presentation.set")
         );
     }
 
@@ -487,6 +619,67 @@ mod tests {
         assert_eq!(
             workspace.read_file("app.studio").unwrap().content,
             "<Text>Updated</Text>"
+        );
+    }
+
+    #[test]
+    fn successful_write_and_patch_publish_attributed_source_events() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("manifest.json"), "{}").unwrap();
+        fs::write(directory.path().join("app.studio"), "<Text>Hello</Text>").unwrap();
+        let workspace = ProjectSourceWorkspace::open(directory.path()).unwrap();
+        let relay = source_events::SourceEventRelay::start(directory.path()).unwrap();
+        let initial = workspace.read_file("app.studio").unwrap();
+
+        let written = call_tool(
+            "project.write_file",
+            &json!({
+                "path": "app.studio",
+                "content": "<Text>Updated</Text>",
+                "expected_revision": initial.revision
+            }),
+            &workspace,
+            Some("Codex"),
+        );
+        assert_eq!(written["isError"], false);
+        let write_event = relay.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(write_event.path, "app.studio");
+        assert_eq!(write_event.before_revision, Some(initial.revision));
+        assert_eq!(
+            write_event.before_content.as_deref(),
+            Some("<Text>Hello</Text>")
+        );
+        assert_eq!(
+            write_event.after_revision,
+            written["structuredContent"]["revision"].as_str().unwrap()
+        );
+        assert_eq!(write_event.client_name, "Codex");
+
+        let updated = workspace.read_file("app.studio").unwrap();
+        let patched = call_tool(
+            "project.apply_patch",
+            &json!({
+                "path": "app.studio",
+                "expected_revision": updated.revision,
+                "edits": [{
+                    "start": 6,
+                    "end": 13,
+                    "replacement": "Patched"
+                }]
+            }),
+            &workspace,
+            Some("OpenCode"),
+        );
+        assert_eq!(patched["isError"], false);
+        let patch_event = relay.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            patch_event.before_content.as_deref(),
+            Some("<Text>Updated</Text>")
+        );
+        assert_eq!(patch_event.client_name, "OpenCode");
+        assert_eq!(
+            patch_event.after_revision,
+            patched["structuredContent"]["revision"].as_str().unwrap()
         );
     }
 
