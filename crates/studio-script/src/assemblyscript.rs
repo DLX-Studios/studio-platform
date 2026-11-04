@@ -22,6 +22,10 @@
 //! so tests can compare observable mount/navigate behavior against a
 //! hand-written counterpart without executing Wasm.
 
+mod routed;
+
+pub use routed::emit_routed_studio;
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -503,8 +507,20 @@ fn content_ty(
         StudioExpression::ReadLocal(path) => row
             .and_then(|row| row.resolve(path).ok())
             .map_or(ContentTy::Other, |(_, ty)| ty),
-        StudioExpression::Conditional { .. }
-        | StudioExpression::Array(_)
+        StudioExpression::Conditional {
+            consequent,
+            alternate,
+            ..
+        } => {
+            let consequent = content_ty(component, row, consequent);
+            let alternate = content_ty(component, row, alternate);
+            if consequent == alternate {
+                consequent
+            } else {
+                ContentTy::Other
+            }
+        }
+        StudioExpression::Array(_)
         | StudioExpression::Record(_)
         | StudioExpression::CallApprovedFunction { .. } => ContentTy::Other,
         StudioExpression::Unary { operator, .. } => match operator.as_str() {
@@ -578,6 +594,16 @@ fn emit_str_expr(
         };
     }
     match expression {
+        StudioExpression::Conditional {
+            condition,
+            consequent,
+            alternate,
+        } => Ok(format!(
+            "({} ? {} : {})",
+            emit_bool_expr(component, row, condition)?,
+            emit_str_expr(component, row, consequent)?,
+            emit_str_expr(component, row, alternate)?,
+        )),
         StudioExpression::Literal(StudioValue::String(text)) => {
             Ok(format!("\"{}\"", escape_as_string(text)))
         }
@@ -659,6 +685,16 @@ fn emit_num_expr(
         return Err(emit_failed("non-numeric row reads in arithmetic"));
     }
     match expression {
+        StudioExpression::Conditional {
+            condition,
+            consequent,
+            alternate,
+        } => Ok(format!(
+            "({} ? {} : {})",
+            emit_bool_expr(component, row, condition)?,
+            emit_num_expr(component, row, consequent)?,
+            emit_num_expr(component, row, alternate)?,
+        )),
         StudioExpression::Literal(StudioValue::Number(literal)) => Ok(literal.text.clone()),
         StudioExpression::Literal(_) => Err(emit_failed("non-numeric literals in arithmetic")),
         _ if matches!(
@@ -713,6 +749,16 @@ fn emit_bool_expr(
         return Err(emit_failed("non-boolean row reads in conditions"));
     }
     match expression {
+        StudioExpression::Conditional {
+            condition,
+            consequent,
+            alternate,
+        } => Ok(format!(
+            "({} ? {} : {})",
+            emit_bool_expr(component, row, condition)?,
+            emit_bool_expr(component, row, consequent)?,
+            emit_bool_expr(component, row, alternate)?,
+        )),
         StudioExpression::Literal(StudioValue::Boolean(value)) => Ok(value.to_string()),
         StudioExpression::Literal(_) => Err(emit_failed("non-boolean literals in conditions")),
         _ if matches!(
@@ -733,16 +779,24 @@ fn emit_bool_expr(
             left,
             right,
         } => match operator.as_str() {
-            "==" | "===" => Ok(format!(
-                "({} == {})",
-                emit_num_expr(component, row, left)?,
-                emit_num_expr(component, row, right)?
-            )),
-            "!=" | "!==" => Ok(format!(
-                "({} != {})",
-                emit_num_expr(component, row, left)?,
-                emit_num_expr(component, row, right)?
-            )),
+            "==" | "===" | "!=" | "!==" => {
+                let ty = content_ty(component, row, left);
+                if ty == ContentTy::Other || ty != content_ty(component, row, right) {
+                    return Err(emit_failed(
+                        "equality operands with different or composite types",
+                    ));
+                }
+                let comparison = if matches!(operator.as_str(), "==" | "===") {
+                    "=="
+                } else {
+                    "!="
+                };
+                Ok(format!(
+                    "({} {comparison} {})",
+                    emit_typed(component, row, left, ty)?,
+                    emit_typed(component, row, right, ty)?,
+                ))
+            }
             "<" | ">" | "<=" | ">=" => Ok(format!(
                 "({} {} {})",
                 emit_num_expr(component, row, left)?,

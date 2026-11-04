@@ -4,6 +4,7 @@
 //! codes; packaging goes through `studio_package::pack_bundle` and the bundle
 //! is written atomically so failures never damage existing output.
 pub mod diagnostics;
+pub mod web;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -188,7 +189,10 @@ fn validate(request: &BuildRequest) -> Result<(), BuildFailure> {
     }
     // Studio-entry projects compile `.studio` sources instead of handwritten
     // AssemblyScript; they need no `assembly/index.ts`.
-    if studio_entry(request).is_none() && !root.join("assembly/index.ts").is_file() {
+    if !crate::studio_project::has_file_routes(root)
+        && studio_entry(request).is_none()
+        && !root.join("assembly/index.ts").is_file()
+    {
         diagnostics.push(BuildDiagnostic::error(
             BuildPhase::Validate,
             "BUILD_VALIDATE_SOURCE_MISSING",
@@ -227,9 +231,26 @@ fn validate(request: &BuildRequest) -> Result<(), BuildFailure> {
 }
 
 fn compile(request: &BuildRequest) -> Result<BTreeMap<String, Vec<u8>>, BuildFailure> {
+    if let Some(project) = crate::studio_project::compile_routes(&request.project_root)? {
+        let emitted =
+            studio_script::assemblyscript::emit_routed_studio(&project.module, &project.routing)
+                .map_err(|error| {
+                    BuildFailure::new(
+                        BuildPhase::Compile,
+                        vec![BuildDiagnostic::error(
+                            BuildPhase::Compile,
+                            error.code,
+                            error.message,
+                        )],
+                    )
+                })?;
+        compile_studio_output(request, "routes", &emitted.assembly_source)?;
+        let mut staged = collect_lucide(request)?;
+        staged.extend(project.assets()?);
+        return Ok(staged);
+    }
     if let Some(entry) = studio_entry(request) {
-        compile_studio_entry(request, &entry)?;
-        return Ok(BTreeMap::new());
+        return compile_studio_entry(request, &entry);
     }
     let staged = collect_lucide(request)?;
     generate_routes(request).map_err(|error| {
@@ -247,9 +268,8 @@ fn compile(request: &BuildRequest) -> Result<BTreeMap<String, Vec<u8>>, BuildFai
 }
 
 /// A `.studio` entry project: `app.studio` in the project root, else the
-/// single `components/*.studio` or `routes/*.studio` file. Multi-entry
-/// projects need the module-graph composer (STUDIO340 territory) and are not
-/// claimed here.
+/// single `components/*.studio` or `routes/*.studio` file. Automatic file-route
+/// projects are selected by the project composer before this legacy fallback.
 pub(crate) fn studio_entry(request: &BuildRequest) -> Option<PathBuf> {
     let root = &request.project_root;
     let app = root.join("app.studio");
@@ -281,45 +301,51 @@ pub(crate) fn studio_entry(request: &BuildRequest) -> Option<PathBuf> {
 
 /// Compile one `.studio` entry: adapter → validator → IR → AssemblyScript,
 /// then ASC straight to the module wasm consumed by packaging.
-fn compile_studio_entry(request: &BuildRequest, entry: &Path) -> Result<(), BuildFailure> {
-    let source = std::fs::read_to_string(entry).map_err(|error| {
-        BuildFailure::new(
-            BuildPhase::Compile,
-            vec![BuildDiagnostic::error(
-                BuildPhase::Compile,
-                "BUILD_COMPILE_STUDIO_READ",
-                format!("read {}: {error}", entry.display()),
-            )],
-        )
-    })?;
-    let filename = entry
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "entry.studio".to_owned());
+fn compile_studio_entry(
+    request: &BuildRequest,
+    entry: &Path,
+) -> Result<BTreeMap<String, Vec<u8>>, BuildFailure> {
     let stem = entry
         .file_stem()
         .map(|stem| stem.to_string_lossy().to_string())
         .unwrap_or_else(|| request.example.clone());
-    let module =
-        studio_script::compile_studio(&source, &filename, &stem).map_err(|diagnostics| {
-            BuildFailure::new(
-                BuildPhase::Compile,
-                diagnostics
-                    .into_iter()
-                    .map(|diagnostic| {
-                        let mut record = BuildDiagnostic::error(
-                            BuildPhase::Compile,
-                            diagnostic.code,
-                            diagnostic.message,
-                        );
-                        record.line = Some(diagnostic.span.start.line as u64);
-                        record.column = Some(diagnostic.span.start.column as u64);
-                        record
-                    })
-                    .collect(),
-            )
-        })?;
-    let emitted = studio_script::assemblyscript::emit_studio(&module).map_err(|error| {
+    let entry = entry.strip_prefix(&request.project_root).unwrap_or(entry);
+    let composed =
+        studio_script::project::compile_component(&request.project_root, entry, &[], &stem)
+            .map_err(|errors| {
+                BuildFailure::new(
+                    BuildPhase::Compile,
+                    errors
+                        .into_iter()
+                        .map(|error| {
+                            BuildDiagnostic::error(
+                                BuildPhase::Compile,
+                                error.diagnostic.code,
+                                format!("{}: {}", error.path, error.diagnostic.message),
+                            )
+                            .at(
+                                error.diagnostic.span.start.line as u64,
+                                error.diagnostic.span.start.column as u64,
+                            )
+                        })
+                        .collect(),
+                )
+            })?;
+    let project = crate::studio_project::RoutedProject::single(
+        composed,
+        entry.to_string_lossy().replace('\\', "/"),
+        stem.clone(),
+    );
+    let timed = !project.timers.pages.is_empty();
+    if timed {
+        crate::studio_project::ensure_generated_assets_available(&request.project_root)?;
+    }
+    let result = if timed {
+        studio_script::assemblyscript::emit_routed_studio(&project.module, &project.routing)
+    } else {
+        studio_script::assemblyscript::emit_studio(&project.module)
+    };
+    let emitted = result.map_err(|error| {
         BuildFailure::new(
             BuildPhase::Compile,
             vec![BuildDiagnostic::error(
@@ -329,6 +355,19 @@ fn compile_studio_entry(request: &BuildRequest, entry: &Path) -> Result<(), Buil
             )],
         )
     })?;
+    compile_studio_output(request, &stem, &emitted.assembly_source)?;
+    if timed {
+        project.assets()
+    } else {
+        Ok(BTreeMap::new())
+    }
+}
+
+fn compile_studio_output(
+    request: &BuildRequest,
+    stem: &str,
+    source: &str,
+) -> Result<(), BuildFailure> {
     let build_dir = request.project_root.join("build");
     std::fs::create_dir_all(&build_dir).map_err(|error| {
         BuildFailure::new(
@@ -341,7 +380,7 @@ fn compile_studio_entry(request: &BuildRequest, entry: &Path) -> Result<(), Buil
         )
     })?;
     let generated = build_dir.join(format!("{stem}.generated.ts"));
-    write_stable(&generated, &emitted.assembly_source).map_err(|error| {
+    write_stable(&generated, source).map_err(|error| {
         BuildFailure::new(
             BuildPhase::Compile,
             vec![BuildDiagnostic::error(
@@ -879,6 +918,7 @@ pub fn generate_routes(request: &BuildRequest) -> anyhow::Result<()> {
     if std::fs::read_to_string(&out).is_ok_and(|existing| existing == content) {
         return Ok(());
     }
+    std::fs::create_dir_all(dir.join("assembly"))?;
     std::fs::write(out, content)?;
     println!("routes: generated {} routes", registry.entries.len());
     Ok(())

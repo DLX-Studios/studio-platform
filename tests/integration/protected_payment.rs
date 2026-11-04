@@ -24,7 +24,7 @@ fn session(minor: i64) -> studio_app::ProtectedPaymentSession {
         principal(1),
         Checkout::new(
             "checkout-1",
-            "Nova Barbers",
+            "Northwind Barbers",
             "Example Publisher",
             Money::new("USD", minor).unwrap(),
         )
@@ -64,7 +64,7 @@ fn trusted_confirmation_rejects_invalid_references_and_charges_the_frozen_amount
     let mut payment = session(8_500);
     let authorization = token(&payment.capture_pin(&owner, b"8642", now).unwrap());
     let view = payment.begin_confirmation(&owner, now).unwrap();
-    assert_eq!(view.merchant, "Nova Barbers");
+    assert_eq!(view.merchant, "Northwind Barbers");
     assert_eq!(view.publisher, "Example Publisher");
     assert_eq!(view.amount.minor(), 8_500);
     assert_eq!(view.simulator_status, "SIMULATOR — no real charge");

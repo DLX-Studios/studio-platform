@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "studio-designer": {
+      "type": "local",
+      "command": ["studio-designer", "agent-server"],
+      "enabled": true
+    }
+  }
+}

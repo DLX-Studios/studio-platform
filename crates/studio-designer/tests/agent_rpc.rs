@@ -58,11 +58,23 @@ impl RpcClient {
 }
 
 fn start_server(project_root: &Path) -> (ServerProcess, RpcClient) {
+    start_server_with_binaries(project_root, None)
+}
+
+fn start_server_with_binaries(
+    project_root: &Path,
+    binary: Option<&Path>,
+) -> (ServerProcess, RpcClient) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_studio-designer"));
+    if let Some(binary) = binary {
+        command
+            .env("STUDIO_CLI_BINARY", binary)
+            .env("STUDIO_RUNTIME_BINARY", binary);
+    }
     let mut child = ServerProcess(
-        Command::new(env!("CARGO_BIN_EXE_studio-designer"))
+        command
             .arg("agent-server")
-            .arg("--project-root")
-            .arg(project_root)
+            .current_dir(project_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -182,6 +194,11 @@ fn agent_can_read_edit_and_reconcile_a_project_file_via_the_designer_server() {
 
     let (_server, mut client) = start_server(project.path());
     initialize(&mut client);
+    let info = client.tool("project.info", &serde_json::json!({}));
+    assert_eq!(
+        info["structuredContent"]["project_root"],
+        project.path().canonicalize().unwrap().to_str().unwrap()
+    );
     assert_file_is_listed(&mut client);
     let revision = read_file_revision(&mut client);
     assert_write_and_stale_conflict(&mut client, project.path(), &revision);
@@ -212,5 +229,109 @@ fn agent_can_read_edit_and_reconcile_a_project_file_via_the_designer_server() {
     assert_eq!(
         selection["structuredContent"]["error"]["code"],
         "PREVIEW_CONTROL_FAILED"
+    );
+}
+
+#[test]
+fn server_discovers_extended_tools_and_rejects_invalid_lifecycle_arguments() {
+    let project = tempfile::tempdir().unwrap();
+    let (_server, mut client) = start_server(project.path());
+    initialize(&mut client);
+    let tools = client.call("tools/list", &serde_json::json!({}));
+    let tools = tools["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 22);
+    for name in [
+        "studio.check",
+        "studio.build",
+        "runtime.start",
+        "preview.start",
+        "project.search",
+    ] {
+        assert!(tools.iter().any(|tool| tool["name"] == name));
+    }
+    for (name, arguments) in [
+        ("preview.start", serde_json::json!({"project_root": "/"})),
+        ("runtime.start", serde_json::json!({})),
+        ("studio.build", serde_json::json!([])),
+    ] {
+        let result = client.tool(name, &arguments);
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["error"]["code"],
+            "invalid_arguments"
+        );
+    }
+    let idle = client.tool("runtime.status", &serde_json::json!({}));
+    assert_eq!(idle["structuredContent"]["phase"], "not_started");
+    let stopped = client.tool("preview.stop", &serde_json::json!({}));
+    assert_eq!(stopped["structuredContent"]["managed"], false);
+    let no_sources = client.tool("studio.check", &serde_json::json!({}));
+    assert_eq!(
+        no_sources["structuredContent"]["error"]["code"],
+        "NO_SOURCE_FILES"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_can_manage_cli_tasks_and_session_owned_preview_without_protocol_log_leaks() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let project = tempfile::tempdir().unwrap();
+    fs::write(project.path().join("app.studio"), "<Text>Hello</Text>").unwrap();
+    let binary = project.path().join("fake-studio");
+    fs::write(&binary, "#!/bin/sh\ncase \"$1\" in\ncheck) echo '{\"code\":\"TEST_DIAGNOSTIC\"}'; echo check-failed >&2; exit 10;;\ndev) exec sleep 30;;\n*) echo \"$@\";;\nesac\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let (mut server, mut client) = start_server_with_binaries(project.path(), Some(&binary));
+    initialize(&mut client);
+
+    let started = client.tool("studio.check", &serde_json::json!({}));
+    assert_eq!(started["isError"], false);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logs = client.tool("studio.task.logs", &serde_json::json!({}));
+        let data = &logs["structuredContent"];
+        if data["running"] == false && data["output_complete"] == true {
+            assert_eq!(data["phase"], "failed");
+            assert_eq!(data["exit_code"], 10);
+            assert!(
+                data["stdout"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("TEST_DIAGNOSTIC")
+            );
+            assert!(
+                data["stderr"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("check-failed")
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let preview = client.tool("preview.start", &serde_json::json!({}));
+    assert_eq!(preview["isError"], false);
+    assert_eq!(preview["structuredContent"]["running"], true);
+    let pid = nix::unistd::Pid::from_raw(
+        i32::try_from(preview["structuredContent"]["pid"].as_u64().unwrap()).unwrap(),
+    );
+    // Normal stdin EOF must drop/reap managed children before the MCP process exits.
+    drop(client);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(exit) = server.0.try_wait().unwrap() {
+            assert!(exit.success());
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        nix::sys::signal::kill(pid, None),
+        Err(nix::errno::Errno::ESRCH)
     );
 }

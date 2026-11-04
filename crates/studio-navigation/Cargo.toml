@@ -5,5 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+studio-protocol = { path = "../studio-protocol" }
+
 [lints]
 workspace = true

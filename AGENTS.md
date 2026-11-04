@@ -15,6 +15,10 @@
 - For verification builds that do not require debugger symbols or incremental reuse, set `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and `CARGO_INCREMENTAL=0` before the first command so the cache keeps one consistent configuration.
 - Reuse focused test evidence within a ticket pass instead of rebuilding every integration-test executable.
 
+## Skills
+- Do not use Studio skills for work in this repository. This includes reading, invoking, or following Studio skill instructions discovered in `.skills/`, `.agents/skills/`, or the agent's installed skill catalog.
+- Follow this `AGENTS.md` and the task-specific instructions provided by the user for repository work.
+
 ## Code Map
 - `crates` - crates
 - `tests` - automated tests

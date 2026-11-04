@@ -1,0 +1,94 @@
+// Real browser acceptance against the actual compiled .studio countdown.
+import { test } from 'bun:test';
+import { chromium } from 'playwright';
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import assert from 'node:assert/strict';
+const origin = process.env.STUDIO_WEB_URL ?? 'http://127.0.0.1:5180';
+const screenshots = resolve(process.env.STUDIO_WEB_SCREENSHOT_DIR ?? '.scratch/web-qa');
+test.skipIf(process.env.STUDIO_WEB_BROWSER !== '1')('actual compiled countdown desktop, mobile, timers and browser history', async () => {
+await mkdir(screenshots, {recursive: true});
+const browser = await chromium.launch({executablePath: process.env.STUDIO_BROWSER_PATH, headless: true, args:['--no-sandbox','--disable-dev-shm-usage']});
+const errors: string[] = [];
+try {
+  const page = await browser.newPage({viewport:{width:1440,height:900}});
+  page.setDefaultTimeout(6000);
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => {if(message.type()==='error')errors.push(message.text());});
+  const clock = page.locator('[data-node-id="starting-clock--clock"]');
+  const clockGroup = page.locator('[data-node-id="starting-clock--clock-content"]');
+  await page.goto(origin);
+  await clock.waitFor();
+  assert.equal(await clock.innerText(), '10:00');
+  await page.screenshot({path:resolve(screenshots,'desktop.png'),fullPage:true});
+  await page.waitForFunction(() => document.querySelector('[data-node-id="starting-clock--clock"]')?.textContent === '9:59');
+  await page.getByRole('button',{name:'Reset 10:00',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('[data-node-id="starting-clock--clock"]')?.textContent === '10:00');
+  assert.equal(await clock.innerText(),'10:00');
+  await page.getByRole('button',{name:'Start now',exact:true}).click();
+  await page.waitForFunction(() => (document.querySelector('[data-node-id="starting-clock--clock-content"]') as HTMLElement)?.style.opacity === '0');
+  await page.getByRole('button',{name:'Reset 10:00',exact:true}).click();
+  await page.waitForTimeout(850);
+  assert.equal(new URL(page.url()).pathname,'/','reset cancels pending delayed exit');
+  assert.equal(await clock.innerText(),'10:00');
+  await page.getByRole('button',{name:'Start now',exact:true}).click();
+  await page.waitForFunction(() => (document.querySelector('[data-node-id="starting-clock--clock-content"]') as HTMLElement)?.style.opacity === '0');
+  const fadeStart=Date.now();
+  await page.waitForTimeout(260);
+  const opacity = await clockGroup.evaluate(el => Number(getComputedStyle(el).opacity));
+  assert(opacity > 0 && opacity < 1,`native clock opacity interpolates: ${opacity}`);
+  assert.equal(new URL(page.url()).pathname,'/');
+  await page.waitForURL('**/live');
+  assert(Date.now()-fadeStart >= 550,'page exit waits for the authored animation delay');
+  await page.locator('[data-node-id="live-header--live-title-art"]').waitFor();
+  await page.getByRole('button',{name:'Open countdown',exact:true}).click();
+  await clock.waitFor();
+  assert.equal(await clock.innerText(),'10:00');
+  await page.getByRole('button',{name:'Go live',exact:true}).click();
+  await page.waitForURL('**/live');
+  await page.getByRole('button',{name:'Back to countdown',exact:true}).click();
+  await page.waitForURL(origin+'/');
+  assert.equal(await clock.innerText(),'10:00');
+  await page.getByRole('button',{name:'Go live',exact:true}).click();
+  await page.waitForURL('**/live');
+  await page.goBack();
+  await clock.waitFor();
+  assert.equal(new URL(page.url()).pathname,'/');
+  await page.goForward();
+  await page.locator('[data-node-id="live-header--live-title-art"]').waitFor();
+  await page.goto(origin+'/live/');
+  await page.locator('[data-node-id="live-header--live-title-art"]').waitFor();
+  await page.getByRole('button',{name:'Open countdown',exact:true}).click();
+  await clock.waitFor();
+  await page.getByRole('button',{name:'Explore Leonida',exact:true}).click();
+  await page.waitForURL('**/lost-in-leonida');
+  await page.getByRole('button',{name:'Go back',exact:true}).click();
+  await clock.waitFor();
+  assert.equal(new URL(page.url()).pathname,'/');
+  const desktop = await page.evaluate(() => {
+    const background=document.querySelector('[data-node-id$="stream-shell-content"]')!;
+    const box=background.getBoundingClientRect();
+    return {width:innerWidth,height:innerHeight,backgroundWidth:box.width,backgroundHeight:box.height,scrollWidth:document.documentElement.scrollWidth};
+  });
+  assert(desktop.backgroundWidth>=desktop.width && desktop.backgroundHeight>=desktop.height);
+  for (const width of [390,320]) {
+    const mobile = await browser.newPage({viewport:{width,height:844},reducedMotion:'reduce'});
+    mobile.on('pageerror',e=>errors.push(e.message));
+    await mobile.goto(origin);
+    await mobile.locator('[data-node-id="starting-clock--clock"]').waitFor();
+    const layout=await mobile.evaluate(() => ({viewport:innerWidth,scrollWidth:document.documentElement.scrollWidth,backgroundHeight:document.querySelector('[data-node-id$="stream-shell-content"]')!.getBoundingClientRect().height,clockSize:getComputedStyle(document.querySelector('[data-node-id="starting-clock--clock"]')!).fontSize}));
+    assert(layout.scrollWidth <= layout.viewport+1,`mobile ${width} must not overflow: ${JSON.stringify(layout)}`);
+    assert(layout.backgroundHeight>=844);
+    assert(Number.parseFloat(layout.clockSize)>=70);
+    await mobile.screenshot({path:resolve(screenshots,`mobile-${width}.png`),fullPage:true});
+    await mobile.getByRole('button',{name:'Start now',exact:true}).click();
+    await mobile.waitForFunction(()=>(document.querySelector('[data-node-id="starting-clock--clock-content"]') as HTMLElement)?.style.opacity==='0');
+    assert.equal(await mobile.locator('[data-node-id="starting-clock--clock-content"]').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
+    await mobile.waitForURL('**/live');
+    await mobile.close();
+  }
+  assert.deepEqual(errors,[],'browser must have no loading or JavaScript errors');
+  console.log(JSON.stringify({ok:true,desktop,mobileWidths:[390,320],journeys:['tick','reset','cancel-exit','fade','delayed-live','retained-back','browser-back-forward','deep-link','catch-all','reduced-motion'],screenshots}));
+} finally {await browser.close();}
+
+}, 60000);

@@ -9,6 +9,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use studio_navigation::{RouteDefinition, RouteResolution, RouteTree};
+
 /// Route shape class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteKind {
@@ -66,17 +68,62 @@ pub struct RouteRegistry {
 pub fn build_registry(project: &Path) -> Result<RouteRegistry, Vec<RouteDiagnostic>> {
     let routes_dir = project.join("routes");
     let mut files = Vec::new();
+    let mut diagnostics = Vec::new();
     if routes_dir.is_dir() {
+        let root = project.canonicalize().map_err(|error| {
+            vec![RouteDiagnostic {
+                code: "ROUTE_SOURCE_IO",
+                message: format!("cannot resolve project root: {error}"),
+                files: Vec::new(),
+            }]
+        })?;
+        let mut visited = BTreeSet::new();
         let mut stack = vec![routes_dir.clone()];
         while let Some(dir) = stack.pop() {
+            let Ok(canonical) = dir.canonicalize() else {
+                diagnostics.push(source_error(
+                    project,
+                    &dir,
+                    "cannot resolve route directory",
+                ));
+                continue;
+            };
+            if !canonical.starts_with(&root) {
+                diagnostics.push(source_error(
+                    project,
+                    &dir,
+                    "route directory escapes project root",
+                ));
+                continue;
+            }
+            if !visited.insert(canonical) {
+                continue;
+            }
             let Ok(read) = std::fs::read_dir(&dir) else {
+                diagnostics.push(source_error(project, &dir, "cannot read route directory"));
                 continue;
             };
             for entry in read.filter_map(Result::ok) {
                 let path = entry.path();
                 if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|extension| extension == "ts") {
+                    if !entry.file_name().to_string_lossy().starts_with('_') {
+                        stack.push(path);
+                    }
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "ts" || extension == "studio")
+                {
+                    match path.canonicalize() {
+                        Ok(canonical) if canonical.starts_with(&root) => {}
+                        _ => {
+                            diagnostics.push(source_error(
+                                project,
+                                &path,
+                                "route source escapes project root or is unavailable",
+                            ));
+                            continue;
+                        }
+                    }
                     files.push(path);
                 }
             }
@@ -84,7 +131,6 @@ pub fn build_registry(project: &Path) -> Result<RouteRegistry, Vec<RouteDiagnost
     }
     files.sort();
     let mut entries = Vec::new();
-    let mut diagnostics = Vec::new();
     for file in &files {
         let Ok(relative) = file.strip_prefix(&routes_dir) else {
             continue;
@@ -114,6 +160,14 @@ pub fn build_registry(project: &Path) -> Result<RouteRegistry, Vec<RouteDiagnost
     }
 }
 
+fn source_error(project: &Path, file: &Path, message: &str) -> RouteDiagnostic {
+    RouteDiagnostic {
+        code: "ROUTE_SOURCE_PATH",
+        message: message.to_owned(),
+        files: vec![display_path(project, file)],
+    }
+}
+
 fn convert_file(
     project: &Path,
     routes_dir: &Path,
@@ -121,7 +175,19 @@ fn convert_file(
     file: &Path,
     diagnostics: &mut Vec<RouteDiagnostic>,
 ) -> Option<RouteEntry> {
-    let stem = relative.strip_suffix(".ts").unwrap_or(relative).to_owned();
+    let studio = relative.ends_with(".studio");
+    let stem = relative
+        .strip_suffix(if studio { ".studio" } else { ".ts" })
+        .unwrap_or(relative);
+    if studio && stem.rsplit('/').next() == Some("+layout") {
+        return None;
+    }
+    let modern_page = studio && stem.rsplit('/').next() == Some("+page");
+    let stem = if modern_page {
+        stem.strip_suffix("/+page").unwrap_or("").to_owned()
+    } else {
+        stem.to_owned()
+    };
     if stem
         .split('/')
         .next()
@@ -136,7 +202,10 @@ fn convert_file(
     let mut segments = Vec::new();
     let mut params = Vec::new();
     let mut wildcard = false;
-    for segment in stem.split('/') {
+    for segment in stem
+        .split('/')
+        .filter(|_| !(modern_page && stem.is_empty()))
+    {
         if segment.is_empty() {
             diagnostics.push(malformed(
                 file,
@@ -196,10 +265,10 @@ fn convert_file(
         }
     }
     let mut path = format!("/{}", segments.join("/"));
-    if path == "/index" {
+    if !modern_page && path == "/index" {
         path = "/".to_owned();
         segments.clear();
-    } else if let Some(rest) = path.strip_suffix("/index") {
+    } else if let Some(rest) = path.strip_suffix("/index").filter(|_| !modern_page) {
         path = if rest.is_empty() {
             "/".to_owned()
         } else {
@@ -225,6 +294,18 @@ fn convert_file(
         }
     }
     let title = export_const_string(&content, "title").unwrap_or_else(|| default_title(&path));
+    if let Err(error) = RouteDefinition::new(path.clone(), || ()) {
+        diagnostics.push(RouteDiagnostic {
+            code: if params.is_empty() {
+                "ROUTE_MALFORMED_CHARS"
+            } else {
+                "ROUTE_MALFORMED_PARAM"
+            },
+            message: format!("invalid route pattern `{path}`: {error}"),
+            files: vec![display_path(project, file)],
+        });
+        return None;
+    }
     let _ = routes_dir;
     let kind = if wildcard {
         RouteKind::Wildcard
@@ -424,48 +505,25 @@ pub fn match_route<'a>(
     path: &str,
 ) -> Option<(&'a RouteEntry, Vec<(String, String)>)> {
     let path = normalize_path(path);
-    let request: Vec<&str> = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
+    let definitions = registry
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| RouteDefinition::new(entry.path.clone(), move || index))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let mut tree = RouteTree::new(definitions, || usize::MAX).ok()?;
+    let RouteResolution::Matched { screen, params, .. } = tree.resolve(&path).ok()? else {
+        return None;
+    };
+    let entry = registry.entries.get(screen)?;
+    // Keep declaration order, including multiple parameters, in the legacy CLI API.
+    let parameters = entry
+        .params
+        .iter()
+        .filter_map(|name| params.get(name).map(|value| (name.clone(), value.clone())))
         .collect();
-    let mut statics = Vec::new();
-    let mut params = Vec::new();
-    let mut wildcards = Vec::new();
-    for entry in &registry.entries {
-        match entry.kind {
-            RouteKind::Static => statics.push(entry),
-            RouteKind::Param => params.push(entry),
-            RouteKind::Wildcard => wildcards.push(entry),
-        }
-    }
-    for entry in statics.into_iter().chain(params).chain(wildcards) {
-        if let Some(bound) = match_entry(entry, &request) {
-            return Some((entry, bound));
-        }
-    }
-    None
-}
-
-fn match_entry(entry: &RouteEntry, request: &[&str]) -> Option<Vec<(String, String)>> {
-    let mut bound = Vec::new();
-    let mut index = 0usize;
-    for segment in &entry.segments {
-        if segment == "*" {
-            return Some(bound);
-        }
-        let piece = *request.get(index)?;
-        if let Some(name) = segment.strip_prefix(':') {
-            bound.push((name.to_owned(), piece.to_owned()));
-        } else if segment != piece {
-            return None;
-        }
-        index += 1;
-    }
-    if index == request.len() {
-        Some(bound)
-    } else {
-        None
-    }
+    Some((entry, parameters))
 }
 
 fn normalize_path(path: &str) -> String {

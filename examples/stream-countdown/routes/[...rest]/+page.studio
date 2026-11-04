@@ -1,0 +1,20 @@
+<script lang="ts">
+  import StreamHeader from '../../components/StreamHeader.studio';
+
+  function home() {
+    emit('navigate', { operation: 'reset', route: '/' });
+  }
+
+  function back() {
+    emit('navigate', { operation: 'pop' });
+  }
+</script>
+
+<Column id="not-found-page" gap={24} alignment="center">
+  <Tag id="not-found-status" label="OFF THE MAP" variant="warning" />
+  <StreamHeader id="not-found-header" eyebrow="WRONG TURN IN LEONIDA" title="LOST IN PARADISE" subtitle="This road does not lead to the stream. Let us get you back." />
+  <Row id="not-found-actions" gap={8} alignment="center">
+    <Button id="not-found-back" label="Go back" variant="secondary" onclick={back} />
+    <Button id="not-found-home" label="Find the stream" onclick={home} />
+  </Row>
+</Column>

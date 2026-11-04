@@ -1,0 +1,3 @@
+interface:
+  display_name: "Studio Console Init"
+  short_description: "Create the project Console and admin area"

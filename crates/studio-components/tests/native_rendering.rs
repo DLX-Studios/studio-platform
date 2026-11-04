@@ -42,6 +42,243 @@ fn node(id: &str, kind: NodeKind, props: serde_json::Value) -> UiNode {
         children: vec![],
     }
 }
+
+#[gpui_kit::test]
+fn opacity_target_changes_fade_the_native_control_without_replacing_its_identity(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let clock = node(
+        "fade-clock",
+        NodeKind::Button,
+        json!({
+            "label": "10:00", "opacity": 1.0,
+            "transition": { "duration_ms": 700, "curve": "linear" }
+        }),
+    );
+    let surface = ProjectionSurface {
+        root: Some(NativeRenderNode::from(&clock)),
+        assets: BTreeMap::new(),
+    };
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| NativeRuntimeView::with_surface(false, surface, window, cx))
+        })
+        .unwrap()
+    });
+    let (path, bounds) = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let clock = window.find("fade-clock");
+            assert!(clock.visible());
+            (clock.path().to_vec(), clock.bounds())
+        })
+        .unwrap();
+    cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.update_surface(
+                |surface| {
+                    surface
+                        .root
+                        .as_mut()
+                        .unwrap()
+                        .props
+                        .insert("opacity".into(), json!(0.0));
+                    true
+                },
+                cx,
+            );
+        });
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let clock = window.find("fade-clock");
+        assert!(
+            clock.visible(),
+            "fade-out must start from the retained visible value"
+        );
+        assert_eq!(clock.path(), path);
+        assert_eq!(clock.bounds(), bounds);
+    })
+    .unwrap();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(350));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("fade-clock").visible(),
+            "mid-transition content remains visible"
+        );
+    })
+    .unwrap();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(350));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let clock = window.find("fade-clock");
+        assert!(
+            !clock.visible(),
+            "the actual native node reaches zero opacity"
+        );
+        assert_eq!(clock.path(), path);
+        assert_eq!(clock.bounds(), bounds);
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn reduced_motion_applies_native_opacity_targets_immediately(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let clock = node(
+        "reduced-clock",
+        NodeKind::Button,
+        json!({
+            "label": "10:00", "opacity": 1.0,
+            "transition": { "duration_ms": 700, "curve": "ease_out" }
+        }),
+    );
+    let surface = ProjectionSurface {
+        root: Some(NativeRenderNode::from(&clock)),
+        assets: BTreeMap::new(),
+    };
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| NativeRuntimeView::with_surface(true, surface, window, cx))
+        })
+        .unwrap()
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("reduced-clock").visible());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.update_surface(
+                |surface| {
+                    surface
+                        .root
+                        .as_mut()
+                        .unwrap()
+                        .props
+                        .insert("opacity".into(), json!(0.0));
+                    true
+                },
+                cx,
+            );
+        });
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!window.find("reduced-clock").visible());
+    })
+    .unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[gpui_kit::test]
+fn authored_large_text_size_uses_native_metrics_and_scales_with_preview_zoom(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let mut root = node("type-root", NodeKind::Column, json!({"gap": 8}));
+    root.children.push(node(
+        "normal-text",
+        NodeKind::Text,
+        json!({"text": "88", "font_size": 16}),
+    ));
+    root.children.push(node(
+        "large-text",
+        NodeKind::Text,
+        json!({"text": "88", "font_size": 168, "color": "#F8B4DD"}),
+    ));
+    let surface = ProjectionSurface {
+        root: Some(NativeRenderNode::from(&root)),
+        assets: BTreeMap::new(),
+    };
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| NativeRuntimeView::with_surface(true, surface, window, cx))
+        })
+        .unwrap()
+    });
+    let initial = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let normal = window.find("normal-text").bounds().size.height.as_f32();
+            let large = window.find("large-text").bounds().size.height.as_f32();
+            assert!(
+                large > normal * 4.0,
+                "font_size must change native glyph layout: {normal} -> {large}"
+            );
+            large
+        })
+        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, view_cx| {
+            assert!(view.set_zoom_milli(2_000, window, view_cx));
+        });
+        window.render_frame(cx);
+        let enlarged = window.find("large-text").bounds().size.height.as_f32();
+        assert!(
+            enlarged > initial * 1.8,
+            "authored font metrics must scale: {initial} -> {enlarged}"
+        );
+    })
+    .unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[gpui_kit::test]
+fn admitted_background_covers_the_full_viewport_behind_working_foreground_controls(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let mut root = node("page#root", NodeKind::Box, json!({"flex": 1}));
+    let mut scaffold = node("stream-screen", NodeKind::Scaffold, json!({}));
+    let mut hero = node(
+        "hero",
+        NodeKind::Box,
+        json!({"flex": 1, "background_asset": "assets/vice-city.svg"}),
+    );
+    hero.children.push(node(
+        "foreground-action",
+        NodeKind::Button,
+        json!({"label": "Go live"}),
+    ));
+    scaffold.children.push(hero);
+    root.children.push(scaffold);
+    let events = Recorded::default();
+    let surface = Surface {
+        projection: ProjectionSurface {
+            root: Some(NativeRenderNode::from(&root)),
+            assets: BTreeMap::from([("assets/vice-city.svg".into(), std::sync::Arc::from(br##"<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><rect width="1920" height="1080" fill="#231735"/></svg>"##.as_slice()))]),
+        },
+        events: events.clone(),
+    };
+    let (handle, _) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| NativeRuntimeView::with_surface(true, surface, window, cx))
+        })
+        .unwrap()
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let background = window.find("hero:background");
+        assert!(background.visible());
+        assert_eq!(
+            background.bounds().origin,
+            point(gpui_kit::px(0.0), gpui_kit::px(0.0))
+        );
+        assert_eq!(background.bounds().size, window.viewport_size());
+        window.click("foreground-action", cx);
+    })
+    .unwrap();
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[("foreground-action".into(), InputAction::PointerClick)]
+    );
+}
 #[gpui_kit::test]
 fn time_controls_keep_independent_values_and_honor_host_updates(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);

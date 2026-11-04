@@ -38,6 +38,7 @@ native application builds, UI behavior, installers, or release support on those 
 | 012 Template publishing | Deterministic `studio build --as-template` tests and separated template bundles. | Full acceptance reconciliation pending. |
 | 013 IDE templates | Thin VS Code gallery/command implementation and tests. | Actual editor smoke verification and acceptance reconciliation pending. |
 | 014 Structural patches | Array mutations, keyed rows and structural evaluator/backend code paths exist. | Full list differential/native acceptance reconciliation pending; the original manual cart scenario is not certified here. |
+| 016 Studio file routing | `.studio` pages/layouts/imported components, shared Rust navigation in IR/Wasm, host timers and native stream presentation. | Current verification and explicit subset boundaries are recorded in [feature 016 evidence](../specs/016-studio-file-routing/validation-report.md). |
 
 Specs live in `specs/001-secure-plugin-runtime/` through `specs/014-structural-patches/`.
 Task checkboxes remain acceptance-specific: this audit closes two documentation tasks in 007/008,
@@ -74,6 +75,14 @@ size measurements and release-owner approval. Formal low-power N100 certificatio
 deferred; it must not be reported as completed. The flagship fixture report stays not release-ready.
 
 ## Planned additional capabilities
+
+### Shared Studio package execution
+
+The cross-project target for `.studio` and `.studio.ts` sources, `.studiopkg` bundles, native,
+browser, and headless execution, capability enforcement, and Orbit process supervision is recorded
+in [the package execution direction](architecture/STUDIO_PACKAGE_EXECUTION.md). This does not
+supersede the current Wasm-backed shipped path or Orbit's current deployment providers. Freeze the
+package and host contracts before splitting implementation across repos.
 
 The [native sidecar/media proposal](architecture/NATIVE_SIDECAR_BRIDGE_PROPOSAL.md) is tracked by
 C020. It still needs contracts, host implementation, Rust/Go/C conformance examples and the media

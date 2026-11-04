@@ -1,0 +1,53 @@
+{
+  "common": [
+    "visible",
+    "opacity",
+    "accessibility_label",
+    "transition"
+  ],
+  "kinds": {
+    "box": [
+      "padding",
+      "width",
+      "height",
+      "background",
+      "background_asset",
+      "flex",
+      "shrink"
+    ],
+    "scaffold": [],
+    "column": [
+      "gap",
+      "alignment",
+      "flex"
+    ],
+    "row": [
+      "gap",
+      "alignment",
+      "flex"
+    ],
+    "text": [
+      "text",
+      "font_size",
+      "color",
+      "typography_role"
+    ],
+    "image": [
+      "asset",
+      "alt",
+      "width",
+      "height"
+    ],
+    "button": [
+      "label",
+      "enabled",
+      "on_pressed",
+      "variant",
+      "width"
+    ],
+    "tag": [
+      "label",
+      "variant"
+    ]
+  }
+}

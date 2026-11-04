@@ -1,16 +1,22 @@
 //! The development host's live state. Production surfaces contain no IR interpreter.
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use studio_navigation::timers::{TimerManifest, TimerSchedule, TimerSpec, TIMER_ASSET};
 
 use studio_components::native_view::{NativeRenderNode, NativeSurface};
 use studio_components::{HostEventDispatcher, InputAction, NativeStateStore};
+use studio_navigation::project::{ProjectRouter, RoutingManifest, ROUTING_ASSET};
 use studio_package::{parse_manifest, ManifestPolicy};
 use studio_protocol::dev_rpc::DevSourceLocation;
+use studio_protocol::NavigationCommand;
 use studio_protocol::{HostEvent, MountTree, ProtocolLimits, UiNode};
 use studio_runtime::host::PreparedPlugin;
 use studio_runtime::plugin_surface::PluginSurface;
 use studio_script::eval::{InteractionSession, SessionMessage};
 use studio_script::ir::{StudioModule, TemplateNode};
+use studio_script::types::StudioValue;
 use studio_ui::{InstanceId, UiRegistry};
 
 pub(crate) struct IrSurface {
@@ -18,6 +24,12 @@ pub(crate) struct IrSurface {
     screens: BTreeMap<String, IrScreenState>,
     screen_ids: Vec<String>,
     active_screen_id: String,
+    router: Option<ProjectRouter>,
+    timer_manifest: Option<TimerManifest>,
+    timer_schedule: Option<TimerSchedule>,
+    timer_origin: Instant,
+    timer_elapsed: Duration,
+    timer_generation: u64,
     screen_source_paths: BTreeMap<String, String>,
     owner: InstanceId,
     assets: BTreeMap<String, Vec<u8>>,
@@ -151,39 +163,146 @@ impl DevSurface {
                     .first()
                     .map(|component| component.id.clone())
                     .ok_or("IR module has no entry component")?;
-                let mut screen_ids = Vec::with_capacity(module.components.len());
-                let mut screens = BTreeMap::new();
-                let previous = match &self {
-                    Self::Ir(old) if !reset && old.owner == owner => Some(old.as_ref()),
+                let screen_ids = module
+                    .components
+                    .iter()
+                    .map(|component| component.id.clone())
+                    .collect();
+                let previous = match &*self {
+                    Self::Ir(previous) if !reset && previous.owner == owner => {
+                        Some(previous.as_ref())
+                    }
                     _ => None,
                 };
+                let mut router = assets
+                    .get(ROUTING_ASSET)
+                    .map(|bytes| {
+                        let routing = RoutingManifest::from_bytes(bytes)?;
+                        for route in &routing.routes {
+                            if !module
+                                .components
+                                .iter()
+                                .any(|component| component.id == route.id)
+                            {
+                                return Err(format!(
+                                    "route `{}` has no compiled component `{}`",
+                                    route.path, route.id
+                                ));
+                            }
+                        }
+                        match previous.and_then(|previous| previous.router.as_ref()) {
+                            Some(old) => old.reconfigure(&routing),
+                            None => ProjectRouter::new(&routing, &routing.initial_route()?),
+                        }
+                    })
+                    .transpose()?;
+                let selected = router.as_ref().map(ProjectRouter::current);
+                let active_screen_id = selected
+                    .as_ref()
+                    .map(|selection| selection.id.clone())
+                    .or_else(|| {
+                        previous
+                            .map(|old| old.active_screen_id.clone())
+                            .filter(|id| {
+                                module
+                                    .components
+                                    .iter()
+                                    .any(|component| &component.id == id)
+                            })
+                    })
+                    .unwrap_or(first_screen_id);
+                let mut screens = BTreeMap::new();
                 for component in &module.components {
                     if screens.contains_key(&component.id) {
                         return Err(format!("duplicate screen identity `{}`", component.id));
                     }
-                    screen_ids.push(component.id.clone());
-                    let previous_screen = previous
+                    let prior = previous
                         .and_then(|old| old.screens.get(&component.id).map(|screen| (old, screen)));
-                    let (mount, session) = match previous_screen {
+                    if router.is_some() && prior.is_none() && component.id != active_screen_id {
+                        continue;
+                    }
+                    let (mut mount, session) = match prior {
                         Some((old, screen)) => {
                             screen.session.hot_swap(&old.module, &module, &component.id)
                         }
-                        None => InteractionSession::mount(&module, component, &BTreeMap::new()),
+                        None => {
+                            let props = selected
+                                .as_ref()
+                                .filter(|selection| selection.id == component.id)
+                                .map(|selection| {
+                                    selection
+                                        .params
+                                        .iter()
+                                        .map(|(key, value)| {
+                                            (key.clone(), StudioValue::String(value.clone()))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            InteractionSession::mount(&module, component, &props)
+                        }
                     }
                     .map_err(|error| format!("{}: {}", error.code, error.message))?;
+                    if let Some(selection) = &selected {
+                        if selection.id == component.id {
+                            mount.route.clone_from(&selection.route);
+                        }
+                    }
                     let registry = admitted_registry(owner.clone(), mount)?;
                     screens.insert(component.id.clone(), IrScreenState { session, registry });
                 }
-                let active_screen_id = previous
-                    .map(|old| old.active_screen_id.as_str())
-                    .filter(|screen_id| screens.contains_key(*screen_id))
-                    .unwrap_or(first_screen_id.as_str())
-                    .to_owned();
+                let timer_manifest = assets
+                    .get(TIMER_ASSET)
+                    .map(|bytes| TimerManifest::from_bytes(bytes))
+                    .transpose()?;
+                if let Some(timers) = &timer_manifest {
+                    if router.is_none() {
+                        return Err("host timers require a routed Studio project".into());
+                    }
+                    if timers.pages.iter().any(|page| {
+                        !module
+                            .components
+                            .iter()
+                            .any(|component| component.id == page.id)
+                    }) {
+                        return Err("timer metadata names an undeclared page".into());
+                    }
+                }
+                let timer_origin = previous.map_or_else(Instant::now, |old| old.timer_origin);
+                let timer_elapsed = previous.map_or(Duration::ZERO, |old| old.timer_elapsed);
+                let now = previous.map_or(Duration::ZERO, |old| {
+                    old.timer_elapsed.max(old.timer_origin.elapsed())
+                });
+                let active_registry = &screens
+                    .get(&active_screen_id)
+                    .ok_or("active page missing")?
+                    .registry;
+                let prepared = timer_schedule_for_page(
+                    timer_manifest.as_ref(),
+                    &active_screen_id,
+                    &owner,
+                    active_registry,
+                    now,
+                )?;
+                let timer_schedule = previous
+                    .filter(|old| {
+                        old.active_screen_id == active_screen_id
+                            && old.assets.get(TIMER_ASSET) == assets.get(TIMER_ASSET)
+                    })
+                    .map_or(prepared, |old| old.timer_schedule.clone());
+                let timer_generation =
+                    previous.map_or(0, |old| old.timer_generation.saturating_add(1));
                 *self = Self::Ir(Box::new(IrSurface {
                     module,
                     screens,
                     screen_ids,
                     active_screen_id,
+                    router: router.take(),
+                    timer_manifest,
+                    timer_schedule,
+                    timer_origin,
+                    timer_elapsed,
+                    timer_generation,
                     screen_source_paths,
                     owner,
                     assets,
@@ -217,6 +336,34 @@ impl DevSurface {
     pub fn switch_screen(&mut self, screen_id: &str) -> Result<bool, String> {
         match self {
             Self::Ir(surface) => {
+                if let Some(router) = &surface.router {
+                    if router.current().id == screen_id {
+                        return Ok(false);
+                    }
+                    let routing = RoutingManifest::from_bytes(
+                        surface
+                            .assets
+                            .get(ROUTING_ASSET)
+                            .ok_or("missing routing metadata")?,
+                    )?;
+                    let route = routing
+                        .routes
+                        .iter()
+                        .find(|route| route.id == screen_id)
+                        .ok_or("unknown page")?;
+                    if route.path.contains([':', '*']) {
+                        return Err(
+                            "parameter pages require a concrete navigation destination".into()
+                        );
+                    }
+                    surface.navigate(
+                        &NavigationCommand::Replace {
+                            route: route.path.clone(),
+                        },
+                        None,
+                    )?;
+                    return Ok(true);
+                }
                 if !surface.screens.contains_key(screen_id) {
                     return Err(format!(
                         "screen `{screen_id}` is unavailable in this dev session"
@@ -233,6 +380,15 @@ impl DevSurface {
                 "screen `{screen_id}` is unavailable in this dev session"
             )),
             Self::Empty => Err("no mounted application".into()),
+        }
+    }
+
+    /// Inspect identity without rebuilding expanded source maps during idle polls.
+    pub fn active_screen_id(&self) -> Option<&str> {
+        match self {
+            Self::Ir(surface) => Some(&surface.active_screen_id),
+            Self::Wasm(surface) => Some(surface.owner_id().as_str()),
+            Self::Empty => None,
         }
     }
 
@@ -257,6 +413,13 @@ impl DevSurface {
                 if let Some(path) = surface.screen_source_paths.get(&surface.active_screen_id) {
                     collect_source_locations(&component.template, path, &mut source_locations);
                 }
+                if let Some(bytes) = surface.assets.get(crate::studio_project::SOURCE_MAP_ASSET) {
+                    let maps: BTreeMap<String, BTreeMap<String, DevSourceLocation>> =
+                        serde_json::from_slice(bytes).ok()?;
+                    if let Some(locations) = maps.get(&surface.active_screen_id) {
+                        source_locations.clone_from(locations);
+                    }
+                }
                 Some(SurfaceMetadata {
                     component_id: Some(surface.active_screen_id.clone()),
                     screen_id: Some(surface.active_screen_id.clone()),
@@ -272,7 +435,251 @@ impl DevSurface {
     }
 }
 
+impl IrSurface {
+    fn navigate(
+        &mut self,
+        command: &NavigationCommand,
+        source: Option<(String, InteractionSession)>,
+    ) -> Result<(), String> {
+        let mut router = self
+            .router
+            .as_ref()
+            .ok_or("this project has no file-based route declaration")?
+            .clone();
+        let selection = router.navigate(command)?;
+        let component = self
+            .module
+            .components
+            .iter()
+            .find(|component| component.id == selection.id)
+            .ok_or("route component missing")?;
+        let props = selection
+            .params
+            .iter()
+            .map(|(key, value)| (key.clone(), StudioValue::String(value.clone())))
+            .collect();
+        let target_session = source
+            .as_ref()
+            .filter(|(id, _)| id == &selection.id)
+            .map(|(_, session)| session)
+            .or_else(|| {
+                self.screens
+                    .get(&selection.id)
+                    .map(|screen| &screen.session)
+            });
+        let (mut mount, session) = match target_session {
+            Some(session) => session.remount_with_props(&self.module, component, &props),
+            None => InteractionSession::mount(&self.module, component, &props),
+        }
+        .map_err(|error| error.message)?;
+        mount.route = selection.route;
+        let registry = admitted_registry(self.owner.clone(), mount)?;
+        let timer_schedule = timer_schedule_for_page(
+            self.timer_manifest.as_ref(),
+            &selection.id,
+            &self.owner,
+            &registry,
+            self.timer_elapsed.max(self.timer_origin.elapsed()),
+        )?;
+        if let Some((id, session)) = source {
+            if let Some(screen) = self.screens.get_mut(&id) {
+                screen.session = session;
+            }
+        }
+        self.screens
+            .insert(selection.id.clone(), IrScreenState { session, registry });
+        self.active_screen_id = selection.id;
+        self.router = Some(router);
+        self.timer_schedule = timer_schedule;
+        self.timer_generation = self.timer_generation.saturating_add(1);
+        Ok(())
+    }
+
+    fn apply_event(&mut self, node_id: &str, event: &str) -> Result<(), String> {
+        let active_id = self.active_screen_id.clone();
+        let module = Arc::clone(&self.module);
+        let component = module
+            .components
+            .iter()
+            .find(|component| component.id == active_id)
+            .ok_or("active page component missing")?;
+        if !component
+            .handlers
+            .iter()
+            .any(|handler| handler.node.as_deref() == Some(node_id) && handler.event == event)
+        {
+            return Ok(());
+        }
+        let screen = self
+            .screens
+            .get_mut(&active_id)
+            .ok_or("active page state missing")?;
+        let mut candidate = screen.session.clone();
+        let message = candidate
+            .apply(component, node_id, event)
+            .map_err(|error| error.message)?;
+        match message {
+            SessionMessage::Patch(batch) => {
+                screen
+                    .registry
+                    .apply_patch(&self.owner, batch)
+                    .map_err(|error| error.to_string())?;
+            }
+            SessionMessage::Event(event) if event.name == "navigate" => {
+                let message = studio_protocol::decode_guest_message(
+                    event.to_json().as_bytes(),
+                    ProtocolLimits::default(),
+                )
+                .map_err(|error| error.to_string())?;
+                let studio_protocol::GuestMessage::Navigate(command) = message else {
+                    return Err("invalid navigation emission".into());
+                };
+                return self.navigate(&command, Some((active_id, candidate)));
+            }
+            SessionMessage::Event(event) => println!("[dev] {}", event.to_json()),
+        }
+        screen.session = candidate;
+        Ok(())
+    }
+
+    fn active_timer_specs(&self) -> Vec<TimerSpec> {
+        self.timer_manifest
+            .as_ref()
+            .and_then(|manifest| {
+                manifest
+                    .pages
+                    .iter()
+                    .find(|page| page.id == self.active_screen_id)
+            })
+            .map(|page| page.timers.clone())
+            .unwrap_or_default()
+    }
+
+    fn completed_timers(&self, specs: &[TimerSpec]) -> Result<BTreeSet<String>, String> {
+        let registry = &self
+            .screens
+            .get(&self.active_screen_id)
+            .ok_or("active page missing")?
+            .registry;
+        let mut completed = BTreeSet::new();
+        for spec in specs {
+            let status = registry
+                .get(&self.owner, &spec.status_node)
+                .map_err(|error| error.to_string())?;
+            match status.props.get("text").and_then(serde_json::Value::as_str) {
+                Some("complete") => {
+                    completed.insert(spec.id.clone());
+                }
+                Some("running") => {}
+                _ => return Err("timer status must be running or complete".into()),
+            }
+        }
+        Ok(completed)
+    }
+
+    fn poll_timers_at(&mut self, now: Duration) -> Result<bool, String> {
+        self.timer_elapsed = self.timer_elapsed.max(now);
+        let now = self.timer_elapsed;
+        let specs = self.active_timer_specs();
+        if specs.is_empty() {
+            return Ok(false);
+        }
+        let generation = self.timer_generation;
+        let mut changed = false;
+        for _ in 0..studio_navigation::timers::MAX_TIMER_EVENTS {
+            if self.timer_generation != generation {
+                break;
+            }
+            let completed = self.completed_timers(&specs)?;
+            let Some(event) = self
+                .timer_schedule
+                .as_mut()
+                .and_then(|schedule| schedule.poll_one(now, &completed))
+            else {
+                break;
+            };
+            self.apply_event(&event.node_id, &event.event)?;
+            changed = true;
+            if self.timer_generation != generation {
+                break;
+            }
+            let completed = self.completed_timers(&specs)?;
+            if let Some(schedule) = self.timer_schedule.as_mut() {
+                schedule.observe(now, &completed);
+            }
+        }
+        Ok(changed)
+    }
+}
+
+fn timer_schedule_for_page(
+    manifest: Option<&TimerManifest>,
+    id: &str,
+    owner: &InstanceId,
+    registry: &UiRegistry,
+    now: Duration,
+) -> Result<Option<TimerSchedule>, String> {
+    let Some(page) = manifest.and_then(|manifest| manifest.pages.iter().find(|page| page.id == id))
+    else {
+        return Ok(None);
+    };
+    for spec in &page.timers {
+        let wrapper = registry
+            .get(owner, &spec.id)
+            .map_err(|error| error.to_string())?;
+        if wrapper.kind != studio_protocol::NodeKind::Box
+            || wrapper
+                .props
+                .get("visible")
+                .and_then(serde_json::Value::as_bool)
+                != Some(false)
+        {
+            return Err("timer targets must belong to an invisible Timer box".into());
+        }
+        let mut descendants = BTreeSet::new();
+        let mut pending = wrapper.children.clone();
+        while let Some(node) = pending.pop() {
+            let record = registry
+                .get(owner, &node)
+                .map_err(|error| error.to_string())?;
+            descendants.insert(node);
+            pending.extend(record.children.iter().cloned());
+        }
+        for (node, kind) in [
+            (&spec.tick_node, studio_protocol::NodeKind::Button),
+            (&spec.complete_node, studio_protocol::NodeKind::Button),
+            (&spec.status_node, studio_protocol::NodeKind::Text),
+        ] {
+            if !descendants.contains(node)
+                || registry
+                    .get(owner, node)
+                    .map_err(|error| error.to_string())?
+                    .kind
+                    != kind
+            {
+                return Err("timer target kind or ownership is invalid".into());
+            }
+        }
+    }
+    TimerSchedule::new(&page.timers, now).map(Some)
+}
+
+#[cfg(test)]
+impl DevSurface {
+    fn poll_timers_at(&mut self, now: Duration) -> Result<bool, String> {
+        match self {
+            Self::Ir(surface) => surface.poll_timers_at(now),
+            _ => Ok(false),
+        }
+    }
+}
+
 fn admitted_registry(owner: InstanceId, mount: MountTree) -> Result<UiRegistry, String> {
+    studio_protocol::validate_guest_message(
+        &studio_protocol::GuestMessage::Mount(mount.clone()),
+        ProtocolLimits::default(),
+    )
+    .map_err(|error| error.to_string())?;
     let mut registry = UiRegistry::new(owner.clone(), ProtocolLimits::default());
     registry.mount(mount).map_err(|error| error.to_string())?;
     NativeStateStore::from_registry(&owner, &registry).map_err(|error| error.to_string())?;
@@ -309,16 +716,9 @@ impl NativeSurface for DevSurface {
                 .map_err(|error| error.to_string()),
             Self::Ir(surface) => {
                 let owner = surface.owner.clone();
-                let active_screen_id = surface.active_screen_id.clone();
-                let module = Arc::clone(&surface.module);
-                let component = module
-                    .components
-                    .iter()
-                    .find(|component| component.id == active_screen_id)
-                    .ok_or("active screen component is missing")?;
                 let screen = surface
                     .screens
-                    .get_mut(&active_screen_id)
+                    .get(&surface.active_screen_id)
                     .ok_or("active screen state is missing")?;
                 let mut dispatcher = HostEventDispatcher::new(owner.clone());
                 register_tree(
@@ -333,26 +733,7 @@ impl NativeSurface for DevSurface {
                 else {
                     return Ok(());
                 };
-                if !component.handlers.iter().any(|handler| {
-                    handler.node.as_deref() == Some(node_id) && handler.event == event.event
-                }) {
-                    return Ok(());
-                }
-                let mut candidate = screen.session.clone();
-                let message = candidate
-                    .apply(component, node_id, &event.event)
-                    .map_err(|error| error.message)?;
-                match message {
-                    SessionMessage::Patch(batch) => {
-                        screen
-                            .registry
-                            .apply_patch(&owner, batch)
-                            .map_err(|error| error.to_string())?;
-                    }
-                    SessionMessage::Event(event) => println!("[dev] {}", event.to_json()),
-                }
-                screen.session = candidate;
-                Ok(())
+                surface.apply_event(node_id, &event.event)
             }
             Self::Empty => Ok(()),
         }
@@ -361,7 +742,8 @@ impl NativeSurface for DevSurface {
         match self {
             Self::Wasm(surface) => NativeSurface::poll_action_results(surface.as_mut())
                 .map_err(|error| error.to_string()),
-            _ => Ok(false),
+            Self::Ir(surface) => surface.poll_timers_at(surface.timer_origin.elapsed()),
+            Self::Empty => Ok(false),
         }
     }
     fn asset(&self, path: &str) -> Option<&[u8]> {
@@ -661,5 +1043,170 @@ function add() { quantity += 1; }
         );
         assert!(surface.replace(update(&required), false).is_err());
         assert_eq!(quantity(&surface), "fresh");
+    }
+}
+
+#[cfg(test)]
+mod file_route_tests {
+    use super::*;
+
+    fn routed_update() -> Replacement {
+        let sources = [
+            (
+                "home",
+                "routes/+page.studio",
+                r#"<script lang="ts">let count = $state(0); function add() { count += 1; } function live() { emit("navigate", { operation: "push", route: "/live" }); }</script><Column id="root"><Text id="count">{count}</Text><Button id="add" onclick={add}>Add</Button><Button id="live" onclick={live}>Live</Button></Column>"#,
+            ),
+            (
+                "live",
+                "routes/live/+page.studio",
+                r#"<script lang="ts">function back() { emit("navigate", { operation: "pop" }); }</script><Column id="live-root"><Text id="live-title">Live</Text><Button id="back" onclick={back}>Back</Button></Column>"#,
+            ),
+        ];
+        let mut components = Vec::new();
+        let mut paths = BTreeMap::new();
+        for (id, path, source) in sources {
+            components.extend(
+                studio_script::compile_studio(source, path, id)
+                    .unwrap()
+                    .components,
+            );
+            paths.insert(id.to_owned(), path.to_owned());
+        }
+        Replacement::Ir {
+            module: Arc::new(StudioModule {
+                version: studio_script::ir::STUDIO_IR_VERSION,
+                id: "file-routes".into(), imports: Vec::new(), exports: vec!["home".into(), "live".into()],
+                components, dependencies: Vec::new(),
+            }),
+            manifest: include_bytes!("../../../../examples/starter/manifest.json").to_vec(),
+            assets: BTreeMap::from([("assets/studio/routes.json".into(), br#"{"schemaVersion":1,"routes":[{"id":"home","path":"/","source":"routes/+page.studio"},{"id":"live","path":"/live","source":"routes/live/+page.studio"}]}"#.to_vec())]),
+            screen_source_paths: paths,
+        }
+    }
+
+    #[test]
+    fn studio_handlers_navigate_through_host_history_and_restore_state() {
+        let mut surface = DevSurface::Empty;
+        surface.replace(routed_update(), false).unwrap();
+        surface
+            .process_input("add", InputAction::PointerClick)
+            .unwrap();
+        surface
+            .process_input("live", InputAction::PointerClick)
+            .unwrap();
+        assert_eq!(
+            surface.metadata().unwrap().screen_id.as_deref(),
+            Some("live")
+        );
+        surface
+            .process_input("back", InputAction::PointerClick)
+            .unwrap();
+        assert_eq!(
+            surface.metadata().unwrap().screen_id.as_deref(),
+            Some("home")
+        );
+        fn count(node: &NativeRenderNode) -> Option<&str> {
+            if node.id == "count" {
+                return node.props.get("text").and_then(serde_json::Value::as_str);
+            }
+            node.children.iter().find_map(count)
+        }
+        let tree = surface.render_tree().unwrap();
+        assert_eq!(count(&tree), Some("1"));
+    }
+
+    #[test]
+    fn routed_reload_preserves_history_and_current_screen() {
+        let mut surface = DevSurface::Empty;
+        surface.replace(routed_update(), false).unwrap();
+        surface
+            .process_input("live", InputAction::PointerClick)
+            .unwrap();
+        surface.replace(routed_update(), false).unwrap();
+        assert_eq!(
+            surface.metadata().unwrap().screen_id.as_deref(),
+            Some("live")
+        );
+        surface
+            .process_input("back", InputAction::PointerClick)
+            .unwrap();
+        assert_eq!(
+            surface.metadata().unwrap().screen_id.as_deref(),
+            Some("home")
+        );
+    }
+}
+
+#[cfg(test)]
+mod timer_route_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn timed_update() -> Replacement {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("routes/live")).unwrap();
+        std::fs::write(dir.path().join("routes/+page.studio"), r#"<script lang="ts">let remaining = $state(2); function tick() { remaining = remaining > 0 ? remaining - 1 : 0; } function complete() { emit('navigate', { operation: 'replace', route: '/live' }); }</script><Box id="clock" opacity={remaining === 0 ? 0 : 1} transition={{duration_ms: 700, curve: 'ease_out'}}><Text id="remaining">{remaining}</Text></Box><Timer id="clock-timer" interval_ms={1000} completion_delay_ms={700} until={remaining === 0} ontick={tick} oncomplete={complete} />"#).unwrap();
+        std::fs::write(
+            dir.path().join("routes/live/+page.studio"),
+            "<Text id=\"live\">Live</Text>",
+        )
+        .unwrap();
+        let project = crate::studio_project::compile_routes(dir.path())
+            .unwrap()
+            .unwrap();
+        let assets = project.assets().unwrap();
+        Replacement::Ir {
+            module: Arc::new(project.module),
+            manifest: include_bytes!("../../../../examples/starter/manifest.json").to_vec(),
+            assets,
+            screen_source_paths: project
+                .routing
+                .routes
+                .into_iter()
+                .map(|route| (route.id, route.source))
+                .collect(),
+        }
+    }
+    fn text(surface: &DevSurface, id: &str) -> Option<String> {
+        fn find(node: &NativeRenderNode, id: &str) -> Option<String> {
+            if node.id == id {
+                return node
+                    .props
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+            }
+            node.children.iter().find_map(|child| find(child, id))
+        }
+        find(&surface.render_tree().unwrap(), id)
+    }
+
+    #[test]
+    fn ir_countdown_ticks_fades_then_navigates_on_the_host_clock() {
+        let mut surface = DevSurface::Empty;
+        surface.replace(timed_update(), false).unwrap();
+        assert_eq!(text(&surface, "remaining").as_deref(), Some("2"));
+        assert!(!surface.poll_timers_at(Duration::from_millis(999)).unwrap());
+        assert!(surface.poll_timers_at(Duration::from_secs(2)).unwrap());
+        assert_eq!(text(&surface, "remaining").as_deref(), Some("0"));
+        assert!(!surface.poll_timers_at(Duration::from_millis(2699)).unwrap());
+        assert!(surface.poll_timers_at(Duration::from_millis(2700)).unwrap());
+        assert_eq!(
+            surface.metadata().unwrap().screen_source_path.as_deref(),
+            Some("routes/live/+page.studio")
+        );
+        assert!(!surface.poll_timers_at(Duration::from_secs(60)).unwrap());
+    }
+
+    #[test]
+    fn source_reload_preserves_the_countdown_value_and_pending_deadline() {
+        let mut surface = DevSurface::Empty;
+        surface.replace(timed_update(), false).unwrap();
+        surface.poll_timers_at(Duration::from_secs(1)).unwrap();
+        surface.replace(timed_update(), false).unwrap();
+        assert_eq!(text(&surface, "remaining").as_deref(), Some("1"));
+        surface.poll_timers_at(Duration::from_secs(2)).unwrap();
+        assert_eq!(text(&surface, "remaining").as_deref(), Some("0"));
     }
 }

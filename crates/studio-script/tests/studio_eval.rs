@@ -265,3 +265,18 @@ fn implicit_wrap_keeps_dynamic_cards_mountable() {
     )
     .expect("wrapped mount validates");
 }
+
+#[test]
+fn countdown_state_updates_opacity_as_a_native_property_patch() {
+    let source = r#"<script lang="ts">let remaining = $state(1); function tick() { remaining -= 1; }</script><Box id="clock" opacity={remaining === 0 ? 0 : 1} transition={{duration_ms: 700, curve: 'ease_out'}}><Text id="time">{remaining}</Text><Button id="tick" onclick={tick}>Tick</Button></Box>"#;
+    let module = studio_script::compile_studio(source, "clock.studio", "clock").unwrap();
+    let component = &module.components[0];
+    let (_, mut session) =
+        studio_script::eval::InteractionSession::mount(&module, component, &BTreeMap::new())
+            .unwrap();
+    let message = session.apply(component, "tick", "pressed").unwrap();
+    let studio_script::eval::SessionMessage::Patch(batch) = message else {
+        panic!("clock tick must patch")
+    };
+    assert!(batch.operations.iter().any(|operation| matches!(operation, studio_protocol::PatchOp::UpdateProp{node_id, property, value} if node_id == "clock" && property == "opacity" && value.as_f64() == Some(0.0))), "clock must fade when its countdown reaches zero");
+}

@@ -9963,6 +9963,7 @@ dependencies = [
  "studio-components",
  "studio-design",
  "studio-host",
+ "studio-navigation",
  "studio-package",
  "studio-protocol",
  "studio-runtime",
@@ -10005,6 +10006,7 @@ name = "studio-designer"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "nix 0.31.3",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -10079,6 +10081,11 @@ dependencies = [
 [[package]]
 name = "studio-navigation"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "studio-protocol",
+]
 
 [[package]]
 name = "studio-net"
@@ -10212,6 +10219,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "studio-navigation",
  "studio-protocol",
  "tempfile",
  "thiserror 2.0.20",
@@ -10270,6 +10278,17 @@ dependencies = [
  "wasmparser 0.255.0",
  "wasmtime",
  "wat",
+]
+
+[[package]]
+name = "studio-web-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "studio-navigation",
+ "studio-protocol",
+ "studio-ui",
+ "wasm-bindgen",
 ]
 
 [[package]]

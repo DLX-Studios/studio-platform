@@ -51,6 +51,7 @@ impl Error for RouteError {}
 pub(crate) enum Segment {
     Static(String),
     Parameter(String),
+    Wildcard,
 }
 
 /// One declared route and its lazy screen factory.
@@ -65,7 +66,7 @@ impl<T> RouteDefinition<T> {
     ///
     /// # Errors
     ///
-    /// Rejects non-absolute, root-only, unsafe, repeated-parameter, or empty-segment patterns.
+    /// Rejects non-absolute, unsafe, repeated-parameter, misplaced-wildcard, or empty-segment patterns.
     pub fn new(
         pattern: impl Into<String>,
         factory: impl FnMut() -> T + 'static,
@@ -85,30 +86,45 @@ impl<T> RouteDefinition<T> {
             .map(|segment| match segment {
                 Segment::Static(value) => value.as_str(),
                 Segment::Parameter(_) => ":",
+                Segment::Wildcard => "*",
             })
             .collect::<Vec<_>>()
             .join("/")
     }
 
-    pub(crate) fn static_count(&self) -> usize {
+    pub(crate) fn specificity(&self) -> Vec<u8> {
         self.segments
             .iter()
-            .filter(|segment| matches!(segment, Segment::Static(_)))
-            .count()
+            .map(|segment| match segment {
+                Segment::Static(_) => 3,
+                Segment::Parameter(_) => 2,
+                Segment::Wildcard => 0,
+            })
+            // An exact match beats its empty catch-all sibling.
+            .chain(std::iter::once(1))
+            .collect()
     }
 
     pub(crate) fn matches(&self, route: &[&str]) -> Option<BTreeMap<String, String>> {
-        if route.len() != self.segments.len() {
+        let wildcard = self.segments.last() == Some(&Segment::Wildcard);
+        if (!wildcard && route.len() != self.segments.len())
+            || (wildcard && route.len() + 1 < self.segments.len())
+        {
             return None;
         }
         let mut params = BTreeMap::new();
-        for (declared, actual) in self.segments.iter().zip(route) {
+        for (index, declared) in self.segments.iter().enumerate() {
+            if declared == &Segment::Wildcard {
+                return Some(params);
+            }
+            let actual = route.get(index)?;
             match declared {
                 Segment::Static(expected) if expected != actual => return None,
                 Segment::Static(_) => {}
                 Segment::Parameter(name) => {
                     params.insert(name.clone(), (*actual).to_owned());
                 }
+                Segment::Wildcard => unreachable!("wildcard handled above"),
             }
         }
         Some(params)
@@ -125,12 +141,18 @@ impl<T> fmt::Debug for RouteDefinition<T> {
 }
 
 pub(crate) fn parse_route(route: &str) -> Result<Vec<&str>, RouteError> {
-    if !valid_common(route) || route == "/" {
+    if !valid_common(route) {
         return Err(RouteError::new(RouteErrorCode::InvalidRoute));
+    }
+    if route == "/" {
+        return Ok(Vec::new());
     }
     let segments = route[1..].split('/').collect::<Vec<_>>();
     if segments.iter().any(|segment| {
-        segment.is_empty() || matches!(*segment, "." | "..") || segment.starts_with(':')
+        segment.is_empty()
+            || matches!(*segment, "." | "..")
+            || segment.starts_with(':')
+            || segment.contains('*')
     }) {
         return Err(RouteError::new(RouteErrorCode::InvalidRoute));
     }
@@ -138,18 +160,33 @@ pub(crate) fn parse_route(route: &str) -> Result<Vec<&str>, RouteError> {
 }
 
 fn parse_pattern(pattern: &str) -> Result<Vec<Segment>, RouteError> {
-    if !valid_common(pattern) || pattern == "/" {
+    if !valid_common(pattern) {
         return Err(RouteError::new(RouteErrorCode::InvalidPattern));
     }
+    if pattern == "/" {
+        return Ok(Vec::new());
+    }
+    let parts = pattern[1..].split('/').collect::<Vec<_>>();
     let mut names = HashSet::new();
-    pattern[1..]
-        .split('/')
-        .map(|segment| {
-            if segment.is_empty() || matches!(segment, "." | "..") {
+    parts
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            if segment.is_empty() || matches!(*segment, "." | "..") {
+                return Err(RouteError::new(RouteErrorCode::InvalidPattern));
+            }
+            if *segment == "*" && index == parts.len() - 1 {
+                return Ok(Segment::Wildcard);
+            }
+            if segment.contains('*') {
                 return Err(RouteError::new(RouteErrorCode::InvalidPattern));
             }
             if let Some(name) = segment.strip_prefix(':') {
                 if name.is_empty()
+                    || !name
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
                     || !name
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
@@ -159,7 +196,7 @@ fn parse_pattern(pattern: &str) -> Result<Vec<Segment>, RouteError> {
                 }
                 Ok(Segment::Parameter(name.to_owned()))
             } else {
-                Ok(Segment::Static(segment.to_owned()))
+                Ok(Segment::Static((*segment).to_owned()))
             }
         })
         .collect()

@@ -1,0 +1,38 @@
+<script lang="ts">
+  let { children } = $props();
+
+  function home() {
+    emit('navigate', { operation: 'reset', route: '/' });
+  }
+
+  function explore() {
+    emit('navigate', { operation: 'push', route: '/lost-in-leonida' });
+  }
+</script>
+
+<Scaffold id="stream-shell">
+  <Box id="stream-shell-content" padding={32} flex={1} background_asset="assets/vice-city-cityscape.png">
+    <Column id="stream-layout" gap={20} flex={1}>
+      <Row id="stream-navigation" alignment="space_between" gap={16}>
+        <Text id="stream-wordmark" typography_role="headline" font_size={20} color="#FFF5EF" text="VICE CITY / AFTER HOURS" />
+        <Row id="stream-links" gap={8}>
+          <Button id="stream-home" label="Countdown" variant="secondary" onclick={home} />
+          <Button id="stream-explore" label="Explore Leonida" variant="secondary" onclick={explore} />
+        </Row>
+      </Row>
+
+      <Box id="stream-page-content" padding={16} flex={1} background="transparent">
+        <Column id="stream-page-center" gap={0} flex={1} alignment="center">
+          <Box id="stream-page-space-above" flex={1} background="transparent" />
+          {@render children()}
+          <Box id="stream-page-space-below" flex={1} background="transparent" />
+        </Column>
+      </Box>
+
+      <Row id="stream-footer" alignment="space_between" gap={16}>
+        <Text id="stream-footer-location" typography_role="caption" font_size={12} color="#FFD5E2" text="VICE CITY, LEONIDA" />
+        <Text id="stream-footer-session" typography_role="caption" font_size={12} color="#FFD5E2" text="GTA VI • COMMUNITY STREAM" />
+      </Row>
+    </Column>
+  </Box>
+</Scaffold>

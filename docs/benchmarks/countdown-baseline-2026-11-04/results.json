@@ -1,0 +1,37 @@
+{
+  "binary": "/var/home/swhite/Development/.cargo-target/release/studio-app",
+  "bundle": "/var/home/swhite/Development/studio-platform/examples/stream-countdown/build/stream-countdown.studio",
+  "binary_bytes": 98369984,
+  "bundle_bytes": 2707070,
+  "binary_sha256": "8335f57ff92439f6374e4c2a213a988f7c7798ed203b8c692d3dc7134ae7e5bc",
+  "bundle_sha256": "e65eb4e8ffcbeb5d828773003ece94788a6d01545738bf39845ca0b08969422c",
+  "viewport": [
+    1440,
+    900
+  ],
+  "startup_runs": [
+    {
+      "run": 0,
+      "observed_visible_seconds": 1.061914681995404,
+      "cache": "uncontrolled first launch",
+      "pid": 272228
+    },
+    {
+      "run": 1,
+      "observed_visible_seconds": 0.6418190219992539,
+      "cache": "warm",
+      "pid": 272341
+    },
+    {
+      "run": 2,
+      "observed_visible_seconds": 0.6395546370040393,
+      "cache": "warm",
+      "pid": 272445
+    }
+  ],
+  "started_utc": "2026-11-04T10:18:38Z",
+  "completed": true,
+  "compositor_renderer": "pixman",
+  "software_gl_requested": true,
+  "vulkan_adapter": "not pinned"
+}

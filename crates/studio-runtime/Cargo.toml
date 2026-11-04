@@ -13,13 +13,13 @@ gpui-kit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-studio-actions = { path = "../studio-actions" }
+studio-actions = { path = "../studio-actions", optional = true }
 studio-components = { path = "../studio-components" }
-studio-github = { path = "../studio-github" }
-studio-host = { path = "../studio-host", default-features = false }
+studio-github = { path = "../studio-github", optional = true }
+studio-host = { path = "../studio-host", default-features = false, optional = true }
 studio-navigation = { path = "../studio-navigation" }
 studio-net = { path = "../studio-net" }
-studio-oauth = { path = "../studio-oauth" }
+studio-oauth = { path = "../studio-oauth", optional = true }
 studio-package = { path = "../studio-package" }
 studio-protocol = { path = "../studio-protocol" }
 studio-security = { path = "../studio-security" }
@@ -29,7 +29,10 @@ thiserror.workspace = true
 zeroize.workspace = true
 
 [features]
-default = []
+# Preserve the existing full host for all current callers. A no-default-features
+# build keeps native UI, Wasm, routing, timers, package verification and networking.
+default = ["services"]
+services = ["dep:studio-actions", "dep:studio-github", "dep:studio-host", "dep:studio-oauth"]
 development = ["studio-wasm/development"]
 
 [dev-dependencies]

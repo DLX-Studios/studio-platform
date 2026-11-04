@@ -9,8 +9,9 @@ successful edits, while Designer can query the active preview for its status.
 
 ## First milestone
 
-- The agent starts `studio-designer agent-server --project-root <path>` as a
-  local MCP server using JSON-RPC 2.0 over newline-delimited stdio.
+- The agent starts `studio-designer agent-server` in its app folder as a
+  local MCP server using JSON-RPC 2.0 over newline-delimited stdio. An optional
+  `--project-root <path>` selects a fixed folder explicitly.
 - The server exposes project file listing, reading, full-file writing, and
   UTF-8 range patches. Writes require the SHA-256 revision the agent read.
 - Project paths are relative, bounded, confined to the selected root, and
@@ -64,3 +65,31 @@ project folder, and points to a bounded `.studio` text file. Without the
 descriptor, existing single-entry `.studio` and AssemblyScript projects keep
 their current behavior. Changes to the descriptor or declared sources trigger
 the in-memory dev compiler without creating a `.studio` archive.
+
+## Agent development tools
+
+The native Designer project toolbar uses the same process service. Opening a
+source folder launches `studio dev <root>` in a separate native window while
+Designer remains open. The toolbar exposes preview lifecycle, check/build/cancel,
+and bounded output; the existing dev JSON-RPC endpoint supplies live status,
+selection/source links, screen, viewport, and zoom controls. Folder replacement
+preserves dirty buffers and rejects late responses from the previous root.
+Only the launcher owns a preview's process lifecycle; observing an external
+preview never grants permission to stop it.
+
+The same local MCP process also exposes source search, asynchronous CLI
+check/build tasks, preview start/stop/restart/logs, and release runtime
+start/status/logs/stop. All operate in the root returned by `project.info`;
+tool arguments cannot retarget it. Runtime bundle paths must resolve to
+regular `.studio` files inside that root. The release executable retains its
+existing admission/trust checks and gains no agent or dev endpoint.
+
+The server owns only child processes it starts. Existing previews can answer
+status and presentation RPCs without becoming server-owned processes. On
+normal MCP closure, managed children are terminated and reaped. CLI tasks
+share one slot and expose completion/exit code plus bounded stdout/stderr
+tails independently of the stdio protocol. Spawn success and preview readiness
+are distinct states.
+
+See [the agent guide](../../docs/agents/README.md) for tool discovery, portable
+Codex/OpenCode configs, and the reusable Studio workflow skill.

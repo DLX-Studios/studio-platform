@@ -24,9 +24,9 @@ pub struct ArchivePolicy {
 impl Default for ArchivePolicy {
     fn default() -> Self {
         Self {
-            max_archive_bytes: 16 * 1024 * 1024,
+            max_archive_bytes: 512 * 1024 * 1024,
             max_module_bytes: 8 * 1024 * 1024,
-            max_asset_bytes: 1024 * 1024,
+            max_asset_bytes: 256 * 1024 * 1024,
             max_entries: 1024,
         }
     }

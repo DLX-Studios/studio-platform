@@ -1,38 +1,48 @@
 //! Secure bundle-to-policy-to-instance-to-mount startup orchestration.
 
+#[cfg(feature = "services")]
 use parking_lot::Mutex;
 use std::{fs, sync::Arc};
 
 use serde_json::Value;
+#[cfg(feature = "services")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "services")]
 use studio_actions::Checkout;
 use studio_components::{HostEventDispatcher, NativeStateStore};
+#[cfg(feature = "services")]
 use studio_host::{LocalStore, MigrationError, MigrationRunner, MigrationStepError};
+#[cfg(feature = "services")]
 use studio_net::limits::BrokerLimits;
-use studio_net::{
-    BrokerError, HttpsClient, ProductionHttpTransport, RestBroker, RestBrokerConfig,
-    TransportLimits,
-};
+use studio_net::{BrokerError, HttpsClient, RestBroker, RestBrokerConfig};
+#[cfg(feature = "services")]
+use studio_net::{ProductionHttpTransport, TransportLimits};
+#[cfg(feature = "services")]
 use studio_oauth::{
     BrowserHandoff, CallbackListener, EntropySource, HttpsJwksProvider, HttpsOAuthTransport,
     HttpsOidcDiscovery, OAuthManager, OidcDiscoveryProvider, OsEntropy, ProtectedOAuthTokenStore,
     ProtectedSecretReference, ProviderDescriptor, ProviderPackage,
     ProviderRegistry as OAuthProviderRegistry, RedirectBroker, SystemBrowser, TcpLoopbackListener,
 };
+#[cfg(feature = "services")]
+use studio_package::VerifiedMigrationBundle;
 use studio_package::{
     ArchivePolicy, CanonicalBundleInput, ManifestPolicy, ProviderRegistry, TrustStore,
-    TrustStoreError, VerifiedMigrationBundle, canonical_bundle_document, inspect_archive,
-    parse_manifest, verify_bundle_signature,
+    TrustStoreError, canonical_bundle_document, inspect_archive, parse_manifest,
+    verify_bundle_signature,
 };
 use studio_protocol::{GuestMessage, MountTree, ProtocolLimits, UiNode, decode_guest_message};
+use studio_security::PluginPrincipal;
+#[cfg(feature = "services")]
 use studio_security::{
     ApplicationEnvironment, CredentialBackend, CredentialBackendError, CredentialBytes,
-    CredentialLocator, OsCredentialBackend, PluginPrincipal, ProtectedSecretKey,
-    ProtectedSecretStore, SecretInput, TrustMode,
+    CredentialLocator, OsCredentialBackend, ProtectedSecretKey, ProtectedSecretStore, SecretInput,
+    TrustMode,
 };
 use studio_ui::{InstanceId, UiRegistry};
 use studio_wasm::{ModulePolicy, PluginInstance, RuntimeBudgets, SandboxEngine};
 use thiserror::Error;
+#[cfg(feature = "services")]
 use zeroize::Zeroizing;
 
 use crate::{
@@ -45,6 +55,7 @@ use crate::{
 /// The list mirrors the maintained catalog of the OAuth engine. A provider admitted for a
 /// different credential model, such as the provider-neutral API-key integration, is not an
 /// OAuth provider: it is skipped rather than failed.
+#[cfg(feature = "services")]
 pub(crate) const OAUTH_PROVIDER_IDS: &[&str] = &[
     studio_oauth::APPLE_PROVIDER_ID,
     studio_oauth::DISCORD_PROVIDER_ID,
@@ -58,6 +69,7 @@ pub(crate) const OAUTH_PROVIDER_IDS: &[&str] = &[
 ];
 
 /// Whether the id names a provider the host can sign in with.
+#[cfg(feature = "services")]
 pub(crate) fn is_oauth_provider(provider: &str) -> bool {
     OAUTH_PROVIDER_IDS.contains(&provider)
 }
@@ -88,7 +100,10 @@ impl HostConfig {
             archive_policy: ArchivePolicy::default(),
             manifest_policy: ManifestPolicy::default(),
             protocol_limits: ProtocolLimits::default(),
+            #[cfg(feature = "services")]
             provider_registry: ProviderRegistry::maintained(),
+            #[cfg(not(feature = "services"))]
+            provider_registry: ProviderRegistry::empty(),
         }
     }
 }
@@ -152,6 +167,7 @@ pub enum LaunchError {
     MigrationRequired,
     /// Migration failed safely; the application remains unavailable until recovery.
     #[error("plugin application migration failed: {0}")]
+    #[cfg(feature = "services")]
     MigrationInvalid(MigrationError),
     /// Provider configuration an operator supplied is unusable.
     #[error("provider configuration rejected: {0}")]
@@ -172,6 +188,7 @@ impl LaunchError {
             Self::GuestInvalid(_) => LaunchErrorCode::GuestInvalid,
             Self::UiInvalid(_) => LaunchErrorCode::UiInvalid,
             Self::MigrationRequired => LaunchErrorCode::MigrationRequired,
+            #[cfg(feature = "services")]
             Self::MigrationInvalid(_) => LaunchErrorCode::MigrationInvalid,
             Self::ProviderConfigurationInvalid(_) => LaunchErrorCode::ProviderConfigurationInvalid,
         }
@@ -184,11 +201,17 @@ pub struct StudioHost {
     config: HostConfig,
     display: NativeDisplayAvailability,
     https_client: Option<Arc<dyn HttpsClient>>,
+    #[cfg(feature = "services")]
     credential_backend: Arc<dyn CredentialBackend>,
+    #[cfg(feature = "services")]
     provisioned_secrets: Arc<Mutex<Vec<(ProtectedSecretKey, SecretInput)>>>,
+    #[cfg(feature = "services")]
     browser: Arc<dyn BrowserHandoff>,
+    #[cfg(feature = "services")]
     callback_listener: Arc<dyn CallbackListener>,
+    #[cfg(feature = "services")]
     entropy: Arc<dyn EntropySource>,
+    #[cfg(feature = "services")]
     redirect_broker: Option<RedirectBrokerConfig>,
 }
 
@@ -199,12 +222,14 @@ pub struct StudioHost {
 /// application identifier is the manifest's own id, so two applications never share a redirect
 /// URI. The secret is the one the broker was deployed with; it authorizes the loopback port the
 /// broker is asked to forward to, and is never written to the protected store.
+#[cfg(feature = "services")]
 #[derive(Clone)]
 pub struct RedirectBrokerConfig {
     base_url: String,
     secret: Zeroizing<Vec<u8>>,
 }
 
+#[cfg(feature = "services")]
 impl std::fmt::Debug for RedirectBrokerConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -215,6 +240,7 @@ impl std::fmt::Debug for RedirectBrokerConfig {
     }
 }
 
+#[cfg(feature = "services")]
 impl RedirectBrokerConfig {
     /// Configure a broker from the values an operator deploys it with.
     #[must_use]
@@ -240,24 +266,27 @@ impl RedirectBrokerConfig {
 
 impl std::fmt::Debug for StudioHost {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("StudioHost")
+        let mut debug = formatter.debug_struct("StudioHost");
+        debug
             .field("config", &self.config)
             .field("display", &self.display)
-            .field("https_client_installed", &self.https_client.is_some())
+            .field("https_client_installed", &self.https_client.is_some());
+        #[cfg(feature = "services")]
+        debug
             .field("credential_backend_installed", &true)
             .field(
                 "provisioned_secret_count",
                 &self.provisioned_secrets.lock().len(),
             )
-            .field("oauth_adapters_installed", &true)
-            .finish()
+            .field("oauth_adapters_installed", &true);
+        debug.finish()
     }
 }
 
 impl StudioHost {
     /// Create ordered compositor-shutdown ownership for one verified principal.
     #[must_use]
+    #[cfg(feature = "services")]
     pub fn shutdown_coordinator(principal: PluginPrincipal) -> crate::ShutdownCoordinator {
         crate::ShutdownCoordinator::new(principal)
     }
@@ -278,11 +307,17 @@ impl StudioHost {
             config,
             display,
             https_client: None,
+            #[cfg(feature = "services")]
             credential_backend: Arc::new(OsCredentialBackend),
+            #[cfg(feature = "services")]
             provisioned_secrets: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "services")]
             browser: Arc::new(SystemBrowser),
+            #[cfg(feature = "services")]
             callback_listener: Arc::new(TcpLoopbackListener),
+            #[cfg(feature = "services")]
             entropy: Arc::new(OsEntropy),
+            #[cfg(feature = "services")]
             redirect_broker: None,
         }
     }
@@ -293,6 +328,7 @@ impl StudioHost {
     /// forwards the provider's redirect to the loopback listener this host binds, and the
     /// shared secret authorizes the port the broker is asked to forward to.
     #[must_use]
+    #[cfg(feature = "services")]
     pub fn with_redirect_broker(mut self, broker: RedirectBrokerConfig) -> Self {
         self.redirect_broker = Some(broker);
         self
@@ -307,6 +343,7 @@ impl StudioHost {
 
     /// Replace the system credential adapter, primarily for deterministic host tests.
     #[must_use]
+    #[cfg(feature = "services")]
     pub fn with_credential_backend(mut self, backend: Arc<dyn CredentialBackend>) -> Self {
         self.credential_backend = backend;
         self
@@ -314,6 +351,7 @@ impl StudioHost {
 
     /// Supply one host-captured secret for immediate protected-store provisioning.
     #[must_use]
+    #[cfg(feature = "services")]
     pub fn with_protected_secret(self, name: ProtectedSecretKey, value: SecretInput) -> Self {
         self.provisioned_secrets.lock().push((name, value));
         self
@@ -321,6 +359,7 @@ impl StudioHost {
 
     /// Override host OAuth adapters for deterministic integration tests.
     #[must_use]
+    #[cfg(feature = "services")]
     pub fn with_oauth_adapters(
         mut self,
         browser: Arc<dyn BrowserHandoff>,
@@ -354,6 +393,7 @@ impl StudioHost {
     /// # Errors
     ///
     /// Returns a safe checkout construction failure.
+    #[cfg(feature = "services")]
     pub fn protected_payment_session(
         owner: InstanceId,
         principal: PluginPrincipal,
@@ -367,6 +407,7 @@ impl StudioHost {
     /// # Errors
     ///
     /// Rejects invalid checkout, trusted-input, or navigation initialization.
+    #[cfg(feature = "services")]
     pub fn checkout_shell(
         owner: InstanceId,
         principal: PluginPrincipal,
@@ -390,6 +431,7 @@ impl StudioHost {
     /// The runner receives a host-owned LocalStore and a host callback for the migration document;
     /// no database or guest capability crosses into migration code. Unsigned development bundles
     /// are rejected because migrations are an authenticated package authority.
+    #[cfg(feature = "services")]
     pub async fn prepare_with_migrations<S, F>(
         &self,
         request: LaunchRequest,
@@ -581,12 +623,16 @@ impl StudioHost {
             return Err(LaunchError::MigrationRequired);
         }
 
+        #[cfg(not(feature = "services"))]
+        validate_core_manifest(&manifest)?;
+
         let provider_plan = self
             .config
             .provider_registry
             .admit(&manifest, &studio_net::limits::BrokerLimits::default())
             .map_err(|error| LaunchError::BundleInvalid(error.to_string()))?;
 
+        #[cfg(feature = "services")]
         let provider_services = prepare_provider_services(
             &manifest,
             identity_bytes,
@@ -600,6 +646,12 @@ impl StudioHost {
             Arc::clone(&self.entropy),
             self.redirect_broker.clone(),
         )?;
+
+        #[cfg(not(feature = "services"))]
+        let provider_services = {
+            let _ = (identity_bytes, https_client);
+            None
+        };
 
         let engine =
             SandboxEngine::new().map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
@@ -637,6 +689,27 @@ impl StudioHost {
     }
 }
 
+/// Optional service payload shared by launch and the mounted surface.
+#[cfg(feature = "services")]
+pub(crate) type ProviderServices = Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>;
+#[cfg(not(feature = "services"))]
+pub(crate) type ProviderServices = Option<()>;
+
+/// A core build must reject requirements it cannot satisfy, rather than silently ignore them.
+#[cfg(not(feature = "services"))]
+fn validate_core_manifest(manifest: &studio_package::ManifestV1) -> Result<(), LaunchError> {
+    if !manifest.integrations.is_empty()
+        || !manifest.secrets.is_empty()
+        || !manifest.routes.is_empty()
+        || !manifest.capabilities.is_empty()
+    {
+        return Err(LaunchError::ProviderConfigurationInvalid(
+            "this runtime was built without services; this bundle requires the full runtime".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// A validated and instantiated guest awaiting initialization on its owning UI thread.
 /// Constructed by the host so development updates never bypass manifest or Wasm policy.
 pub struct PreparedPlugin {
@@ -646,7 +719,7 @@ pub struct PreparedPlugin {
     assets: std::collections::BTreeMap<String, Vec<u8>>,
     protocol_limits: ProtocolLimits,
     provider_plan: studio_package::ProviderAdmissionPlan,
-    provider_services: Option<(Arc<OAuthManager>, Arc<RestBroker<'static>>)>,
+    provider_services: ProviderServices,
 }
 
 impl PreparedPlugin {
@@ -661,11 +734,22 @@ impl PreparedPlugin {
     /// # Errors
     /// Returns guest or UI admission failures without affecting another live surface.
     pub fn mount(mut self) -> Result<PluginSurface, LaunchError> {
+        let routing = crate::plugin_surface::project_router_from_assets(&self.assets)
+            .map_err(LaunchError::UiInvalid)?;
+        let timers = crate::plugin_surface::project_timer_manifest_from_assets(
+            &self.assets,
+            routing.as_ref(),
+        )
+        .map_err(LaunchError::UiInvalid)?;
         let outcome = self
             .instance
             .invoke_init(0, 0)
             .map_err(|error| LaunchError::GuestInvalid(error.to_string()))?;
         let mount = decode_single_mount(&outcome.emissions, self.protocol_limits)?;
+        if let Some(router) = &routing {
+            crate::plugin_surface::validate_routed_mount(&router.current(), &mount)
+                .map_err(LaunchError::UiInvalid)?;
+        }
         let owner = InstanceId::new(self.owner)
             .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
         let mut dispatcher = HostEventDispatcher::new(owner.clone());
@@ -676,7 +760,7 @@ impl PreparedPlugin {
             .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
         let native_state = NativeStateStore::from_registry(dispatcher.owner(), &registry)
             .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
-        Ok(PluginSurface::new(
+        let mut surface = PluginSurface::new(
             self.mode,
             registry,
             native_state,
@@ -686,7 +770,14 @@ impl PreparedPlugin {
             self.protocol_limits,
             self.provider_plan,
             self.provider_services,
-        ))
+            routing,
+        );
+        if let Some(manifest) = timers {
+            surface
+                .configure_timers(manifest)
+                .map_err(|error| LaunchError::UiInvalid(error.to_string()))?;
+        }
+        Ok(surface)
     }
 
     /// Restore SDK-managed development state before the new guest mounts its UI.
@@ -704,9 +795,11 @@ impl PreparedPlugin {
     }
 }
 
+#[cfg(feature = "services")]
 #[derive(Clone)]
 struct SharedCredentialBackend(Arc<dyn CredentialBackend>);
 
+#[cfg(feature = "services")]
 impl CredentialBackend for SharedCredentialBackend {
     fn set_secret(
         &self,
@@ -734,6 +827,7 @@ impl CredentialBackend for SharedCredentialBackend {
 /// integration, and the descriptor version comes from the admitted plan, so the host enables
 /// exactly the descriptor version the package was admitted against. A declared issuer is a
 /// public client, so it carries a client id and no secret at all.
+#[cfg(feature = "services")]
 fn provider_package(
     manifest: &studio_package::ManifestV1,
     provider: &studio_package::ResolvedProvider,
@@ -805,6 +899,7 @@ fn provider_package(
 /// names another issuer or publishes endpoints elsewhere is refused rather than followed. The
 /// scope ceiling the application declared is installed before the descriptor, because the
 /// catalog refuses to hold a descriptor its own policy would refuse.
+#[cfg(feature = "services")]
 fn prepare_declared_issuer(
     manifest: &studio_package::ManifestV1,
     provider: &studio_package::ResolvedProvider,
@@ -864,6 +959,7 @@ fn prepare_declared_issuer(
 /// issuer is different: it is configured from the issuer's own discovery document, and an
 /// issuer the host cannot pin fails the launch closed rather than leaving the application with
 /// a provider it declared but cannot use.
+#[cfg(feature = "services")]
 fn prepare_provider_services(
     manifest: &studio_package::ManifestV1,
     archive_bytes: &[u8],

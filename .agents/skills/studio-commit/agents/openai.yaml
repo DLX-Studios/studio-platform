@@ -1,0 +1,3 @@
+interface:
+  display_name: "Studio Commit"
+  short_description: "Checkpoint changes, initialize project docs, commit and push"

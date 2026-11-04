@@ -1,0 +1,39 @@
+<script lang="ts">
+  import StreamHeader from '../components/StreamHeader.studio';
+  import CountdownClock from '../components/CountdownClock.studio';
+
+  let remaining = $state(600);
+
+  function tick() {
+    remaining = remaining > 0 ? remaining - 1 : 0;
+  }
+
+  function finish() {
+    remaining = 0;
+  }
+
+  function reset() {
+    remaining = 600;
+  }
+
+  function streamStarted() {
+    remaining = 600;
+    emit('navigate', { operation: 'replace', route: '/live' });
+  }
+
+  function goLive() {
+    emit('navigate', { operation: 'push', route: '/live' });
+  }
+</script>
+
+<Column id="countdown-page" gap={24} alignment="center">
+  <StreamHeader id="starting-header" />
+  <CountdownClock id="starting-clock" remaining={remaining} />
+  <Timer id="stream-timer" interval_ms={1000} until={remaining === 0} completion_delay_ms={700} ontick={tick} oncomplete={streamStarted} />
+
+  <Row id="countdown-controls" gap={8} alignment="center">
+    <Button id="countdown-finish" label="Start now" variant="secondary" onclick={finish} />
+    <Button id="countdown-reset" label="Reset 10:00" variant="secondary" onclick={reset} />
+    <Button id="countdown-go-live" label="Go live" onclick={goLive} />
+  </Row>
+</Column>

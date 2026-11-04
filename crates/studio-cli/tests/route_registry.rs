@@ -12,6 +12,81 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
+fn studio_pages_are_discovered_and_layouts_are_excluded() {
+    let project = tempfile::tempdir().unwrap();
+    for file in [
+        "routes/+page.studio",
+        "routes/+layout.studio",
+        "routes/live/+page.studio",
+        "routes/live/+layout.studio",
+        "routes/streams/[id]/+page.studio",
+        "routes/[...rest]/+page.studio",
+        "routes/_private/+page.studio",
+        "routes/live/_helper.studio",
+        "routes/about.studio",
+    ] {
+        let path = project.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "<Text id=\"title\">Page</Text>").unwrap();
+    }
+    let registry = build_registry(project.path()).unwrap();
+    let paths: Vec<_> = registry
+        .entries
+        .iter()
+        .map(|route| route.path.as_str())
+        .collect();
+    assert_eq!(paths, ["/", "/*", "/about", "/live", "/streams/:id"]);
+    assert!(registry
+        .entries
+        .iter()
+        .all(|route| !route.file.contains("layout")));
+    assert_eq!(
+        match_route(&registry, "/streams/42").unwrap().1,
+        [("id".to_owned(), "42".to_owned())]
+    );
+}
+
+#[test]
+fn studio_and_legacy_pages_share_duplicate_detection() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join("routes")).unwrap();
+    std::fs::write(project.path().join("routes/+page.studio"), "<Text />").unwrap();
+    std::fs::write(project.path().join("routes/index.ts"), "").unwrap();
+    let diagnostics = build_registry(project.path()).expect_err("both files define root");
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "ROUTE_DUPLICATE_PATH"));
+}
+
+#[test]
+fn studio_repeated_parameter_names_are_rejected_by_shared_pattern_validation() {
+    let project = tempfile::tempdir().unwrap();
+    let directory = project.path().join("routes/[id]/[id]");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("+page.studio"), "<Text />").unwrap();
+    let diagnostics =
+        build_registry(project.path()).expect_err("repeated parameter names are invalid");
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "ROUTE_MALFORMED_PARAM"));
+}
+
+#[cfg(unix)]
+#[test]
+fn route_symlinks_cannot_escape_the_project() {
+    let project = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join("routes")).unwrap();
+    std::fs::write(outside.path().join("secret.studio"), "<Text />").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("secret.studio"),
+        project.path().join("routes/+page.studio"),
+    )
+    .unwrap();
+    assert!(build_registry(project.path()).is_err());
+}
+
+#[test]
 fn shapes_map_and_helpers_are_excluded() {
     let registry = build_registry(&fixture("routes-ok")).unwrap();
     let paths: Vec<&str> = registry

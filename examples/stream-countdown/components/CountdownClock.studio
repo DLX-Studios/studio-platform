@@ -1,0 +1,11 @@
+<script lang="ts">
+  let { remaining = 600 } = $props();
+  let minutes = $derived((remaining - remaining % 60) / 60);
+  let seconds = $derived(remaining % 60);
+</script>
+
+<Column id="clock-content" gap={8} alignment="center" opacity={remaining === 0 ? 0 : 1} transition={{ duration_ms: 700, curve: 'ease_out' }}>
+  <Text id="clock-label" typography_role="caption" font_size={14} color="#FFD5E2" text="STREAM BEGINS IN" />
+  <Text id="clock" typography_role="display" font_size={168} color="#FFF5EF" opacity={seconds % 2 === 0 ? 1 : 0.9} transition={{ duration_ms: 220, curve: 'ease_in_out' }}>{minutes}:{seconds < 10 ? '0' : ''}{seconds}</Text>
+  <Text id="clock-status" typography_role="caption" font_size={14} color="#FFD5E2">{remaining === 0 ? 'The wait is over. Let us make some noise.' : 'Settle in. We are almost ready.'}</Text>
+</Column>

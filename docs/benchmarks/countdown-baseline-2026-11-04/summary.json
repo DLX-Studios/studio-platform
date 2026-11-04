@@ -1,0 +1,43 @@
+{
+  "settled_countdown": {
+    "samples": 580,
+    "cpu_percent_one_core": 115.40410066488096,
+    "rss_mib_median": 324.3828125,
+    "pss_mib_median": 242.310546875,
+    "rss_mib_max": 324.3984375
+  },
+  "early_countdown": {
+    "samples": 50,
+    "cpu_percent_one_core": 115.38673715318536,
+    "rss_mib_median": 324.29296875,
+    "pss_mib_median": 242.220703125,
+    "rss_mib_max": 324.3671875
+  },
+  "late_countdown": {
+    "samples": 50,
+    "cpu_percent_one_core": 115.47035847907105,
+    "rss_mib_median": 324.39453125,
+    "pss_mib_median": 242.322265625,
+    "rss_mib_max": 324.3984375
+  },
+  "completion": {
+    "samples": 15,
+    "cpu_percent_one_core": 97.64161203099987,
+    "rss_mib_median": 324.3984375,
+    "pss_mib_median": 242.326171875,
+    "rss_mib_max": 327.421875
+  },
+  "live_idle": {
+    "samples": 11,
+    "cpu_percent_one_core": 0.10000043076287529,
+    "rss_mib_median": 327.421875,
+    "pss_mib_median": 240.404296875,
+    "rss_mib_max": 327.421875
+  },
+  "whole_run": {
+    "duration_seconds": 615.0070191160048,
+    "peak_rss_mib": 327.421875,
+    "peak_pss_mib": 244.689453125,
+    "threads_max": 93.0
+  }
+}

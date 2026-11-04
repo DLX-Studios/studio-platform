@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "com.studio.stream.countdown",
+  "name": "Vice City \u2014 Stream Countdown",
+  "version": "0.1.0",
+  "publisher": {
+    "id": "studio-templates",
+    "keyId": "template-key-1"
+  },
+  "entry": "module.wasm",
+  "sdkVersion": "^0.1.0",
+  "protocolVersion": 1,
+  "capabilities": [],
+  "limits": {
+    "memoryMiB": 16,
+    "eventFuel": 10000000
+  },
+  "assets": [
+    "assets/vice-city-cityscape.png",
+    "assets/stream-starting.svg",
+    "assets/stream-live.svg"
+  ]
+}

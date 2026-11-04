@@ -18,6 +18,9 @@ studio-protocol = { path = "../studio-protocol" }
 studio-security = { path = "../studio-security" }
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", features = ["signal", "process"] }
+
 [dev-dependencies]
 studio-components = { path = "../studio-components", features = ["test-support"] }
 gpui-kit = { workspace = true, features = ["test-support"] }

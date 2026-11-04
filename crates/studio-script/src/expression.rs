@@ -11,6 +11,8 @@
 pub(crate) enum TextExpr {
     /// Static literal text (classified by the caller).
     Literal(String),
+    /// A decoded string literal, kept separate from numeric/boolean source text.
+    String(String),
     /// A binding path (`quantity`, `item.name`, `rows[0].id`).
     Path(String),
     /// Unary operation with source operator spelling.
@@ -381,7 +383,7 @@ impl Reader<'_> {
                 Ok(TextExpr::Record(entries))
             }
             Some(byte) if byte.is_ascii_digit() || byte == b'.' => self.parse_number(),
-            Some(b'"' | b'\'') => Ok(TextExpr::Literal(self.parse_string()?)),
+            Some(b'"' | b'\'') => Ok(TextExpr::String(self.parse_string()?)),
             Some(byte) if byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$' => {
                 let name = self.parse_identifier()?;
                 self.skip_whitespace();
@@ -481,37 +483,72 @@ impl Reader<'_> {
     fn parse_string(&mut self) -> Result<String, String> {
         let quote = self.peek().unwrap_or(b'"');
         self.position += 1;
-        let mut text = String::new();
+        let start = self.position;
         loop {
             let Some(byte) = self.peek() else {
                 return Err("unterminated string".to_owned());
             };
+            if byte == quote {
+                let raw = std::str::from_utf8(&self.input[start..self.position])
+                    .map_err(|_| "string is not UTF-8".to_owned())?;
+                self.position += 1;
+                let mut json = String::from("\"");
+                let mut chars = raw.chars();
+                while let Some(character) = chars.next() {
+                    match character {
+                        '\\' => {
+                            let next = chars
+                                .next()
+                                .ok_or_else(|| "unterminated escape".to_owned())?;
+                            if next == '\'' {
+                                json.push('\'');
+                            } else {
+                                json.push('\\');
+                                json.push(next);
+                            }
+                        }
+                        '"' => json.push_str("\\\""),
+                        other => json.push(other),
+                    }
+                }
+                json.push('"');
+                return serde_json::from_str(&json)
+                    .map_err(|_| "string escape is not portable".to_owned());
+            }
             self.position += 1;
             if byte == b'\\' {
-                let Some(escaped) = self.peek() else {
-                    return Err("unterminated string".to_owned());
-                };
+                if self.peek().is_none() {
+                    return Err("unterminated escape".to_owned());
+                }
                 self.position += 1;
-                text.push(match escaped {
-                    b'n' => '\n',
-                    b't' => '\t',
-                    b'r' => '\r',
-                    other => other as char,
-                });
-                continue;
             }
-            if byte == quote {
-                break;
-            }
-            text.push(byte as char);
         }
-        Ok(text)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_payload_values_keep_their_type_and_decode_utf8_and_escapes() {
+        assert_eq!(
+            parse_text_expression(r#""push""#).unwrap(),
+            TextExpr::String("push".to_owned())
+        );
+        assert_eq!(
+            parse_text_expression(r"'/live'").unwrap(),
+            TextExpr::String("/live".to_owned())
+        );
+        assert_eq!(
+            parse_text_expression(r#""café\n\u263a""#).unwrap(),
+            TextExpr::String("café\n☺".to_owned())
+        );
+        assert_eq!(
+            parse_text_expression(r"'it\'s live'").unwrap(),
+            TextExpr::String("it's live".to_owned())
+        );
+    }
 
     #[test]
     fn grammar_covers_the_portable_subset() {

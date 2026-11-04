@@ -311,6 +311,10 @@ fn known_property_mirror_agrees_with_mount_validation() {
     // Representative corpus across prop families: layout numbers, closed
     // vocabularies, events, assets, transitions, and option lists.
     let known = [
+        (NodeKind::Box, "opacity"),
+        (NodeKind::Text, "visible"),
+        (NodeKind::Row, "transition"),
+        (NodeKind::Button, "accessibility_label"),
         (NodeKind::Box, "padding"),
         (NodeKind::Box, "background"),
         (NodeKind::Column, "gap"),
@@ -353,5 +357,56 @@ fn known_property_mirror_agrees_with_mount_validation() {
             !is_known_property(kind, property, limits),
             "{property} is unknown for {kind:?}"
         );
+    }
+}
+
+#[test]
+fn landing_presentation_properties_are_closed_and_bounded() {
+    let limits = studio_protocol::ProtocolLimits::default();
+    let node = |kind, props| studio_protocol::UiNode {
+        id: "presentation".into(),
+        kind,
+        props,
+        children: Vec::new(),
+    };
+    let background = node(
+        studio_protocol::NodeKind::Box,
+        std::collections::BTreeMap::from([(
+            "background_asset".into(),
+            serde_json::json!("assets/sunset.svg"),
+        )]),
+    );
+    assert!(studio_protocol::validate_node_contract(&background, limits).is_ok());
+    let text = node(
+        studio_protocol::NodeKind::Text,
+        std::collections::BTreeMap::from([
+            ("text".into(), serde_json::json!("10:00")),
+            ("font_size".into(), serde_json::json!(168)),
+            ("color".into(), serde_json::json!("#FFF5EF")),
+        ]),
+    );
+    assert!(studio_protocol::validate_node_contract(&text, limits).is_ok());
+    for (property, value) in [
+        ("font_size", serde_json::json!(7)),
+        ("font_size", serde_json::json!(257)),
+        ("color", serde_json::json!("red; background:url(x)")),
+        ("color", serde_json::json!("#GG0000")),
+    ] {
+        let mut invalid = text.clone();
+        invalid.props.insert(property.into(), value);
+        assert!(studio_protocol::validate_node_contract(&invalid, limits).is_err());
+    }
+    let mut invalid = background.clone();
+    invalid.props.insert(
+        "background_asset".into(),
+        serde_json::json!("https://example.com/image.png"),
+    );
+    assert!(studio_protocol::validate_node_contract(&invalid, limits).is_err());
+    for (kind, property) in [
+        (studio_protocol::NodeKind::Box, "background_asset"),
+        (studio_protocol::NodeKind::Text, "font_size"),
+        (studio_protocol::NodeKind::Text, "color"),
+    ] {
+        assert!(studio_protocol::is_known_property(kind, property, limits));
     }
 }

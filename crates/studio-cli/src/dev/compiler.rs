@@ -117,6 +117,19 @@ impl DevCompiler {
                         imported.join("index.ts"),
                     ] {
                         if candidate.is_file() && !generated(&candidate) {
+                            if path
+                                .extension()
+                                .is_some_and(|extension| extension == "studio")
+                            {
+                                let resolved = candidate
+                                    .canonicalize()
+                                    .map_err(|error| failure(error.to_string()))?;
+                                if !resolved.starts_with(root) {
+                                    return Err(failure(
+                                        "Studio component import resolves outside the project root",
+                                    ));
+                                }
+                            }
                             paths.push(candidate);
                             break;
                         }
@@ -151,6 +164,46 @@ impl DevCompiler {
 
     pub fn compile(&mut self, inputs: &Inputs) -> Result<Artifact, BuildFailure> {
         let declared_screens = super::project::load_screen_entries(&self.request.project_root)?;
+        if declared_screens.is_none() {
+            if let Some(project) =
+                crate::studio_project::compile_routes(&self.request.project_root)?
+            {
+                let manifest = std::fs::read(self.request.project_root.join("manifest.json"))
+                    .map_err(|error| failure(error.to_string()))?;
+                studio_package::parse_manifest(
+                    &manifest,
+                    studio_package::ManifestPolicy::default(),
+                )
+                .map_err(|error| failure(error.to_string()))?;
+                let mut staged = build::collect_lucide(&self.request)?;
+                staged.extend(project.assets()?);
+                let assets = build::read_assets(&self.request, &staged)?;
+                let manifest = build::effective_manifest(&manifest, assets.keys())?;
+                let code = if let Some(code) = self.cache.get(&inputs.code_hash) {
+                    code.clone()
+                } else {
+                    let code = Code::Ir(Arc::new(project.module));
+                    if self.cache.len() >= 32 {
+                        self.cache.clear();
+                    }
+                    self.cache.insert(inputs.code_hash.clone(), code.clone());
+                    code
+                };
+                let screen_source_paths = project
+                    .routing
+                    .routes
+                    .into_iter()
+                    .map(|route| (route.id, route.source))
+                    .collect();
+                return Ok(Artifact {
+                    code,
+                    code_hash: inputs.code_hash.clone(),
+                    manifest,
+                    assets,
+                    screen_source_paths,
+                });
+            }
+        }
         let legacy_entry = if declared_screens.is_none() {
             build::studio_entry(&self.request)
         } else {
@@ -176,6 +229,37 @@ impl DevCompiler {
         } else {
             BTreeMap::new()
         };
+        let single = if let Some(entry) = &legacy_entry {
+            let name = entry
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("app");
+            let relative = entry
+                .strip_prefix(&self.request.project_root)
+                .unwrap_or(entry);
+            let composed = studio_script::project::compile_component(
+                &self.request.project_root,
+                relative,
+                &[],
+                name,
+            )
+            .map_err(|errors| {
+                failure(
+                    errors
+                        .into_iter()
+                        .map(|error| format!("{}: {}", error.path, error.diagnostic.message))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            })?;
+            Some(crate::studio_project::RoutedProject::single(
+                composed,
+                relative.to_string_lossy().replace('\\', "/"),
+                name.to_owned(),
+            ))
+        } else {
+            None
+        };
         let declared_manifest = std::fs::read(self.request.project_root.join("manifest.json"))
             .map_err(|error| failure(error.to_string()))?;
         studio_package::parse_manifest(
@@ -183,7 +267,15 @@ impl DevCompiler {
             studio_package::ManifestPolicy::default(),
         )
         .map_err(|error| failure(error.to_string()))?;
-        let staged = build::collect_lucide(&self.request)?;
+        let mut staged = build::collect_lucide(&self.request)?;
+        if let Some(project) = &single {
+            crate::studio_project::ensure_generated_assets_available(&self.request.project_root)?;
+            let mut generated = project.assets()?;
+            if project.timers.pages.is_empty() {
+                generated.remove(studio_navigation::project::ROUTING_ASSET);
+            }
+            staged.extend(generated);
+        }
         let assets = build::read_assets(&self.request, &staged)?;
         let manifest = std::fs::read(self.request.project_root.join("manifest.json"))
             .map_err(|error| failure(format!("read manifest: {error}")))?;
@@ -193,15 +285,8 @@ impl DevCompiler {
         } else {
             let code = if let Some(screens) = &declared_screens {
                 Code::Ir(Arc::new(compile_studio_project(screens)?))
-            } else if let Some(entry) = &legacy_entry {
-                let source = std::fs::read_to_string(entry)
-                    .map_err(|error| failure(format!("{}: {error}", entry.display())))?;
-                let name = entry
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("app");
-                let module = compile_studio_source(&source, &entry.to_string_lossy(), name)?;
-                Code::Ir(Arc::new(module))
+            } else if let Some(project) = single {
+                Code::Ir(Arc::new(project.module))
             } else {
                 Code::Wasm(Arc::new(self.compile_wasm(&inputs.code_hash)?))
             };
@@ -473,6 +558,49 @@ mod tests {
             output_bundle: root.join("build/dev.studio"),
         };
         (directory, DevCompiler::new(request))
+    }
+
+    #[test]
+    fn standalone_imported_component_source_links_keep_the_actual_file() {
+        let (directory, mut compiler) = project();
+        let root = directory.path();
+        std::fs::create_dir(root.join("components")).unwrap();
+        std::fs::write(
+            root.join("components/Heading.studio"),
+            "<Text id=\"heading\">Heading</Text>",
+        )
+        .unwrap();
+        std::fs::write(root.join("app.studio"), "<script lang=\"ts\">import Heading from './components/Heading.studio';</script><Heading id=\"hero\" />").unwrap();
+        let artifact = compiler.compile(&compiler.inputs().unwrap()).unwrap();
+        let links = artifact
+            .assets
+            .get(crate::studio_project::SOURCE_MAP_ASSET)
+            .expect("composed standalone sources need actual source maps");
+        let links: serde_json::Value = serde_json::from_slice(links).unwrap();
+        assert_eq!(
+            links["app"]["hero--heading"]["path"],
+            "components/Heading.studio"
+        );
+    }
+
+    #[test]
+    fn studio_import_hashing_rejects_external_sources_before_reading_them() {
+        let (directory, compiler) = project();
+        let outside = tempfile::tempdir().unwrap();
+        let dependency = outside.path().join("External.studio");
+        std::fs::write(&dependency, "<Text>Outside</Text>").unwrap();
+        std::fs::write(
+            directory.path().join("app.studio"),
+            format!(
+                "<script lang=\"ts\">import External from '{}';</script><External />",
+                dependency.display()
+            ),
+        )
+        .unwrap();
+        assert!(
+            compiler.inputs().is_err(),
+            "Studio source imports may not leave the project while hashing"
+        );
     }
 
     #[test]
@@ -792,5 +920,31 @@ mod tests {
             .join("build/.studio-dev/cache")
             .join(format!("{}.wasm", inputs.code_hash))
             .exists());
+    }
+
+    #[test]
+    fn standalone_sources_reject_reserved_generated_metadata_assets() {
+        for key in [
+            studio_navigation::project::ROUTING_ASSET,
+            crate::studio_project::SOURCE_MAP_ASSET,
+            studio_navigation::timers::TIMER_ASSET,
+        ] {
+            let (directory, mut compiler) = project();
+            let path = directory.path().join(key);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "authored metadata must not be overwritten").unwrap();
+            let inputs = compiler.inputs().unwrap();
+            let error = compiler
+                .compile(&inputs)
+                .err()
+                .expect("standalone metadata collision must fail");
+            assert!(
+                error
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("reserved")),
+                "{key}"
+            );
+        }
     }
 }

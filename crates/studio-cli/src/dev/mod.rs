@@ -212,9 +212,6 @@ impl DevPreview {
                 );
                 if outcome.is_ok() {
                     if let (Some(status), Some(metadata)) = (&status, metadata) {
-                        debug_assert!(metadata.source_locations.values().all(|location| {
-                            metadata.screen_source_path.as_deref() == Some(location.path.as_str())
-                        }));
                         status.set_surface_identity(
                             metadata.component_id,
                             metadata.screen_id,
@@ -339,7 +336,31 @@ impl DevPreview {
     }
 
     fn pump_host_actions(&mut self, cx: &mut GpuiContext<Self>) {
-        let result = self.view.update(cx, |view, _cx| view.pump_host_actions());
+        let status = self.status.clone();
+        let result = self.view.update(cx, |view, view_cx| {
+            let result = view.pump_host_actions();
+            if let Some(status) = status {
+                let current_id = status.read().presentation.screen_id;
+                view.update_surface(
+                    |surface| {
+                        if surface.active_screen_id() != current_id.as_deref() {
+                            if let Some(metadata) = surface.metadata() {
+                                status.set_surface_identity(
+                                    metadata.component_id,
+                                    metadata.screen_id,
+                                    metadata.available_screen_ids,
+                                    metadata.screen_source_path,
+                                    metadata.source_locations,
+                                );
+                            }
+                        }
+                        false
+                    },
+                    view_cx,
+                );
+            }
+            result
+        });
         match result {
             Ok(true) => cx.notify(),
             Err(error) => {

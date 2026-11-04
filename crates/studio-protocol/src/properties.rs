@@ -54,6 +54,7 @@ fn validate_specific(
         NodeKind::Box => match property {
             "padding" | "width" | "height" => nonnegative_number(value),
             "background" => semantic_color(value),
+            "background_asset" => asset_path(value),
             "flex" => value
                 .as_f64()
                 .is_some_and(|value| value.is_finite() && (0.0..=10.0).contains(&value)),
@@ -88,6 +89,12 @@ fn validate_specific(
         }
         NodeKind::Text => match property {
             "text" => string(value, limits)?,
+            "font_size" => number_in(value, 8.0, 256.0),
+            "color" => value.as_str().is_some_and(|color| {
+                color.len() == 7
+                    && color.starts_with('#')
+                    && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+            }),
             "typography_role" => matches_string(
                 value,
                 &["body", "label", "caption", "title", "headline", "display"],
@@ -427,7 +434,19 @@ pub fn is_known_property(kind: NodeKind, property: &str, limits: ProtocolLimits)
         "full",
         "assets/x",
         "00:00",
+        "#112233",
     ];
+    // Common props are accepted independently of the component-specific contract.
+    for value in [
+        Value::Bool(true),
+        serde_json::json!(0.5),
+        Value::String("label".to_owned()),
+        serde_json::json!({"curve": "linear", "duration_ms": 100}),
+    ] {
+        if validate_common(property, &value, limits).is_ok_and(|known| known) {
+            return true;
+        }
+    }
     for word in WORDS {
         if validate_specific(kind, property, &Value::String((*word).to_owned()), limits)
             .is_ok_and(|known| known)
@@ -441,6 +460,7 @@ pub fn is_known_property(kind: NodeKind, property: &str, limits: ProtocolLimits)
         serde_json::json!(0),
         serde_json::json!(1),
         serde_json::json!(0.5),
+        serde_json::json!(16),
     ] {
         if validate_specific(kind, property, &number, limits).is_ok_and(|known| known) {
             return true;

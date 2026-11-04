@@ -30,7 +30,7 @@ export function studio_init(_pointer: i32, _length: i32): i32 {
   return emit('{"type":"mount","payload":{"protocol_version":1,"route":"/counter",' +
     '"root":{"id":"root","kind":"column","props":{"gap":12},"children":[' +
     '{"id":"total","kind":"text","props":{"text":"Count: 0 — Derived total: $0.00"},"children":[]},' +
-    '{"id":"increment","kind":"button","props":{"label":"Increment","enabled":true,' +
+    '{"id":"increment","kind":"button","props":{"label":"Increment X","enabled":true,' +
     '"on_pressed":"increment_pressed"},"children":[]}]}}}');
 }
 export function studio_event(pointer: i32, length: i32): i32 {

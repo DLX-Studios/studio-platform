@@ -1,0 +1,44 @@
+{
+  "binary": "/var/home/swhite/Development/.cargo-target/release/studio-app",
+  "bundle": "/var/home/swhite/Development/studio-platform/examples/stream-countdown/build/stream-countdown.studio",
+  "binary_bytes": 98369984,
+  "bundle_bytes": 2707070,
+  "binary_sha256": "8335f57ff92439f6374e4c2a213a988f7c7798ed203b8c692d3dc7134ae7e5bc",
+  "bundle_sha256": "e65eb4e8ffcbeb5d828773003ece94788a6d01545738bf39845ca0b08969422c",
+  "viewport_per_app": [
+    1440,
+    900
+  ],
+  "output_size": [
+    2880,
+    900
+  ],
+  "instances": 2,
+  "compositor_renderer": "pixman",
+  "software_gl_requested": true,
+  "vulkan_adapter": "not pinned",
+  "startup_runs": [],
+  "started_utc": "2026-11-04T10:35:13Z",
+  "pids": [
+    276753,
+    276754
+  ],
+  "both_windows_mapped_seconds": 0.47023552599421237,
+  "settled_10_to_30_seconds": [
+    {
+      "instance": 0,
+      "rss_mib_median": 322.24609375,
+      "pss_mib_median": 198.8076171875,
+      "peak_rss_mib": 322.25
+    },
+    {
+      "instance": 1,
+      "rss_mib_median": 311.9140625,
+      "pss_mib_median": 188.419921875,
+      "peak_rss_mib": 311.91796875
+    }
+  ],
+  "combined_rss_mib_median": 634.16015625,
+  "combined_pss_mib_median": 387.2275390625,
+  "completed": true
+}

@@ -7,6 +7,7 @@ pub mod assets;
 pub mod build;
 pub mod new;
 pub mod routes;
+pub mod studio_project;
 pub mod watch;
 
 /// Compatibility bundle reload server for SDK clients.

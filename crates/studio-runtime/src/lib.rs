@@ -22,9 +22,11 @@
     clippy::needless_pass_by_value
 )]
 
+#[cfg(feature = "services")]
 mod action_dispatch;
 
 pub mod cli;
+#[cfg(feature = "services")]
 mod confirmation_surface;
 mod diagnostic;
 mod failure_surface;
@@ -33,11 +35,16 @@ pub mod gpui_https_client;
 pub mod host;
 pub mod plugin_surface;
 mod preferences;
+#[cfg(feature = "services")]
 mod print_preview;
+#[cfg(feature = "services")]
 mod router;
+#[cfg(feature = "services")]
 mod shutdown;
 
+#[cfg(feature = "services")]
 pub use action_dispatch::{NativeCheckoutError, NativeCheckoutShell};
+#[cfg(feature = "services")]
 pub use confirmation_surface::{
     ProtectedConfirmationView, ProtectedPaymentError, ProtectedPaymentErrorCode,
     ProtectedPaymentSession,
@@ -46,8 +53,11 @@ pub use diagnostic::SafeDiagnostic;
 pub use failure_surface::{FailureSurface, PluginRecovery, RecoveryError, RestartTrigger};
 pub use host::StudioHost;
 pub use preferences::HostPreferences;
+#[cfg(feature = "services")]
 pub use print_preview::PrintPreviewSurface;
+#[cfg(feature = "services")]
 pub use router::CheckoutRouter;
+#[cfg(feature = "services")]
 pub use shutdown::{ShutdownCoordinator, ShutdownReport, ShutdownStep};
 
 pub mod bootstrap;

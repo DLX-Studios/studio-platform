@@ -6,11 +6,11 @@ export class NavigationCommand {
   ) {}
 
   static push(route: string): NavigationCommand {
-    return new NavigationCommand("push", validateRoute(route));
+    return new NavigationCommand("push", validateConcreteRoute(route));
   }
 
   static replace(route: string): NavigationCommand {
-    return new NavigationCommand("replace", validateRoute(route));
+    return new NavigationCommand("replace", validateConcreteRoute(route));
   }
 
   static pop(): NavigationCommand {
@@ -18,11 +18,11 @@ export class NavigationCommand {
   }
 
   static popTo(route: string): NavigationCommand {
-    return new NavigationCommand("pop_to", validateRoute(route));
+    return new NavigationCommand("pop_to", validateConcreteRoute(route));
   }
 
   static reset(route: string): NavigationCommand {
-    return new NavigationCommand("reset", validateRoute(route));
+    return new NavigationCommand("reset", validateConcreteRoute(route));
   }
 
   toJson(): string {
@@ -74,10 +74,38 @@ export class NavigationCorrelation {
 }
 
 function validateRoute(route: string): string {
-  if (route.length < 2 || route.charCodeAt(0) != 47 || route.includes("//") ||
-      route.includes("?") || route.includes("#") || route.includes("\\")) {
+  if (!isAbsoluteSafePath(route)) {
     throw new Error("route must be an absolute safe path");
   }
+  return route;
+}
+
+function isAbsoluteSafePath(route: string): boolean {
+  if (route.length < 1 || route.length > 2048 || route.charCodeAt(0) != 47 ||
+      route.includes("//") || route.includes("?") || route.includes("#") || route.includes("\\")) {
+    return false;
+  }
+  for (let i = 0; i < route.length; i++) {
+    const code = route.charCodeAt(i);
+    if (code < 32 || (code >= 127 && code <= 159)) return false;
+  }
+  return true;
+}
+
+function isConcreteRoute(route: string): boolean {
+  if (!isAbsoluteSafePath(route)) return false;
+  if (route == "/") return true;
+  const segments = route.substring(1).split("/");
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (segment.length == 0 || segment == "." || segment == ".." ||
+        segment.startsWith(":") || segment.includes("*")) return false;
+  }
+  return true;
+}
+
+function validateConcreteRoute(route: string): string {
+  if (!isConcreteRoute(route)) throw new Error("route must be an absolute safe concrete path");
   return route;
 }
 
@@ -123,37 +151,48 @@ function splitSegments(path: string): string[] {
 
 /**
  * Match one concrete path against a route table with the shared rule:
- * statics before params before wildcard, parameters captured, miss yields
- * null. Mirrors the Rust registry matcher and the reload route policy.
+ * compare each segment as static before parameter before wildcard, with an
+ * exact ending before an empty catch-all. Parameters are captured and invalid
+ * concrete paths cannot resolve. Mirrors the shared Rust route tree.
  */
 export function matchRoute(
   table: RouteTableEntry[],
   notFound: string | null,
   path: string,
 ): RouteMatch | null {
-  const request = splitSegments(normalizeRoutePath(path));
-  const statics: RouteTableEntry[] = [];
-  const params: RouteTableEntry[] = [];
-  const wildcards: RouteTableEntry[] = [];
+  const normalized = normalizeRoutePath(path);
+  if (!isConcreteRoute(normalized)) return null;
+  const request = splitSegments(normalized);
+  let best: RouteMatch | null = null;
   for (let i = 0; i < table.length; i++) {
     const entry = table[i];
-    if (entry.kind == "wildcard") wildcards.push(entry);
-    else if (entry.kind == "param") params.push(entry);
-    else statics.push(entry);
+    const bound = matchEntry(entry, request);
+    if (bound != null && (best == null || moreSpecific(entry.path, best!.entry.path))) {
+      best = new RouteMatch(entry, bound);
+    }
   }
-  const ordered = statics.concat(params).concat(wildcards);
-  for (let i = 0; i < ordered.length; i++) {
-    const bound = matchEntry(ordered[i], request);
-    if (bound != null) return new RouteMatch(ordered[i], bound);
-  }
+  if (best != null) return best;
   if (notFound != null) {
     for (let i = 0; i < table.length; i++) {
       if (table[i].path == notFound) {
-        return new RouteMatch(table[i], new Map<string, string>());
+        const bound = matchEntry(table[i], request);
+        if (bound != null) return new RouteMatch(table[i], bound);
       }
     }
   }
   return null;
+}
+
+function moreSpecific(left: string, right: string): boolean {
+  const leftSegments = splitSegments(left);
+  const rightSegments = splitSegments(right);
+  const length = leftSegments.length > rightSegments.length ? leftSegments.length : rightSegments.length;
+  for (let i = 0; i <= length; i++) {
+    const leftRank = i >= leftSegments.length ? 1 : leftSegments[i] == "*" ? 0 : leftSegments[i].startsWith(":") ? 2 : 3;
+    const rightRank = i >= rightSegments.length ? 1 : rightSegments[i] == "*" ? 0 : rightSegments[i].startsWith(":") ? 2 : 3;
+    if (leftRank != rightRank) return leftRank > rightRank;
+  }
+  return false;
 }
 
 function matchEntry(

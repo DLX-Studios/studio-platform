@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Studio Script parser of record, canonical printer, and compiler boundary"
 
 [dependencies]
+studio-navigation = { path = "../studio-navigation" }
 serde.workspace = true
 serde_json.workspace = true
 studio-protocol = { path = "../studio-protocol" }

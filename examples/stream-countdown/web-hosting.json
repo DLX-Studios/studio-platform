@@ -1,0 +1,11 @@
+{
+  "project_id": "appgprj_6aea46cdc8108191aefd8ef7d101500d",
+  "version_id": "appgprj_6aea46cdc8108191aefd8ef7d101500d~appgver_54b316d605308191bc63f7261d3e2f42",
+  "deployment_id": "appgdep_6aea4e32bc80819199bc112cdf65a96d",
+  "url": "https://vice-city-stream-studio.activematch.chatgpt.site",
+  "audience": "owner-private",
+  "status": "succeeded",
+  "source_commit": "11f93f6c14a0308a8bcebfda94b6deb77af24fe9",
+  "source_checkout": "../../.scratch/sites/vice-city-stream-studio",
+  "static_output": "build/web"
+}

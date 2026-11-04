@@ -282,8 +282,9 @@ pub struct EmittedEvent {
 }
 
 impl EmittedEvent {
-    /// Canonical JSON for differential comparison across backends:
-    /// `{"type":"event","name":…,"payload":{…}}` with sorted keys.
+    /// Canonical JSON for differential comparison across backends.
+    /// Ordinary Designer events use the event envelope with sorted keys;
+    /// the reserved `navigate` event uses the existing protocol-v1 command envelope.
     #[must_use]
     pub fn to_json(&self) -> String {
         let payload: BTreeMap<&str, serde_json::Value> = self
@@ -291,6 +292,9 @@ impl EmittedEvent {
             .iter()
             .map(|(key, value)| (key.as_str(), studio_value_json(value)))
             .collect();
+        if self.name == "navigate" {
+            return serde_json::json!({"type": "navigate", "payload": payload}).to_string();
+        }
         serde_json::json!({
             "type": "event",
             "name": self.name,
@@ -399,7 +403,7 @@ pub struct InteractionSession {
 pub enum SessionMessage {
     /// Patch envelope for the native host.
     Patch(PatchBatch),
-    /// Designer-channel event emission.
+    /// Designer event or reserved host navigation request.
     Event(EmittedEvent),
 }
 
@@ -427,6 +431,40 @@ impl InteractionSession {
         props: &BTreeMap<String, StudioValue>,
     ) -> Result<(studio_protocol::MountTree, Self), EvalError> {
         let (tree, scope) = mount_tree(module, component, props)?;
+        Ok((tree, Self { scope, sequence: 0 }))
+    }
+
+    /// Reproject this retained page with new host-provided route parameters.
+    ///
+    /// Page state survives parameter changes and history traversal; derived values
+    /// observe the new props before the new retained tree is admitted by the host.
+    ///
+    /// # Errors
+    /// Rejects missing props, foreign components or invalid projection without changing this session.
+    pub fn remount_with_props(
+        &self,
+        module: &StudioModule,
+        component: &ComponentDefinition,
+        props: &BTreeMap<String, StudioValue>,
+    ) -> Result<(studio_protocol::MountTree, Self), EvalError> {
+        if !module
+            .components
+            .iter()
+            .any(|known| known.id == component.id)
+        {
+            return Err(EvalError::rule("component does not belong to the module"));
+        }
+        let mut scope = initialize_scope(component, props)?;
+        scope.state.clone_from(&self.scope.state);
+        for slot in &component.derived {
+            let value = evaluate(&slot.expression, &scope)?;
+            scope.derived.insert(slot.name.clone(), value);
+        }
+        let tree = studio_protocol::MountTree {
+            protocol_version: studio_protocol::PROTOCOL_VERSION,
+            route: format!("/{}", component.name),
+            root: project_root(component, &scope)?,
+        };
         Ok((tree, Self { scope, sequence: 0 }))
     }
 
@@ -508,6 +546,11 @@ impl InteractionSession {
                 "no handler for `{event}` on node `{node_id}`"
             )));
         };
+        let before = if handler.emit.is_empty() {
+            Some(project_root(component, &self.scope)?)
+        } else {
+            None
+        };
         for mutation in &handler.mutations {
             apply_mutation(&mut self.scope, mutation)?;
         }
@@ -520,6 +563,9 @@ impl InteractionSession {
             let mut operations = Vec::new();
             collect_structural_ops(component, handler, &tree, &mut operations);
             collect_content_ops(&tree, &mut operations);
+            if let Some(before) = before {
+                collect_changed_properties(&before, &tree, &mut operations);
+            }
             self.sequence += 1;
             Ok(SessionMessage::Patch(PatchBatch {
                 sequence: self.sequence,
@@ -654,6 +700,36 @@ fn same_slot_type(before: &StudioValue, after: &StudioValue) -> bool {
 /// Branch (`#branch`) and row-list (`#items`) subtrees are skipped: their
 /// content rides in `ReplaceNode` envelopes (or never patches), which is
 /// what keeps the evaluator and compiled legs byte-identical.
+fn collect_changed_properties(before: &UiNode, after: &UiNode, operations: &mut Vec<PatchOp>) {
+    fn index<'a>(node: &'a UiNode, nodes: &mut BTreeMap<&'a str, &'a UiNode>) {
+        nodes.insert(node.id.as_str(), node);
+        for child in &node.children {
+            index(child, nodes);
+        }
+    }
+    let mut previous = BTreeMap::new();
+    let mut current = BTreeMap::new();
+    index(before, &mut previous);
+    index(after, &mut current);
+    for (id, node) in current {
+        let Some(old) = previous.get(id) else {
+            continue;
+        };
+        for (property, value) in &node.props {
+            if old.props.get(property) == Some(value)
+                || matches!(property.as_str(), "text" | "label")
+            {
+                continue;
+            }
+            operations.push(PatchOp::UpdateProp {
+                node_id: id.to_owned(),
+                property: property.clone(),
+                value: value.clone(),
+            });
+        }
+    }
+}
+
 fn collect_content_ops(node: &UiNode, operations: &mut Vec<PatchOp>) {
     if node.id.ends_with("#branch") || node.id.ends_with("#items") {
         return;
@@ -1019,10 +1095,20 @@ pub fn dispatch_event(
     for (key, value) in entries {
         payload.insert(key.clone(), evaluate(value, scope)?);
     }
-    Ok(Some(EmittedEvent {
+    let emission = EmittedEvent {
         name: handler.emit.clone(),
         payload,
-    }))
+    };
+    if emission.name == "navigate" {
+        let message: studio_protocol::GuestMessage = serde_json::from_str(&emission.to_json())
+            .map_err(|error| EvalError::rule(format!("invalid navigation request: {error}")))?;
+        studio_protocol::validate_guest_message(
+            &message,
+            studio_protocol::ProtocolLimits::default(),
+        )
+        .map_err(|error| EvalError::rule(format!("invalid navigation request: {error}")))?;
+    }
+    Ok(Some(emission))
 }
 
 fn catalog_kind(name: &str) -> Result<NodeKind, EvalError> {
@@ -1032,7 +1118,7 @@ fn catalog_kind(name: &str) -> Result<NodeKind, EvalError> {
         .map_err(|_| EvalError::rule(format!("unknown catalog kind `{name}`")))
 }
 
-fn studio_value_json(value: &StudioValue) -> serde_json::Value {
+pub(crate) fn studio_value_json(value: &StudioValue) -> serde_json::Value {
     match value {
         StudioValue::String(text) => serde_json::Value::String(text.clone()),
         StudioValue::Boolean(value) => serde_json::Value::Bool(*value),

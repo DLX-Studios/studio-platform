@@ -27,6 +27,7 @@ members = [
     "crates/studio-ui",
     "crates/studio-update-channel",
     "crates/studio-wasm",
+    "crates/studio-web-core",
 ]
 exclude = [
     "vendor/rsvelte/rsvelte",
@@ -35,6 +36,15 @@ exclude = [
     "vendor/rsvelte/rsvelte_ast_equiv",
     "vendor/rsvelte/rsvelte_projection",
 ]
+
+# Opt-in size-focused runtime experiment. Keeps unwind behavior and guest policy
+# unchanged; normal release builds remain the default comparison baseline.
+[profile.compact]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
 
 [workspace.package]
 version = "0.1.0"

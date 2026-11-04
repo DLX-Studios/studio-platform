@@ -85,7 +85,23 @@ Developers can write plugins by hand, generate them with an LLM, or mix both. St
 
 ---
 
+## File-based Studio apps
+
+Use Svelte-style `.studio` pages under `routes/`, ancestor `+layout.studio`
+files, and local component imports. The shared Rust router drives navigation
+in both native development previews and compiled Wasm. The
+[stream countdown example](examples/stream-countdown/README.md) demonstrates a
+10-minute host-scheduled timer, animated clock, and full-screen sunset artwork.
+See the [routing and component guide](docs/development/STUDIO_FILE_ROUTING.md).
+Build the same source for browsers with `studio build examples/stream-countdown --target web`;
+see the [web target guide](sdk/web/README.md).
+
 ## Quick start
+
+For agent UI development, see [Studio MCP tools and setup](docs/agents/README.md)
+and the reusable [studio-workflow skill](.agents/skills/studio-workflow/SKILL.md).
+Use [studio-scaffold](.skills/studio-scaffold/SKILL.md) to create an app and
+[studio-code](.skills/studio-code/SKILL.md) to write its Svelte-like Studio Script.
 
 ```bash
 bun install --frozen-lockfile
@@ -231,6 +247,19 @@ $speckit-converge
 ```
 
 `$speckit-implement` respects `[P]` parallelism and `Phase` dependencies in `tasks.md`.
+
+## Studio project workflow skills
+
+These reusable skills guide project setup and checkpoints in this workspace and in future app repositories:
+
+- [Studio Init](.agents/skills/studio-init/SKILL.md) routes setup requests.
+- [Studio Project Init](.agents/skills/studio-project-init/SKILL.md) plans whole-project structure.
+- [Studio App Init](.agents/skills/studio-app-init/SKILL.md) adds a nested app.
+- [Studio Console Init](.agents/skills/studio-console-init/SKILL.md) creates or updates the Console web app included by default during project initialization.
+- [Studio Design](.agents/skills/studio-design/SKILL.md) defines a project design system.
+- [Studio Commit](.agents/skills/studio-commit/SKILL.md) checkpoints project changes.
+
+Their shared [visual interaction guide](.agents/skills/visual-interaction.md) describes how to present choices with the current agent host's tools.
 
 ---
 

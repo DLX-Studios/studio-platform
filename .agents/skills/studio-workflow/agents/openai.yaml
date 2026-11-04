@@ -1,0 +1,3 @@
+interface:
+  display_name: "Studio Workflow"
+  short_description: "Edit Studio sources and control previews with MCP"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Studio App Scaffold"
+  short_description: "Scaffold a runnable native Studio Script app"

@@ -113,3 +113,49 @@ These build on the source and preview RPCs after the first milestone lands.
 - [x] Add Designer zoom controls and report the applied zoom in preview status.
 - [x] Test zoom bounds, visible geometry at multiple scales, and pointer hit
   targets at scaled coordinates.
+
+### T015-11 — Expand agent tools and package reusable guidance
+
+- [x] Add bounded source search with revisions and UTF-8 patch ranges.
+- [x] Add asynchronous CLI validation/build tasks with status, logs, and cancel.
+- [x] Start, inspect, restart, and stop MCP-owned dev preview processes.
+- [x] Launch existing release bundles and expose process status/logs/stop,
+  keeping tooling out of the release runtime.
+- [x] Confine runtime paths to the project and preserve external process ownership.
+- [x] Maintain one reusable Studio skill with focused references and portable
+  Codex/OpenCode MCP config assets; use the startup folder by default.
+- [x] Verify tool discovery, inherited project folder, lifecycle ownership,
+  source search, logs, and failure reporting with focused tests and checks.
+
+Validation: 51 Designer library tests and 3 MCP process tests passed; focused
+Designer Clippy with warnings denied, workspace formatting, skill validation,
+config parsing, and local documentation links passed. A real stdio smoke test
+verified folder inheritance, 22-tool discovery, source search, and the sibling
+`studio check` executable. Linux linking reused the existing
+`/tmp/studio-designer-link-lib` shim through `LIBRARY_PATH`.
+
+### T015-12 — Connect native project controls to Studio CLI windows
+
+- [x] Add a folder picker and project command toolbar to Designer; opening a
+  folder launches `studio dev <root>` in its own preview window.
+- [x] Reuse the CLI process service and existing JSON-RPC preview protocol for
+  status, selection, screens, viewport, and zoom.
+- [x] Expose preview start/restart/stop, CLI check/build/cancel, and bounded
+  output, distinguishing startup, readiness, failure, and external ownership.
+- [x] Keep project/root ownership and dirty-buffer guards; stop owned children
+  on folder replacement or project closure and discard stale async results.
+- [x] Verify native controls and process behavior with focused tests and a
+  real Wayland smoke run; document the two-window workflow.
+
+Validation (2026-11-03): 70 focused tests passed (54 Designer library, 3 MCP
+process, 6 Focus model, 7 native preview). Three toolbar UI integration tests
+exercise the real controls with a process fixture: folder selection/cancel,
+keyboard opening, CLI arguments and failure output, duplicate-launch disabling,
+owned stop, and folder-change cleanup. Focused Designer Clippy with warnings
+denied, workspace formatting, and the debug executable build passed. On
+`wayland-0`, a real CLI preview reached revision 1, accepted screen/viewport/
+zoom/selection JSON-RPC commands, hot-reloaded source to revision 2, and handled
+`restart-session`. The rebuilt native Designer also passed isolated startup.
+These native smoke checks used temporary data/projects and stopped their own
+processes; the full authenticated OS folder-picker journey remains a manual
+acceptance step, separate from the automated production-control coverage.

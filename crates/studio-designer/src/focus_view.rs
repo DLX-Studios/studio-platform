@@ -1221,6 +1221,8 @@ pub struct FocusView<P> {
     workspace_persistence: Arc<dyn WorkspacePersistence>,
     /// Local source folder associated with the current authenticated project.
     linked_source_root: Option<String>,
+    project_controls: Entity<crate::project_controls::ProjectControls>,
+    _project_controls_subscription: Subscription,
     /// Native editable Studio Script buffer and its event subscription.
     script_input: Option<Entity<EditorState>>,
     _script_subscription: Option<Subscription>,
@@ -1229,7 +1231,6 @@ pub struct FocusView<P> {
     script_syncing: bool,
     script_feedback: Option<String>,
     /// File-backed source workspace linked to this authenticated project.
-    source_root_input: Entity<InputState>,
     source_path_input: Entity<InputState>,
     source_input: Option<Entity<EditorState>>,
     _source_subscription: Option<Subscription>,
@@ -1349,10 +1350,35 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 this.handle_preview_event(event);
                 cx.notify();
             });
-        let source_root_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(linked_source_root.clone().unwrap_or_default())
+        let project_controls = cx.new(|cx| {
+            crate::project_controls::ProjectControls::new(
+                linked_source_root.as_ref().map(std::path::PathBuf::from),
+                cx,
+            )
         });
+        let project_controls_subscription =
+            cx.subscribe(&project_controls, |this, _, event, cx| {
+                match event {
+                    crate::project_controls::ProjectControlsEvent::OpenFolder(root) => {
+                        if this.link_project_folder(root, cx) {
+                            this.project_controls
+                                .update(cx, |controls, cx| controls.open_preview(cx));
+                        } else if let Some(error) = this.source_feedback.clone() {
+                            this.project_controls
+                                .update(cx, |controls, cx| controls.show_error(error, cx));
+                        }
+                    }
+                    crate::project_controls::ProjectControlsEvent::PreviewStatus(status) => {
+                        this.preview_status = status.clone();
+                        this.preview_feedback = Some(if status.is_some() {
+                            "Preview connected".to_owned()
+                        } else {
+                            "Open a preview from the project toolbar".to_owned()
+                        });
+                    }
+                }
+                cx.notify();
+            });
         let source_path_input =
             cx.new(|cx| InputState::new(window, cx).default_value("app.studio"));
         let mut view = Self {
@@ -1364,13 +1390,14 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             workspace,
             workspace_persistence,
             linked_source_root,
+            project_controls,
+            _project_controls_subscription: project_controls_subscription,
             script_input: None,
             _script_subscription: None,
             script_editor: None,
             script_source: String::new(),
             script_syncing: false,
             script_feedback: None,
-            source_root_input,
             source_path_input,
             source_input: None,
             _source_subscription: None,
@@ -1458,9 +1485,12 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
             .map_err(|error| error.to_string())
     }
 
-    fn link_source_root(&mut self, cx: &mut GpuiContext<Self>) {
-        let requested = self.source_root_input.read(cx).value().to_string();
-        match crate::source_workspace::ProjectSourceWorkspace::open(requested.trim()) {
+    fn link_project_folder(
+        &mut self,
+        requested: &std::path::Path,
+        cx: &mut GpuiContext<Self>,
+    ) -> bool {
+        match crate::source_workspace::ProjectSourceWorkspace::open(requested) {
             Ok(workspace) => {
                 let root = workspace.root().to_string_lossy().into_owned();
                 let changed_root = self.linked_source_root.as_deref() != Some(root.as_str());
@@ -1468,7 +1498,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                     self.source_files = workspace.list_files().unwrap_or_default();
                     self.save_workspace();
                     self.source_feedback = Some("Project folder is already linked".to_owned());
-                    return;
+                    return true;
                 }
                 if changed_root
                     && self
@@ -1479,7 +1509,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                     self.source_feedback = Some(
                         "Save or resolve the open source buffer before changing folders".to_owned(),
                     );
-                    return;
+                    return false;
                 }
                 if changed_root {
                     self.source_view = None;
@@ -1487,6 +1517,10 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                     self._source_subscription = None;
                 }
                 self.linked_source_root = Some(root.clone());
+                self.preview_status = None;
+                self.preview_command_pending = false;
+                self.project_controls
+                    .update(cx, |controls, cx| controls.set_root(root.into(), cx));
                 self.source_files = workspace.list_files().unwrap_or_default();
                 self.source_event_relay = None;
                 self.start_source_relay(cx);
@@ -1494,9 +1528,11 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 if self.source_feedback.is_none() {
                     self.source_feedback = Some("Project folder linked".to_owned());
                 }
+                true
             }
             Err(error) => {
                 self.source_feedback = Some(format!("Could not link project folder: {error}"));
+                false
             }
         }
     }
@@ -1536,33 +1572,6 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 if !alive.is_ok_and(|alive| alive) {
                     break;
                 }
-                let build_dir = std::path::PathBuf::from(&root).join("build");
-                let status = cx
-                    .background_executor()
-                    .spawn(async move {
-                        studio_protocol::dev_rpc::request_status(
-                            &build_dir,
-                            Duration::from_millis(200),
-                        )
-                    })
-                    .await;
-                let _ = weak.update(&mut cx.clone(), |this, cx| {
-                    let (new_status, new_feedback) = match status {
-                        Ok(status) => (Some(status), "Preview connected".to_owned()),
-                        Err(error) if error.is_not_running() => {
-                            (None, "No studio dev preview running".to_owned())
-                        }
-                        Err(error) => (None, format!("Preview status unavailable: {error}")),
-                    };
-                    if this.linked_source_root.as_deref() == Some(root.as_str())
-                        && (this.preview_status != new_status
-                            || this.preview_feedback.as_deref() != Some(new_feedback.as_str()))
-                    {
-                        this.preview_status = new_status;
-                        this.preview_feedback = Some(new_feedback);
-                        cx.notify();
-                    }
-                });
             }
         })
         .detach();
@@ -1577,7 +1586,7 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
         self.preview_feedback = Some("Sending preview command…".to_owned());
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let build_dir = std::path::PathBuf::from(root).join("build");
+            let build_dir = std::path::PathBuf::from(&root).join("build");
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -1604,6 +1613,9 @@ impl<P: DesignerPersistence + 'static> FocusView<P> {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if this.linked_source_root.as_deref() != Some(root.as_str()) {
+                    return;
+                }
                 this.preview_command_pending = false;
                 match result {
                     Ok(status) => {
@@ -2922,7 +2934,6 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .script_feedback
             .clone()
             .unwrap_or_else(|| "Studio Script · parser-of-record".to_owned());
-        let source_root_input = self.source_root_input.clone();
         let source_path_input = self.source_path_input.clone();
         let source_input = self.source_input.clone();
         let source_feedback = self.source_feedback.clone().unwrap_or_else(|| {
@@ -3033,7 +3044,11 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .id("studio-focus-view")
             .role(Role::Application)
             .aria_label("Studio Designer Focus View")
+            .key_context("DesignerProject")
             .track_focus(&self.root_focus)
+            .on_action(cx.listener(|this, _: &crate::project_controls::OpenProjectFolder, _, cx| {
+                this.project_controls.update(cx, |controls, cx| controls.choose_folder(cx));
+            }))
             .size_full()
             .flex()
             .flex_col()
@@ -3042,6 +3057,7 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
             .bg(rgb(COLOR_CANVAS))
             .text_color(rgb(COLOR_TEXT))
             .child(toolbar)
+            .child(self.project_controls.clone())
             .child(workbench_surface)
             .child(div().id("focus-body").flex().flex_1().min_h_0().w_full().gap_3()
             .child(
@@ -3572,22 +3588,6 @@ impl<P: DesignerPersistence + 'static> Render for FocusView<P> {
                             .id("focus-source-panel")
                             .role(Role::Pane)
                             .child("Project source files"),
-                    )
-                    .child(
-                        div()
-                            .id("focus-source-root-input")
-                            .role(Role::TextInput)
-                            .aria_label("Local project folder")
-                            .child(Input::new(&source_root_input).id("focus-source-root")),
-                    )
-                    .child(
-                        Button::new("focus-source-link")
-                            .label("Link folder")
-                            .secondary()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.link_source_root(cx);
-                                cx.notify();
-                            })),
                     )
                     .child(
                         div()

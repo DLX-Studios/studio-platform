@@ -14,6 +14,48 @@ const MANIFEST: &[u8] = b"{}";
 const MODULE: &[u8] = b"\0asm\x01\0\0\0";
 const SIGNATURE: &[u8] = &[0; 64];
 
+#[test]
+fn default_policy_round_trips_large_assets_and_preserves_custom_limits() {
+    let mut files = ArchiveFiles {
+        manifest: MANIFEST.to_vec(),
+        module: MODULE.to_vec(),
+        signature: SIGNATURE.to_vec(),
+        assets: BTreeMap::from([(
+            "assets/large-image.png".to_owned(),
+            vec![42; 17 * 1024 * 1024],
+        )]),
+    };
+    let archive = build_archive(&files, ArchivePolicy::default()).unwrap();
+    let inspected = inspect_archive(&archive, ArchivePolicy::default()).unwrap();
+    assert_eq!(inspected.assets, files.assets);
+    let restricted = ArchivePolicy {
+        max_asset_bytes: 16 * 1024 * 1024,
+        ..ArchivePolicy::default()
+    };
+    assert_eq!(
+        inspect_archive(&archive, restricted).unwrap_err().code(),
+        ArchiveErrorCode::SizeLimit
+    );
+    assert_eq!(
+        build_archive(&files, restricted).unwrap_err().code(),
+        ArchiveErrorCode::SizeLimit
+    );
+    files
+        .assets
+        .insert("assets/second-image.png".to_owned(), vec![7; 1024 * 1024]);
+    let archive = build_archive(&files, ArchivePolicy::default()).unwrap();
+    let aggregate_restricted = ArchivePolicy {
+        max_asset_bytes: 17 * 1024 * 1024,
+        ..ArchivePolicy::default()
+    };
+    assert_eq!(
+        inspect_archive(&archive, aggregate_restricted)
+            .unwrap_err()
+            .code(),
+        ArchiveErrorCode::SizeLimit
+    );
+}
+
 fn raw_archive(
     entries: &[(&str, &[u8])],
     options: SimpleFileOptions,

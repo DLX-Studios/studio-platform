@@ -77,3 +77,22 @@ maps, route selection and reload preservation, RPC queue bounds, zoom ranges,
 and hit targets under scaled layouts. At the integration checkpoint run
 format, workspace tests, and Clippy sequentially with the shared Cargo target,
 then the focused native hot-reload check when a display is available.
+
+## T015-12: native project command toolbar
+
+Expose the same CLI process service used by MCP in the native Designer project
+view. A folder picker links a canonical source root to the authenticated project
+and starts `studio dev <root>` in a separate native preview window. Keep the
+Designer editor window open. Reuse the existing local JSON-RPC endpoint for
+readiness, selection, screen, viewport, and zoom; do not introduce a second
+preview implementation or a second wire protocol.
+
+The project toolbar owns asynchronous CLI work and bounded process output. Show
+Open preview, Restart, Stop, Check, Build, task cancellation, and output with
+states that distinguish a spawned process from a ready preview. Preserve
+external preview ownership. Dispose owned processes when changing folders or
+closing the project; reject late responses from a previous folder. Existing
+dirty-buffer guards apply before linking a different folder. Provide keyboard
+access through standard buttons and a folder-open shortcut. Verify the real
+toolbar handlers with GPUI interaction tests, the process lifecycle tests, and
+a native Wayland smoke run.

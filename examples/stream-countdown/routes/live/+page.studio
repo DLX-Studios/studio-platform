@@ -1,0 +1,20 @@
+<script lang="ts">
+  import StreamHeader from '../../components/StreamHeader.studio';
+
+  function back() {
+    emit('navigate', { operation: 'pop' });
+  }
+
+  function countdown() {
+    emit('navigate', { operation: 'reset', route: '/' });
+  }
+</script>
+
+<Column id="live-page" gap={24} alignment="center">
+  <Tag id="live-status" label="LIVE NOW" variant="success" />
+  <StreamHeader id="live-header" eyebrow="THE WAIT IS OVER" title="WE'RE LIVE" subtitle="The stream is live. Let us see where the night takes us." />
+  <Row id="live-actions" gap={8} alignment="center">
+    <Button id="live-back" label="Back to countdown" variant="secondary" onclick={back} />
+    <Button id="live-countdown" label="Open countdown" onclick={countdown} />
+  </Row>
+</Column>

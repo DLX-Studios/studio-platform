@@ -583,6 +583,14 @@ impl Default for ProviderRegistry {
 }
 
 impl ProviderRegistry {
+    /// Construct a host registry without built-in service integrations.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            descriptors: BTreeMap::new(),
+        }
+    }
+
     /// Construct a registry with the maintained OAuth and AI descriptors.
     #[must_use]
     pub fn maintained() -> Self {

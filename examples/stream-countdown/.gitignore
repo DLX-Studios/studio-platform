@@ -1,0 +1,3 @@
+# The workspace ignores packaged .studio archives; these are authored sources.
+!routes/**/*.studio
+!components/**/*.studio

@@ -1,0 +1,23 @@
+	Command being timed: "env LIBRARY_PATH=/tmp/studio-routing-link-lib CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo build --locked --release -p studio-app"
+	User time (seconds): 2719.65
+	System time (seconds): 78.96
+	Percent of CPU this job got: 1096%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:15.19
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 6962260
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1567
+	Minor (reclaiming a frame) page faults: 21454624
+	Voluntary context switches: 27454
+	Involuntary context switches: 170509
+	Swaps: 0
+	File system inputs: 3985496
+	File system outputs: 5166888
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

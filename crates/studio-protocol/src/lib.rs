@@ -5,11 +5,13 @@
 )]
 
 pub mod actions;
+#[cfg(any(unix, windows))]
 pub mod dev_rpc;
 mod error;
 pub mod lifecycle;
 pub mod navigation;
 mod properties;
+#[cfg(any(unix, windows))]
 pub mod reload;
 pub mod ui;
 

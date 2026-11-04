@@ -560,6 +560,7 @@ impl Lowerer<'_> {
     ) -> StudioExpression {
         use crate::expression::TextExpr;
         match parsed {
+            TextExpr::String(text) => StudioExpression::Literal(StudioValue::String(text.clone())),
             TextExpr::Literal(text) => {
                 if let Some(literal) = crate::validate::parse_literal(text) {
                     StudioExpression::Literal(literal)
@@ -819,6 +820,13 @@ impl Lowerer<'_> {
         locals: &[String],
         span: Span,
     ) -> StudioExpression {
+        if ["left", "right"]
+            .iter()
+            .any(|field| json.get(*field).is_none_or(serde_json::Value::is_null))
+            && let Some(text) = node_text(self.source, json)
+        {
+            return self.classify_text(text, locals, span);
+        }
         let (Some(left), Some(right)) = (json.get("left"), json.get("right")) else {
             self.error(
                 CODE_NO_LOWERING_RULE,
@@ -845,6 +853,16 @@ impl Lowerer<'_> {
         locals: &[String],
         span: Span,
     ) -> StudioExpression {
+        // The frontend's shallow expression facts can retain a conditional's
+        // source span while omitting its arena-owned child nodes. Reparse that
+        // exact slice through Studio's existing closed expression grammar.
+        if ["test", "consequent", "alternate"]
+            .iter()
+            .any(|field| json.get(*field).is_none_or(serde_json::Value::is_null))
+            && let Some(text) = node_text(self.source, json)
+        {
+            return self.classify_text(text, locals, span);
+        }
         let (Some(test), Some(consequent), Some(alternate)) = (
             json.get("test"),
             json.get("consequent"),
@@ -870,6 +888,13 @@ impl Lowerer<'_> {
         locals: &[String],
         span: Span,
     ) -> StudioExpression {
+        // Collection facts can omit arena-owned entries entirely. Prefer the
+        // exact collection source when available, never an empty shallow shell.
+        if let Some(text) = node_text(self.source, json)
+            && matches!(text.trim_start().as_bytes().first(), Some(b'{' | b'['))
+        {
+            return self.classify_text(text, locals, span);
+        }
         if json.get("type").and_then(|kind| kind.as_str()) == Some("ArrayExpression") {
             let mut elements = Vec::new();
             if let Some(list) = json.get("elements").and_then(|list| list.as_array()) {

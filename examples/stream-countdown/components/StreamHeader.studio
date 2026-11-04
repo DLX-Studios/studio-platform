@@ -1,0 +1,20 @@
+<script lang="ts">
+  let {
+    eyebrow = 'WELCOME TO LEONIDA',
+    title = 'STREAM STARTING',
+    subtitle = 'A little chaos. A lot of sunshine.',
+    artworkWidth = 900
+  } = $props();
+</script>
+
+<Column id="header" gap={12} alignment="center">
+  <Text id="eyebrow" typography_role="caption" font_size={14} color="#FFD5E2">{eyebrow}</Text>
+  {#if title === 'STREAM STARTING'}
+    <Image id="starting-title-art" asset="assets/stream-starting.svg" alt="STREAM STARTING" width={artworkWidth} height={artworkWidth * 2 / 15} />
+  {:else if title === "WE'RE LIVE"}
+    <Image id="live-title-art" asset="assets/stream-live.svg" alt="WE ARE LIVE" width={artworkWidth} height={artworkWidth * 2 / 15} />
+  {:else}
+    <Text id="title" typography_role="display" font_size={56} color="#FFF5EF">{title}</Text>
+  {/if}
+  <Text id="subtitle" typography_role="body" font_size={18} color="#FFF5EF">{subtitle}</Text>
+</Column>

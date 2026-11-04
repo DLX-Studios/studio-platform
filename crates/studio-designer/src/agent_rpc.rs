@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::agent_process::Processes;
 use crate::source_events::{self, SourceChangeEvent};
 use crate::source_workspace::{PatchEdit, ProjectSourceError, ProjectSourceWorkspace};
 
@@ -39,6 +40,7 @@ pub fn run_stdio(project_root: &Path) -> i32 {
     let mut output = stdout.lock();
     let mut frame = Vec::new();
     let mut client_name = None;
+    let mut processes = Processes::default();
 
     loop {
         let has_frame = match read_bounded_frame(&mut input, &mut frame, MAX_RPC_FRAME_BYTES) {
@@ -53,7 +55,9 @@ pub fn run_stdio(project_root: &Path) -> i32 {
         }
 
         let response = match serde_json::from_slice::<Value>(&frame) {
-            Ok(request) => dispatch_with_context(&request, &workspace, &mut client_name),
+            Ok(request) => {
+                dispatch_with_context(&request, &workspace, &mut client_name, &mut processes)
+            }
             Err(error) => Some(json_rpc_error(Value::Null, -32700, error.to_string())),
         };
         if let Some(response) = response {
@@ -103,13 +107,14 @@ fn read_bounded_frame(
 
 #[cfg(test)]
 fn dispatch(request: &Value, workspace: &ProjectSourceWorkspace) -> Option<Value> {
-    dispatch_with_context(request, workspace, &mut None)
+    dispatch_with_context(request, workspace, &mut None, &mut Processes::default())
 }
 
 fn dispatch_with_context(
     request: &Value,
     workspace: &ProjectSourceWorkspace,
     client_name: &mut Option<String>,
+    processes: &mut Processes,
 ) -> Option<Value> {
     let id = request.get("id").cloned();
     let Some(object) = request.as_object() else {
@@ -158,10 +163,51 @@ fn dispatch_with_context(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             id.map(|id| {
-                json_rpc_result(
-                    id,
-                    call_tool(name, &arguments, workspace, client_name.as_deref()),
-                )
+                if !arguments.is_object() {
+                    return json_rpc_result(
+                        id,
+                        tool_error("invalid_arguments", "arguments must be an object"),
+                    );
+                }
+                // Enforce required and allowed fields before starting any child.
+                let definitions = tools();
+                let schema = &definitions
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == name)
+                    .unwrap()["inputSchema"];
+                if let Some(required) = schema["required"].as_array() {
+                    for field in required {
+                        let field = field.as_str().unwrap();
+                        if arguments.get(field).is_none() {
+                            return json_rpc_result(
+                                id,
+                                tool_error(
+                                    "invalid_arguments",
+                                    format!("missing required field: {field}"),
+                                ),
+                            );
+                        }
+                    }
+                }
+                if arguments
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .any(|key| schema["properties"].get(key).is_none())
+                {
+                    return json_rpc_result(
+                        id,
+                        tool_error("invalid_arguments", "unknown argument field"),
+                    );
+                }
+                let result = match processes.call(name, &arguments, workspace.root()) {
+                    Some(Ok(data)) => tool_success(data),
+                    Some(Err((code, message))) => tool_error(&code, message),
+                    None => call_tool(name, &arguments, workspace, client_name.as_deref()),
+                };
+                json_rpc_result(id, result)
             })
         }
         _ => id.map(|id| json_rpc_error(id, -32601, "method not found")),
@@ -184,7 +230,7 @@ fn initialize(id: Value, request: &Value) -> Value {
                 "name": "studio-designer",
                 "version": env!("CARGO_PKG_VERSION")
             },
-            "instructions": "Edit Studio project source files with revision-guarded tools. Saved changes are observed by studio dev."
+            "instructions": "Confirm project.info matches your working folder before editing. Use revision-guarded source tools; studio dev observes saved changes. Start a preview with preview.start. CLI check/build tasks are asynchronous: poll studio.task.status and read studio.task.logs. Runtime tools launch the pure release executable; they do not provide UI inspection. Processes started here stop when this MCP session closes."
         }),
     )
 }
@@ -198,8 +244,12 @@ fn call_tool(
     let result = match name {
         "project.info" => Ok(json!({
             "project_root": workspace.root().to_string_lossy(),
-            "watcher": "studio dev"
+            "watcher": "studio dev",
+            "project_root_source": "server startup directory unless --project-root is supplied",
+            "process_lifetime": "MCP session",
+            "runtime_control": "managed process only; no release debugging endpoint"
         })),
+        "project.search" => search_sources(arguments, workspace),
         "project.list_files" => workspace
             .list_files()
             .map(|files| {
@@ -374,17 +424,58 @@ fn call_tool(
 }
 
 fn is_known_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "project.info"
-            | "project.list_files"
-            | "project.read_file"
-            | "project.write_file"
-            | "project.apply_patch"
-            | "preview.status"
-            | "preview.selection.set_mode"
-            | "preview.presentation.set"
-    )
+    tools()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["name"] == name)
+}
+
+fn search_sources(
+    arguments: &Value,
+    workspace: &ProjectSourceWorkspace,
+) -> Result<Value, (String, String)> {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|query| !query.is_empty() && !query.contains(['\r', '\n']))
+        .ok_or_else(|| {
+            (
+                "invalid_arguments".into(),
+                "query must be a nonempty single-line literal".into(),
+            )
+        })?;
+    let limit = match arguments.get("max_results") {
+        None => 50,
+        Some(value) => value
+            .as_u64()
+            .filter(|limit| (1..=200).contains(limit))
+            .ok_or_else(|| {
+                (
+                    "invalid_arguments".into(),
+                    "max_results must be between 1 and 200".into(),
+                )
+            })? as usize,
+    };
+    let mut matches = Vec::new();
+    for file in workspace.list_files().map_err(project_error)? {
+        let snapshot = workspace.read_file(&file.path).map_err(project_error)?;
+        let mut offset = 0;
+        for (line_index, line) in snapshot.content.split_inclusive('\n').enumerate() {
+            for (column, _) in line.match_indices(query) {
+                if matches.len() == limit {
+                    return Ok(json!({ "matches": matches, "truncated": true }));
+                }
+                matches.push(json!({
+                    "path": snapshot.path, "revision": snapshot.revision,
+                    "line": line_index + 1, "column": line[..column].chars().count() + 1,
+                    "start": offset + column, "end": offset + column + query.len()
+                }));
+            }
+            offset += line.len();
+        }
+    }
+    Ok(json!({ "matches": matches, "truncated": false }))
 }
 
 fn project_error(error: ProjectSourceError) -> (String, String) {
@@ -410,7 +501,16 @@ fn tool_error(code: &str, message: impl Into<String>) -> Value {
 }
 
 fn tools() -> Value {
-    json!([
+    let mut tools = json!([
+        {
+            "name": "project.search",
+            "description": "Find a literal string in accessible source files. Return revisions, one-based line/character columns, and UTF-8 byte ranges for guarded patches. Read the file before editing.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
+            "inputSchema": { "type": "object", "properties": {
+                "query": { "type": "string", "minLength": 1 },
+                "max_results": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+            }, "required": ["query"], "additionalProperties": false }
+        },
         {
             "name": "project.info",
             "description": "Return the configured Studio project root and preview watcher.",
@@ -516,7 +616,12 @@ fn tools() -> Value {
                 "additionalProperties": false
             }
         }
-    ])
+    ]);
+    tools
+        .as_array_mut()
+        .unwrap()
+        .extend(crate::agent_process::tools());
+    tools
 }
 
 fn json_rpc_result(id: Value, result: Value) -> Value {
@@ -577,7 +682,7 @@ mod tests {
             &workspace,
         )
         .unwrap();
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 22);
         assert!(
             tools["result"]["tools"]
                 .as_array()
@@ -620,6 +725,44 @@ mod tests {
             workspace.read_file("app.studio").unwrap().content,
             "<Text>Updated</Text>"
         );
+    }
+
+    #[test]
+    fn source_search_reports_unicode_byte_ranges_and_limits_without_generated_files() {
+        let (directory, workspace) = workspace();
+        fs::write(directory.path().join("app.studio"), "é Hello\nHello").unwrap();
+        fs::create_dir(directory.path().join("build")).unwrap();
+        fs::write(directory.path().join("build/ignored.studio"), "Hello").unwrap();
+        let found = call_tool(
+            "project.search",
+            &json!({ "query": "Hello" }),
+            &workspace,
+            None,
+        );
+        let data = &found["structuredContent"];
+        assert_eq!(data["matches"].as_array().unwrap().len(), 2);
+        assert_eq!(data["matches"][0]["start"], 3);
+        assert_eq!(data["matches"][0]["end"], 8);
+        assert_eq!(data["matches"][0]["column"], 3);
+        assert_eq!(data["matches"][1]["line"], 2);
+        let revision = workspace.read_file("app.studio").unwrap().revision;
+        assert_eq!(data["matches"][0]["revision"], revision);
+        let limited = call_tool(
+            "project.search",
+            &json!({ "query": "Hello", "max_results": 1 }),
+            &workspace,
+            None,
+        );
+        assert_eq!(limited["structuredContent"]["truncated"], true);
+        for arguments in [
+            json!({ "query": "" }),
+            json!({ "query": "Hello", "max_results": 201 }),
+        ] {
+            assert_eq!(
+                call_tool("project.search", &arguments, &workspace, None)["isError"],
+                true
+            );
+        }
     }
 
     #[test]

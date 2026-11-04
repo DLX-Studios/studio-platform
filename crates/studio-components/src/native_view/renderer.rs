@@ -71,6 +71,33 @@ fn node_opacity(node: &PluginRenderNode) -> f32 {
         .clamp(0.0, 1.0) as f32
 }
 
+fn full_bleed_background(node: &PluginRenderNode) -> bool {
+    (node.kind == NodeKind::Box
+        && node
+            .props
+            .get("background_asset")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|path| !path.is_empty())
+        && node
+            .props
+            .get("flex")
+            .and_then(serde_json::Value::as_f64)
+            .is_some_and(|flex| flex > 0.0)
+        && !node.props.contains_key("width")
+        && !node.props.contains_key("height"))
+        || node.children.iter().any(full_bleed_background)
+}
+
+fn authored_text_color(value: &str) -> Option<gpui_kit::Hsla> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16)
+        .ok()
+        .map(|value| rgb(value).into())
+}
+
 fn node_accessibility_label(node: &PluginRenderNode) -> Option<String> {
     node.props
         .get("accessibility_label")
@@ -228,6 +255,56 @@ impl TransitionCurve {
 struct NodeTransition {
     duration: Duration,
     curve: TransitionCurve,
+}
+
+/// Host-owned presentation state for one retained opacity property.
+/// Initial mounts use their authored target; subsequent changes interpolate
+/// from the currently sampled value, including when a transition is reversed.
+#[derive(Clone, Copy, Debug)]
+struct OpacityTrack {
+    from: f32,
+    target: f32,
+    started: Duration,
+    transition: NodeTransition,
+}
+
+impl OpacityTrack {
+    fn new(target: f32, transition: NodeTransition) -> Self {
+        Self {
+            from: target,
+            target,
+            started: Duration::ZERO,
+            transition,
+        }
+    }
+
+    fn value(self, now: Duration) -> f32 {
+        let elapsed = now.saturating_sub(self.started);
+        if self.transition.duration.is_zero() || elapsed >= self.transition.duration {
+            return self.target;
+        }
+        let delta = elapsed.as_secs_f32() / self.transition.duration.as_secs_f32();
+        self.from + (self.target - self.from) * self.transition.curve.sample(delta)
+    }
+
+    #[allow(
+        clippy::float_cmp,
+        reason = "exact serialized target identity determines retargeting"
+    )]
+    fn sample(&mut self, target: f32, transition: NodeTransition, now: Duration) -> (f32, bool) {
+        if target != self.target || transition != self.transition {
+            self.from = self.value(now);
+            self.target = target;
+            self.started = now;
+            self.transition = transition;
+        }
+        if transition.duration.is_zero() {
+            self.from = target;
+        }
+        let active =
+            self.from != self.target && now.saturating_sub(self.started) < transition.duration;
+        (self.value(now), active)
+    }
 }
 
 fn node_transition(node: &PluginRenderNode, reduced_motion: bool) -> Option<NodeTransition> {
@@ -495,6 +572,10 @@ pub struct NativeRuntimeView<S: NativeSurface> {
     plugin_surface: Option<S>,
     base_rem_size: f32,
     zoom_milli: u32,
+    opacity_clock: Box<dyn Fn() -> Duration>,
+    opacity_root: Option<String>,
+    opacity_tracks: BTreeMap<String, OpacityTrack>,
+    visited_opacity_ids: BTreeSet<String>,
 }
 
 impl<S: NativeSurface> NativeRuntimeView<S> {
@@ -503,6 +584,14 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
     pub fn new(reduced_motion: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let component_date_picker = cx.new(|cx| DatePickerState::new(window, cx));
         let component_color_picker = cx.new(|cx| ColorPickerState::new(window, cx));
+        // GPUI owns the monotonic clock, including deterministic test time.
+        let animation_executor = cx.background_executor().clone();
+        let animation_epoch = animation_executor.now();
+        let opacity_clock = Box::new(move || {
+            animation_executor
+                .now()
+                .saturating_duration_since(animation_epoch)
+        });
 
         Self {
             model: FoundationGalleryModel::new(reduced_motion),
@@ -535,6 +624,10 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             plugin_surface: None,
             base_rem_size: window.rem_size().as_f32(),
             zoom_milli: 1_000,
+            opacity_clock,
+            opacity_root: None,
+            opacity_tracks: BTreeMap::new(),
+            visited_opacity_ids: BTreeSet::new(),
         }
     }
 
@@ -1393,6 +1486,17 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             .into_any_element()
     }
 
+    /// Decode only image bytes already admitted with this mounted surface.
+    fn admitted_image(&self, path: &str) -> Option<Arc<Image>> {
+        self.plugin_surface
+            .as_ref()
+            .and_then(|surface| surface.asset(path))
+            .and_then(|bytes| {
+                image_format(path, bytes)
+                    .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
+            })
+    }
+
     fn scrollable_items() -> AnyElement {
         div()
             .id("foundation-scroll")
@@ -1419,7 +1523,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
     )]
     fn plugin_node(
         &mut self,
-        node: PluginRenderNode,
+        mut node: PluginRenderNode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1435,8 +1539,25 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             return div().id(node.id).hidden().into_any_element();
         }
         let source_id = node.id.clone();
-        let transition = node_transition(&node, self.model.reduced_motion());
-        let transition_id = format!("{}:transition", node.id);
+        if let Some(transition) =
+            node_transition(&node, self.model.reduced_motion() || cx.reduce_motion())
+        {
+            let target = node_opacity(&node);
+            let now = (self.opacity_clock)();
+            let (opacity, active) = self
+                .opacity_tracks
+                .entry(node.id.clone())
+                .or_insert_with(|| OpacityTrack::new(target, transition))
+                .sample(target, transition, now);
+            self.visited_opacity_ids.insert(node.id.clone());
+            // Change only this frame's projection. Retained protocol state still
+            // carries the authored target, while the native node paints the sample.
+            node.props
+                .insert("opacity".to_owned(), serde_json::json!(opacity));
+            if active {
+                window.request_animation_frame();
+            }
+        }
         let children = node
             .children
             .clone()
@@ -1444,24 +1565,6 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
             .map(|child| self.plugin_node(child, window, cx))
             .collect::<Vec<_>>();
         let rendered = self.render_node_content(node, children, window, cx);
-        let rendered = match transition {
-            Some(transition) if !transition.duration.is_zero() => {
-                // UNVERIFIED: the serialized runner must confirm the GPUI animation wrapper's
-                // retained identity and layout behavior across targeted property patches.
-                div()
-                    .id(transition_id.clone())
-                    .min_w_0()
-                    .child(rendered)
-                    .with_animation(
-                        transition_id,
-                        Animation::new(transition.duration)
-                            .with_easing(move |delta| transition.curve.sample(delta)),
-                        gpui_kit::Styled::opacity,
-                    )
-                    .into_any_element()
-            }
-            _ => rendered,
-        };
         if self.authoring {
             let selected = self.selected_node.as_deref() == Some(source_id.as_str());
             let view = cx.entity().downgrade();
@@ -1718,6 +1821,27 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                         .get("background")
                         .and_then(serde_json::Value::as_str),
                 );
+                let background_image = node
+                    .props
+                    .get("background_asset")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|path| self.admitted_image(path))
+                    .map(|source| {
+                        // A decorative absolute image paints behind the normal-flow
+                        // content and never takes over its layout or input handlers.
+                        let image = img(source)
+                            .id(format!("{}:background", node.id))
+                            .absolute()
+                            .inset_0()
+                            .size_full()
+                            .object_fit(gpui_kit::ObjectFit::Cover);
+                        #[cfg(feature = "test-support")]
+                        let image = {
+                            use gpui_kit::test::TestSupportExt;
+                            image.test_support()
+                        };
+                        image.into_any_element()
+                    });
                 div()
                     .id(node.id)
                     .opacity(opacity)
@@ -1730,9 +1854,11 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .flex_grow(flex)
                     .flex()
                     .flex_col()
+                    .relative()
                     .when(shrink, gpui_kit::Styled::flex_shrink_0)
                     .p(self.scaled_px(padding))
                     .bg(background)
+                    .children(background_image)
                     .children(children)
                     .into_any_element()
             }
@@ -1902,14 +2028,7 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .get("asset")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
-                let source = self
-                    .plugin_surface
-                    .as_ref()
-                    .and_then(|surface| surface.asset(path))
-                    .and_then(|bytes| {
-                        image_format(path, bytes)
-                            .map(|format| Arc::new(Image::from_bytes(format, bytes.to_vec())))
-                    });
+                let source = self.admitted_image(path);
                 let width = node
                     .props
                     .get("width")
@@ -2914,6 +3033,17 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .to_owned();
                 let value = raw;
                 let label = accessibility_label.unwrap_or_else(|| value.clone());
+                let font_size = node
+                    .props
+                    .get("font_size")
+                    .and_then(serde_json::Value::as_f64)
+                    .filter(|value| value.is_finite() && (8.0..=256.0).contains(value))
+                    .map(|value| value as f32);
+                let color = node
+                    .props
+                    .get("color")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(authored_text_color);
                 let element = div()
                     .id(node.id)
                     .role(Role::Label)
@@ -2936,6 +3066,10 @@ impl<S: NativeSurface> NativeRuntimeView<S> {
                     .when(role == "display", |el| {
                         el.text_2xl().font_weight(gpui_kit::FontWeight::BOLD)
                     })
+                    .when_some(font_size, |element, font_size| {
+                        element.text_size(self.scaled_px(font_size))
+                    })
+                    .when_some(color, gpui_kit::Styled::text_color)
                     .child(value);
                 #[cfg(feature = "test-support")]
                 let element = {
@@ -3340,11 +3474,24 @@ impl<S: NativeSurface> Render for NativeRuntimeView<S> {
         reason = "foundation fallback and mounted plugin shell remain visually co-located"
     )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(root) = self
+        if let Some(mut root) = self
             .plugin_surface
             .as_ref()
             .and_then(NativeSurface::render_tree)
         {
+            let full_bleed = full_bleed_background(&root);
+            // A compiled component's synthetic Box otherwise wraps its content.
+            // Let an authored full-screen background grow through that root while
+            // preserving any explicit sizing supplied by an application.
+            if full_bleed
+                && root.kind == NodeKind::Box
+                && !root.props.contains_key("width")
+                && !root.props.contains_key("height")
+            {
+                root.props
+                    .entry("flex".to_owned())
+                    .or_insert_with(|| serde_json::json!(1.0));
+            }
             let warning = self
                 .plugin_surface
                 .as_ref()
@@ -3352,11 +3499,47 @@ impl<S: NativeSurface> Render for NativeRuntimeView<S> {
                 .unwrap_or_default()
                 .to_owned();
             self.visited_input_ids.clear();
+            self.visited_opacity_ids.clear();
+            if self.opacity_root.as_deref() != Some(root.id.as_str()) {
+                self.opacity_tracks.clear();
+                self.opacity_root = Some(root.id.clone());
+            }
             self.overlay_depth = 0;
             let plugin = self.plugin_node(root, window, cx);
             // Retained form-widget states are keyed by stable node ID; states whose nodes left
             // the render tree are pruned so removals do not leak native widgets or buffers.
             self.prune_retired_widget_states();
+            self.opacity_tracks
+                .retain(|id, _| self.visited_opacity_ids.contains(id));
+            if full_bleed {
+                return div()
+                    .id("plugin-gallery")
+                    .size_full()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(COLOR_BACKGROUND))
+                    .text_color(rgb(COLOR_TEXT))
+                    .child(plugin)
+                    .when(!warning.is_empty(), |element| {
+                        // Keep the host-owned trust warning above the backdrop
+                        // without reserving space around the application page.
+                        element.child(
+                            div()
+                                .id("plugin-development-warning")
+                                .role(Role::Alert)
+                                .absolute()
+                                .top_2()
+                                .left_2()
+                                .right_2()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(COLOR_WARNING))
+                                .child(warning),
+                        )
+                    });
+            }
             return div()
                 .id("plugin-gallery")
                 .size_full()
@@ -3381,6 +3564,8 @@ impl<S: NativeSurface> Render for NativeRuntimeView<S> {
                 })
                 .child(plugin);
         }
+        self.opacity_tracks.clear();
+        self.opacity_root = None;
         let snapshot = self.model.snapshot();
         let button = Self::increment_button(snapshot.button_activations, cx);
         let input = self.operator_input(&snapshot.text_input, cx);
@@ -3471,12 +3656,97 @@ impl<S: NativeSurface> gpui_kit::EventEmitter<NativeViewEvent> for NativeRuntime
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::time::Duration;
 
     use super::{
         ImageFormat, PluginRenderNode, button_variant, collect_retained_widget_ids, image_format,
         number_input_spec, parse_number_input,
     };
     use studio_protocol::NodeKind;
+
+    #[test]
+    fn opacity_tracks_interpolate_and_reverse_from_the_current_sample() {
+        let transition = super::NodeTransition {
+            duration: Duration::from_millis(700),
+            curve: super::TransitionCurve::Linear,
+        };
+        let mut track = super::OpacityTrack::new(1.0, transition);
+        assert!(!track.sample(1.0, transition, Duration::ZERO).1);
+        let (value, active) = track.sample(0.0, transition, Duration::ZERO);
+        assert!((value - 1.0).abs() < f32::EPSILON && active);
+        let (value, active) = track.sample(0.0, transition, Duration::from_millis(350));
+        assert!((value - 0.5).abs() < f32::EPSILON && active);
+        let (value, active) = track.sample(1.0, transition, Duration::from_millis(350));
+        assert!((value - 0.5).abs() < f32::EPSILON && active);
+        let (value, active) = track.sample(1.0, transition, Duration::from_millis(700));
+        assert!((value - 0.75).abs() < f32::EPSILON && active);
+        let (value, active) = track.sample(1.0, transition, Duration::from_millis(1050));
+        assert!((value - 1.0).abs() < f32::EPSILON && !active);
+    }
+
+    #[test]
+    fn opacity_tracks_honor_declared_curves_and_reduced_motion() {
+        for (curve, expected) in [
+            (super::TransitionCurve::Linear, 0.5),
+            (super::TransitionCurve::EaseIn, 0.75),
+            (super::TransitionCurve::EaseOut, 0.25),
+            (super::TransitionCurve::EaseInOut, 0.5),
+        ] {
+            let transition = super::NodeTransition {
+                duration: Duration::from_secs(1),
+                curve,
+            };
+            let mut track = super::OpacityTrack::new(1.0, transition);
+            let _ = track.sample(0.0, transition, Duration::ZERO);
+            let (value, active) = track.sample(0.0, transition, Duration::from_millis(500));
+            assert!((value - expected).abs() < f32::EPSILON && active);
+            let reduced = super::NodeTransition {
+                duration: Duration::ZERO,
+                curve,
+            };
+            let (value, active) = track.sample(0.0, reduced, Duration::from_millis(500));
+            assert!(value.abs() < f32::EPSILON && !active);
+        }
+    }
+
+    #[test]
+    fn authored_text_color_accepts_only_closed_six_digit_rgb_values() {
+        assert_eq!(
+            super::authored_text_color("#F8B4DD"),
+            Some(super::rgb(0x00f8_b4dd).into())
+        );
+        assert_eq!(
+            super::authored_text_color("#aabbcc"),
+            Some(super::rgb(0x00aa_bbcc).into())
+        );
+        for value in ["red", "#fff", "#12345678", "123456", "#gggggg", "#12345\n"] {
+            assert!(super::authored_text_color(value).is_none());
+        }
+    }
+
+    #[test]
+    fn full_screen_background_intent_does_not_change_fixed_card_layouts() {
+        let mut node = PluginRenderNode {
+            id: "backdrop".to_owned(),
+            kind: NodeKind::Box,
+            control: None,
+            props: BTreeMap::from([
+                (
+                    "background_asset".to_owned(),
+                    serde_json::json!("assets/sunset.svg"),
+                ),
+                ("width".to_owned(), serde_json::json!(320)),
+                ("height".to_owned(), serde_json::json!(180)),
+            ]),
+            children: Vec::new(),
+        };
+        assert!(!super::full_bleed_background(&node));
+        node.props.insert("flex".to_owned(), serde_json::json!(1));
+        assert!(!super::full_bleed_background(&node));
+        node.props.remove("width");
+        node.props.remove("height");
+        assert!(super::full_bleed_background(&node));
+    }
 
     #[test]
     fn detects_common_image_formats_from_extension_or_bytes() {

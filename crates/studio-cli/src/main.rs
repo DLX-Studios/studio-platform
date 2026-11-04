@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::future::Future;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,13 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum BuildTarget {
+    #[default]
+    Native,
+    Web,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Open the native development host with content-hashed IR/Wasm hot reload.
@@ -50,6 +57,9 @@ enum Commands {
         /// Also emit a shareable template bundle beside the app bundle.
         #[arg(long)]
         as_template: bool,
+        /// Compile to a native package or a static browser app.
+        #[arg(long, value_enum, default_value_t = BuildTarget::Native)]
+        target: BuildTarget,
     },
     /// Preview built bundle through the runtime host in development mode.
     Preview {
@@ -110,7 +120,8 @@ fn main() -> ExitCode {
         Commands::Build {
             example,
             as_template,
-        } => finish(build(&example, as_template)),
+            target,
+        } => finish(build(&example, as_template, target)),
         Commands::Preview { example } => finish(preview(&example)),
         Commands::RestartSession { example } => finish(restart_session(&example)),
         Commands::Generate => finish(generate()),
@@ -147,7 +158,7 @@ fn io_exit(error: anyhow::Error) -> ExitCode {
     ExitCode::from(EXIT_IO)
 }
 
-fn build(example: &str, as_template: bool) -> i32 {
+fn build(example: &str, as_template: bool, target: BuildTarget) -> i32 {
     let request = match build::BuildRequest::resolve(example) {
         Ok(request) => request,
         Err(failure) => {
@@ -156,7 +167,20 @@ fn build(example: &str, as_template: bool) -> i32 {
         }
     };
     println!("studio build {}", request.example);
-    let bundle = match build::build_example(&request) {
+    if target == BuildTarget::Web && as_template {
+        BuildDiagnostic::error(
+            BuildPhase::Usage,
+            "BUILD_WEB_TEMPLATE_UNSUPPORTED",
+            "web exports do not support --as-template",
+        )
+        .report();
+        return 2;
+    }
+    let result = match target {
+        BuildTarget::Native => build::build_example(&request),
+        BuildTarget::Web => build::web::build_web(&request),
+    };
+    let bundle = match result {
         Ok(bundle) => bundle,
         Err(failure) => {
             failure.report();
@@ -379,7 +403,15 @@ fn studio_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         if !root.is_dir() {
             anyhow::bail!("path does not exist: {}", root.display());
         }
-        for entry in walkdir::WalkDir::new(root) {
+        for entry in walkdir::WalkDir::new(root)
+            .into_iter()
+            .filter_entry(|entry| {
+                !matches!(
+                    entry.file_name().to_str(),
+                    Some("build" | "node_modules" | ".git")
+                )
+            })
+        {
             let entry = entry?;
             if entry.file_type().is_file()
                 && entry
@@ -399,7 +431,34 @@ fn studio_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 fn check_studio_files(paths: &[PathBuf]) -> Result<bool> {
     let files = studio_files(paths)?;
     let mut valid = true;
+    let mut checked_projects = std::collections::BTreeSet::new();
     for path in files {
+        let project_root = path
+            .ancestors()
+            .skip(1)
+            .find(|ancestor| ancestor.join("manifest.json").is_file());
+        if let Some(root) = project_root {
+            if !root.join("studio.project.json").exists()
+                && studio_cli::studio_project::has_file_routes(root)
+            {
+                if !checked_projects.insert(root.to_path_buf()) {
+                    continue;
+                }
+                match studio_cli::studio_project::compile_routes(root) {
+                    Ok(Some(project)) => {
+                        for route in project.routing.routes {
+                            print_status(&root.join(route.source), true, false);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        error.report();
+                        valid = false;
+                    }
+                }
+                continue;
+            }
+        }
         let source = match std::fs::read_to_string(&path) {
             Ok(source) => source,
             Err(error) => {
@@ -428,7 +487,15 @@ fn check_studio_files(paths: &[PathBuf]) -> Result<bool> {
             .file_stem()
             .map(|stem| stem.to_string_lossy().to_string())
             .unwrap_or_else(|| "check".to_owned());
-        match studio_script::compile_studio(&source, &filename, &name) {
+        let result = if let Some(root) = project_root {
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            studio_script::project::compile_component(root, relative, &[], &name)
+                .map(|compiled| compiled.module)
+                .map_err(|errors| errors.into_iter().map(|error| error.diagnostic).collect())
+        } else {
+            studio_script::compile_studio(&source, &filename, &name)
+        };
+        match result {
             Ok(_) => print_status(&path, true, false),
             Err(diagnostics) => {
                 print_diagnostics(&path, &diagnostics);

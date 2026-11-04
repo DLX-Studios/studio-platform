@@ -29,3 +29,9 @@ examples/starter/build/*
 .vscode/
 .idea/
 keys.txt
+
+# Generated browser host tools, bridge and isolated hosting checkout.
+/.scratch/web-core/
+/.scratch/tools/
+/.scratch/sites/
+/.scratch/web-qa/

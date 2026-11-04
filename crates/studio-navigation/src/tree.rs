@@ -89,7 +89,7 @@ impl<T> RouteTree<T> {
         {
             return Err(RouteError::new(RouteErrorCode::AmbiguousDeclaration));
         }
-        definitions.sort_by_key(|definition| std::cmp::Reverse(definition.static_count()));
+        definitions.sort_by_cached_key(|definition| std::cmp::Reverse(definition.specificity()));
         Ok(Self {
             definitions,
             not_found: Box::new(not_found),

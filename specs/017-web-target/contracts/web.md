@@ -1,0 +1,3 @@
+# Web host contract v1
+
+See plan.md for the closed Rust bridge and browser request/commit shapes. Browser app exports no privileged actions. Allowed UI kinds are Box, Scaffold, Column, Row, Text, Image, Button and Tag. Node IDs, depth/count, properties, transitions, assets and handler bindings obey the protocol-v1 contract. Navigation goes through the Rust core; arbitrary mount routes/roots fail. Timer completion status is read after every callback. Guest byte buffers are copied with checked bounds before JSON parsing. Only local manifest-admitted asset paths may reach DOM URLs. No innerHTML or authored HTML execution is allowed. Unsupported features fail at build time.

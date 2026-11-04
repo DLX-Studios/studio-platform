@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Shared Studio package direction
+
+- Recorded the proposed `.studio` / `.studio.ts` sources, versioned `.studiopkg` binary IR bundle,
+  native/browser/headless host responsibilities, scoped capabilities and Orbit process isolation.
+- Added a cross-repository work order and open decisions for compiler/IR, Console source revisions,
+  Orbit process supervision, and the Resend proof. Existing Wasm and container paths remain current;
+  this is planning and does not claim a runtime replacement.
+
 ## Unreleased — Project Library isolation
 
 - Add project-scoped Library access through authenticated Designer persistence. Keep catalogs

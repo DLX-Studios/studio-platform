@@ -1,0 +1,4 @@
+# Merge into ~/.codex/config.toml. Project root comes from the server's startup directory.
+[mcp_servers.studio_designer]
+command = "studio-designer"
+args = ["agent-server"]

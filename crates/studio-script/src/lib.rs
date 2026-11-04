@@ -76,6 +76,7 @@ pub mod hot_swap;
 pub mod ir;
 pub mod lower;
 pub mod lower_studio;
+pub mod project;
 pub mod rsvelte_adapter;
 pub mod types;
 pub mod validate;

@@ -173,8 +173,18 @@ pub fn validate_module(
     source: &str,
     module: &SourceModule,
 ) -> Result<ValidatedScript, Vec<Diagnostic>> {
+    validate_module_with_components(source, module, &std::collections::BTreeSet::new())
+}
+
+/// Validate source with project-resolved component names admitted in addition to the catalog.
+pub(crate) fn validate_module_with_components(
+    source: &str,
+    module: &SourceModule,
+    components: &std::collections::BTreeSet<String>,
+) -> Result<ValidatedScript, Vec<Diagnostic>> {
     let mut worker = Validator {
         source,
+        components,
         diagnostics: Vec::new(),
         script: ValidatedScript::default(),
         seen_ids: std::collections::BTreeSet::new(),
@@ -189,6 +199,7 @@ pub fn validate_module(
 
 struct Validator<'a> {
     source: &'a str,
+    components: &'a std::collections::BTreeSet<String>,
     diagnostics: Vec<Diagnostic>,
     script: ValidatedScript,
     seen_ids: std::collections::BTreeSet<String>,
@@ -1007,7 +1018,7 @@ impl Validator<'_> {
             } => {
                 if is_catalog_kind(name) {
                     self.validate_shape(name, attributes, children, *span);
-                } else {
+                } else if !self.components.contains(name) {
                     self.error(
                         CODE_STUDIO_UNKNOWN,
                         format!("component `{name}` is not in the Studio catalog"),
@@ -1550,12 +1561,11 @@ fn parse_emit_arguments(call: &str) -> Option<(String, String)> {
         return None;
     }
     let event = parts.remove(0);
-    let event = event.trim();
-    if event.len() >= 2 && event.starts_with('"') && event.ends_with('"') {
-        let payload = parts.join(",").trim().to_owned();
-        return Some((event[1..event.len() - 1].to_owned(), payload));
-    }
-    None
+    let StudioValue::String(event) = parse_literal(event.trim())? else {
+        return None;
+    };
+    let payload = parts.join(",").trim().to_owned();
+    Some((event, payload))
 }
 
 /// Split one handler-body statement into a state mutation, if it is one.
@@ -1608,7 +1618,7 @@ fn bare_assignment(statement: &str, marker: &str) -> Option<usize> {
     let bytes = statement.as_bytes();
     let mut index = 0usize;
     while index + marker.len() <= bytes.len() {
-        if &statement[index..index + marker.len()] == marker {
+        if &bytes[index..index + marker.len()] == marker.as_bytes() {
             let before = index.checked_sub(1).map(|at| bytes[at]);
             let after = bytes.get(index + marker.len()).copied();
             let paired = before.is_some_and(|byte| matches!(byte, b'=' | b'!' | b'<' | b'>'))

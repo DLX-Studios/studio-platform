@@ -1,0 +1,18 @@
+{
+  "platform": "Linux-7.2.11-ogc4.1.fc44.x86_64-x86_64-with-glibc2.43",
+  "commit": "e05de5b61525c2c780bfe26cd629c98e45354202",
+  "working_tree_diff_sha256": "3b1ebba5d8c3bc1b76d188ee56de2aa853fcc5dc193feabea1f20fae32ddd96f",
+  "files": {
+    "examples/stream-countdown/routes/+layout.studio": "c22431487d2dbff447b5988ecae1e2226ed9f6b910ae3eb40b5a2189ee8c25cb",
+    "examples/stream-countdown/routes/+page.studio": "3c327b0192192214f0087f1c0c515b1bfd61d9e4dc16d46d5cead9a3639f7194",
+    "examples/stream-countdown/components/StreamHeader.studio": "fc302393064f8e2878fe57c736fd99f073650f1327c1c49e82bdbdff27518d5a",
+    "examples/stream-countdown/components/CountdownClock.studio": "5d99fadf0db86c160ceae7573319b4669ba73138c5fbc6a7d225babf58ab7dc1",
+    "examples/stream-countdown/routes/live/+page.studio": "7456682821546e1bd879fb40f9679cf229e6ef859a11d615f51a7943bb8005ba",
+    "examples/stream-countdown/routes/[...rest]/+page.studio": "99032e94b582223c3cf2e1a3c3b07a115eb72059157cbb927e35da0d0bed7fd4",
+    "examples/stream-countdown/assets/vice-city-sunset.svg": "149eb0271513f861d8fbb9175ef90eea77e1b4b64b61a9fb6a8720ceb00b3a54",
+    "examples/stream-countdown/assets/stream-starting.svg": "7155842d88359f2ec3937484d5a78a9527775833902709cab52e422d488b1a38",
+    "examples/stream-countdown/assets/stream-live.svg": "3074e43e5aae47e6d41db3b406abe64c4c9d5196be63f3beb2308d2dbcd67f1e",
+    "examples/stream-countdown/assets/vice-city-cityscape.png": "28ed4203b25a1f803bd9fc64ebc26a4c034d304c6046238248473ee88fbb8865",
+    "examples/stream-countdown/manifest.json": "0d2b93dbd70b18c57c7b1ada2671699e70ca041810f7a3f076802ae2e3f7dccd"
+  }
+}
